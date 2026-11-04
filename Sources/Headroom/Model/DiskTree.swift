@@ -13,6 +13,10 @@ enum NodeFlag {
     static let free: UInt16 = 1 << 8         // the free space piece
     static let hidden: UInt16 = 1 << 9       // space the scan can't account for
     static let projects: UInt16 = 1 << 10    // your own folders, not an app, a tool's install or ~/Library
+    static let later: UInt16 = 1 << 11       // read after everything else: build folders and caches
+    static let unread: UInt16 = 1 << 12      // waiting to be read
+    static let incomplete: UInt16 = 1 << 13  // something inside it hasn't been read yet
+    static let shyLinks: UInt16 = 1 << 14    // a link found here doesn't claim the file's bytes
 }
 
 /// One folder, or one file big enough to be worth naming. Small files are summed into their folder.
@@ -50,14 +54,16 @@ final class DiskTree: @unchecked Sendable {
     let dfsIn: UnsafeMutablePointer<UInt32>
     let dfsSize: UnsafeMutablePointer<UInt32>
     let names: UnsafeMutablePointer<UInt8>
-    /// Folder kinds summed upward while the scan is running. Once it's finished, `stats` holds the same thing.
-    let liveStats: UnsafeMutablePointer<UInt32>
     /// Links and clones inside a folder that are counted somewhere else.
     let aliasTotals: UnsafeMutablePointer<UInt64>
 
     /// Number of nodes in use. Written by the scanner.
     var count = 0
-    var isFinished = false
+    /// A picture of a scan that's still running: some of the disk hasn't been read yet.
+    var isPartial = false
+    /// The same for every picture of one scan, whose node numbers all mean the same thing.
+    var scanID = UUID()
+    private let namesOwner: DiskTree?
     var displayNames: [UInt32: String] = [:]
     /// Files with more than one path, by key, once the scan has finished. See `Accounting`.
     var links: [LinkRecord] = []
@@ -74,15 +80,15 @@ final class DiskTree: @unchecked Sendable {
     var freeBytes: UInt64 = 0
     var rootPath = ""
 
-    init() {
+    init(sharingNamesWith owner: DiskTree? = nil) {
+        namesOwner = owner
         nodes = vmAlloc(Node.self, Self.capacity)
         stats = vmAlloc(UInt32.self, Self.capacity * Self.statStride)
         totals = vmAlloc(UInt64.self, Self.capacity)
         totalFiles = vmAlloc(UInt32.self, Self.capacity)
         dfsIn = vmAlloc(UInt32.self, Self.capacity)
         dfsSize = vmAlloc(UInt32.self, Self.capacity)
-        names = vmAlloc(UInt8.self, Self.namesCapacity)
-        liveStats = vmAlloc(UInt32.self, Self.capacity * Self.statStride)
+        names = owner?.names ?? vmAlloc(UInt8.self, Self.namesCapacity)
         aliasTotals = vmAlloc(UInt64.self, Self.capacity)
     }
 
@@ -93,25 +99,45 @@ final class DiskTree: @unchecked Sendable {
         vmFree(totalFiles, Self.capacity)
         vmFree(dfsIn, Self.capacity)
         vmFree(dfsSize, Self.capacity)
-        vmFree(names, Self.namesCapacity)
-        vmFree(liveStats, Self.capacity * Self.statStride)
+        if namesOwner == nil { vmFree(names, Self.namesCapacity) }
         vmFree(aliasTotals, Self.capacity)
     }
 
-    /// Where to read a folder's kinds: summed as far as the scan has got, or the final numbers.
-    var displayStats: UnsafeMutablePointer<UInt32> { isFinished ? stats : liveStats }
-
-    func sumLiveStats() {
+    /// A copy of where a running scan has got to. The interface only ever reads copies like this one, so everything in it
+    /// (hovering, zooming, the panels) works during a scan, while the workers keep writing to the original.
+    func picture() -> DiskTree {
+        let copy = DiskTree(sharingNamesWith: self)
         let n = count
-        guard n > 0 else { return }
-        let stride = Self.statStride
-        memcpy(liveStats, stats, n * stride * MemoryLayout<UInt32>.stride)
-        var i = n - 1
-        while i > 0 {
-            let from = liveStats + i * stride, to = liveStats + Int(nodes[i].parent) * stride
-            for f in 0..<Kind.count { to[f] &+= from[f] }
-            i -= 1
+        memcpy(copy.nodes, nodes, n * MemoryLayout<Node>.stride)
+        memcpy(copy.stats, stats, n * Self.statStride * MemoryLayout<UInt32>.stride)
+        // A folder finishing during the copy can already point at children past the end of it. And until a folder is read,
+        // its file count is really how many entries it has.
+        for i in 0..<n {
+            if copy.nodes[i].firstChild >= n { copy.nodes[i].firstChild = 0 }
+            if copy.nodes[i].flags & NodeFlag.unread != 0 { copy.nodes[i].fileCount = 0 }
         }
+        copy.count = n
+        copy.isPartial = true
+        copy.scanID = scanID
+        copy.displayNames = displayNames
+        copy.home = home
+        copy.free = free
+        copy.hidden = hidden
+        copy.volumeName = volumeName
+        copy.capacityBytes = capacityBytes
+        copy.freeBytes = freeBytes
+        copy.rootPath = rootPath
+        return copy
+    }
+
+    /// Whether this size may still grow, because something inside hasn't been read yet.
+    @inline(__always) func isStillGrowing(_ id: UInt32) -> Bool {
+        nodes[Int(id)].flags & (NodeFlag.unread | NodeFlag.incomplete) != 0
+    }
+
+    /// A size as it should read on screen. The dots mean there's more to come.
+    func sizeText(_ id: UInt32) -> String {
+        formatBytes(totals[Int(id)]) + (isStillGrowing(id) ? "…" : "")
     }
 
     /// Takes a removed folder or file out of the sums, so the ring can update at once without a new scan.
@@ -283,14 +309,13 @@ final class DiskTree: @unchecked Sendable {
             let p = Int(nodes[i].parent)
             totalFiles[p] &+= totalFiles[i]
             aliasTotals[p] &+= aliasTotals[i]
+            if nodes[i].flags & (NodeFlag.unread | NodeFlag.incomplete) != 0 { nodes[p].flags |= NodeFlag.incomplete }
             let from = stats + i * stride, to = stats + p * stride
             for f in 0..<stride { to[f] &+= from[f] }
             i -= 1
         }
         sortChildren()
         numberSubtrees()
-        isFinished = true
-        madvise(liveStats, n * stride * MemoryLayout<UInt32>.stride, MADV_FREE)
     }
 
     func sortChildren() {

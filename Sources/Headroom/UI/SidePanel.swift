@@ -147,14 +147,6 @@ struct MapPanel: View {
             }
             .scrollEdgeEffectStyle(.soft, for: .all)
             .scrollIndicators(.never)
-        } else {
-            VStack(spacing: 10) {
-                ProgressView().controlSize(.regular)
-                Text("Reading the disk")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.6))
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
@@ -171,7 +163,7 @@ struct MapPanel: View {
         let canGo = model.wins.filter { $0.tier <= .rebuilds }.reduce(UInt64(0)) { $0 &+ $1.bytes }
         return VStack(alignment: .leading, spacing: 10) {
             if let biggest {
-                Text("Your disk is \(Int(fullness * 100))% full. \(model.displayName(biggest)) is the biggest thing on it, at \(formatBytes(tree.totals[Int(biggest)])).")
+                Text("Your disk is \(Int(fullness * 100))% full. \(model.displayName(biggest)) is the biggest thing \(tree.isPartial ? "found so far" : "on it"), at \(formatBytes(tree.totals[Int(biggest)])).")
                     .font(.system(size: 13))
                     .foregroundStyle(.white.opacity(0.78))
                     .fixedSize(horizontal: false, vertical: true)
@@ -182,7 +174,7 @@ struct MapPanel: View {
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "sparkles")
-                        Text("About \(formatBytes(canGo)) can go without losing anything")
+                        Text(tree.isPartial ? "\(formatBytes(canGo)) so far can go without losing anything" : "About \(formatBytes(canGo)) can go without losing anything")
                     }
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Color(red: 0.5, green: 0.98, blue: 0.7))
@@ -195,7 +187,12 @@ struct MapPanel: View {
     @ViewBuilder
     private func description(_ tree: DiskTree, _ subject: UInt32) -> some View {
         let node = tree.nodes[Int(subject)]
-        if node.rule != 0 {
+        if tree.isPartial && subject == tree.hidden {
+            Text("Space that hasn't been read yet. This piece shrinks as the scan goes on, and whatever is left at the end is space Headroom can't look inside.")
+                .font(.system(size: 12.5))
+                .foregroundStyle(.white.opacity(0.72))
+                .fixedSize(horizontal: false, vertical: true)
+        } else if node.rule != 0 {
             let rule = model.rules.rule(node.rule)
             VStack(alignment: .leading, spacing: 4) {
                 if rule.tier != .none {
@@ -309,7 +306,7 @@ struct MapPanel: View {
                 ForEach(top, id: \.self) { node in
                     NodeRow(title: model.displayName(node),
                             subtitle: linksWorthNaming(tree, node) ? "plus \(formatBytes(tree.aliasTotals[Int(node)])) of links" : subtitle(tree, node),
-                            value: formatBytes(tree.totals[Int(node)]),
+                            value: tree.sizeText(node),
                             share: Double(tree.totals[Int(node)]) / biggest,
                             color: color(tree, node),
                             onHover: { inside in model.highlight(node: inside ? node : nil) },
@@ -339,7 +336,7 @@ struct MapPanel: View {
 
     private func color(_ tree: DiskTree, _ node: UInt32) -> Color {
         let n = tree.nodes[Int(node)]
-        if n.has(NodeFlag.directory) { return Palette.blend(UnsafePointer(tree.displayStats + Int(node) * DiskTree.statStride)).swiftUI }
+        if n.has(NodeFlag.directory) { return Palette.blend(UnsafePointer(tree.stats + Int(node) * DiskTree.statStride)).swiftUI }
         if n.has(NodeFlag.synthetic) { return Palette.color(.system).swiftUI }
         return Palette.color(Kind(rawValue: n.kind) ?? .other).swiftUI
     }
@@ -363,7 +360,7 @@ struct MapPanel: View {
                     Label("Reveal in Finder", systemImage: "folder")
                 }
                 .buttonStyle(.glass)
-                if Safety.canTrash(path) {
+                if !tree.isPartial, Safety.canTrash(path) {
                     TrashButton(model: model, node: subject)
                 }
             }
@@ -558,7 +555,7 @@ struct FreeUpPanel: View {
                     .font(.system(size: 12.5, weight: .medium))
                     .foregroundStyle(.white.opacity(0.6))
             }
-            Text("\(formatBytes(all)) if you count everything below.")
+            Text(model.tree?.isPartial == true ? "Still reading, so this will grow." : "\(formatBytes(all)) if you count everything below.")
                 .font(.system(size: 11.5))
                 .foregroundStyle(.white.opacity(0.5))
         }
@@ -610,10 +607,10 @@ struct FreeUpPanel: View {
             Button {
                 asking = true
             } label: {
-                Label(model.isTrashing ? model.trashProgress : "Move \(rows.count == 1 ? "1 item" : "\(rows.count) items") to Trash", systemImage: "trash")
+                Label(model.isTrashing ? model.trashProgress : (model.tree?.isPartial == true ? "Finishing the scan first" : "Move \(rows.count == 1 ? "1 item" : "\(rows.count) items") to Trash"), systemImage: "trash")
                     .frame(maxWidth: .infinity)
             }
-            .disabled(model.isTrashing)
+            .disabled(model.isTrashing || model.tree?.isPartial == true)
             .buttonStyle(.glassProminent)
             .tint(Color(red: 0.14, green: 0.62, blue: 0.40))
             .controlSize(.large)

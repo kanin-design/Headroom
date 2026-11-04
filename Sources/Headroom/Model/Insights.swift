@@ -60,6 +60,10 @@ final class ReclaimMap: @unchecked Sendable {
         vmFree(bytes, capacity)
         vmFree(tier, capacity)
     }
+
+    /// During a scan this map can be one picture behind, so a folder found since then has nothing to say yet.
+    @inline(__always) func amount(of node: UInt32) -> UInt64 { Int(node) < capacity ? bytes[Int(node)] : 0 }
+    @inline(__always) func tier(of node: UInt32) -> Tier { Int(node) < capacity ? (Tier(rawValue: tier[Int(node)]) ?? .rebuilds) : .rebuilds }
 }
 
 enum Wins {
@@ -343,7 +347,8 @@ final class ChangeMap: @unchecked Sendable {
     init(tree: DiskTree, window: ChangeWindow) {
         capacity = max(tree.count, 1)
         values = vmAlloc(Int64.self, capacity)
-        let snapshot = History.snapshot(forVolume: tree.volumeName, olderThan: window.seconds, isLast: window == .lastScan, before: tree.finishedAt)
+        // Half-read folders would look as if they'd shrunk, so a comparison waits until the scan is done.
+        let snapshot = tree.isPartial ? nil : History.snapshot(forVolume: tree.volumeName, olderThan: window.seconds, isLast: window == .lastScan, before: tree.finishedAt)
         let nodes = tree.nodes
         let n = tree.count
         if let snapshot {
@@ -370,7 +375,8 @@ final class ChangeMap: @unchecked Sendable {
             // The disk's own free space is the honest total.
             total = Int64(bitPattern: snapshot.free) &- Int64(bitPattern: tree.freeBytes)
         } else if window == .lastScan {
-            caption = "There's no earlier scan to compare with yet. Come back after your next scan."
+            caption = tree.isPartial ? "This can compare once the scan has finished."
+                : "There's no earlier scan to compare with yet. Come back after your next scan."
             shortCaption = ""
         } else {
             let days: Int
@@ -386,7 +392,7 @@ final class ChangeMap: @unchecked Sendable {
                 }
             }
             let label = window == .days(1) ? "the last 24 hours" : "the last \(days) days"
-            caption = "New or changed in \(label), going by file dates. History builds up from today."
+            caption = "New or changed in \(label), going by file dates." + (tree.isPartial ? " Still reading, so this may grow." : " History builds up from today.")
             shortCaption = "in \(label)"
         }
     }
@@ -395,7 +401,8 @@ final class ChangeMap: @unchecked Sendable {
         vmFree(values, capacity)
     }
 
-    @inline(__always) func value(of node: UInt32) -> Int64 { values[Int(node)] }
+    /// During a scan this map can be one picture behind, so a folder found since then has nothing to say yet.
+    @inline(__always) func value(of node: UInt32) -> Int64 { Int(node) < capacity ? values[Int(node)] : 0 }
 
     /// The folders that explain the growth. Not "your files grew", but which folder did, and no deeper than is
     /// useful: a season that grew is one row, not eight episodes.
@@ -472,7 +479,7 @@ final class ChangeMap: @unchecked Sendable {
 enum Lenses {
     static func kindColorer(tree: DiskTree) -> RingLayout.Colorer {
         let nodes = tree.nodes
-        let stats = tree.displayStats
+        let stats = tree.stats
         let stride = DiskTree.statStride
         return { node in
             let n = nodes[Int(node)]
@@ -521,11 +528,10 @@ enum Lenses {
                 }
             }
             // Above something removable: tinted by how much of it can go.
-            let can = map.bytes[Int(node)]
+            let can = map.amount(of: node)
             if can > 0 {
                 let share = min(Float(can) / Float(max(totals[Int(node)], 1)), 1)
-                let tier = Tier(rawValue: map.tier[Int(node)]) ?? .rebuilds
-                return Lab.mix(Palette.quiet, Palette.reclaim(tier), share.squareRoot() * 0.92).linearP3
+                return Lab.mix(Palette.quiet, Palette.reclaim(map.tier(of: node)), share.squareRoot() * 0.92).linearP3
             }
             return Palette.quiet.linearP3
         }

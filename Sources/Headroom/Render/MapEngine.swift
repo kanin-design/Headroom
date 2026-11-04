@@ -160,16 +160,34 @@ final class MapEngine {
             }
         }
 
+        var isLive = false
+        if case .live = transition { isLive = true }
+        var nextNow = [Float](repeating: 0, count: out.count)
+        var nextGoal = nextNow
+        if isLive {
+            // New numbers shouldn't disturb what you're pointing at.
+            for i in 0..<pieceCount {
+                if let old = currentIndex[outKeys[i]], old < emphasisNow.count {
+                    nextNow[i] = emphasisNow[old]
+                    nextGoal[i] = emphasisGoal[old]
+                }
+            }
+        } else {
+            dimGoal = 0
+        }
+
         instances = out
         keys = outKeys
         parents = outParents
         layout = new
         renderer?.setInstances(instances)
-        emphasisNow = [Float](repeating: 0, count: instances.count)
-        emphasisGoal = [Float](repeating: 0, count: instances.count)
+        emphasisNow = nextNow
+        emphasisGoal = nextGoal
         renderer?.writeEmphasis(emphasisNow)
-        dimGoal = 0
 
+        // Every piece now starts from where it is, with less far to go. Scaling the speed up to match keeps anything still
+        // heading the same way moving at the same pace, so new numbers arriving many times a second don't make it stutter.
+        let carried = isLive && x < 0.999 ? max(velocity, 0) / (1 - x) : 0
         x = 0
         velocity = 0
         switch transition {
@@ -179,6 +197,7 @@ final class MapEngine {
         case .live: setSpring(stiffness: 60, dampingRatio: 1)
         case .settle: setSpring(stiffness: 80, dampingRatio: 1)
         }
+        velocity = min(carried, stiffness.squareRoot())
         requestFrame()
     }
 

@@ -30,7 +30,7 @@ struct HeadroomApp: App {
         .defaultSize(width: 1440, height: 900)
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("Scan Again") { AppModel.shared.scan() }
+                Button("Scan Again") { AppModel.shared.scan(hurry: true) }
                     .keyboardShortcut("r", modifiers: .command)
             }
             CommandGroup(after: .toolbar) {

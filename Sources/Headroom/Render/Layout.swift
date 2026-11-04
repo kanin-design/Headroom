@@ -71,7 +71,8 @@ struct RingLayout {
         guard id != 0 else { return id }
         let nodes = tree.nodes, totals = tree.totals
         var tail = id
-        while true {
+        // While a folder is still being read, what looks like nearly all of it may turn out to be a small part.
+        while !tree.isStillGrowing(tail) {
             var best: UInt32 = 0
             var c = nodes[Int(tail)].firstChild
             while c != 0 {
@@ -82,6 +83,7 @@ struct RingLayout {
                   Double(totals[Int(best)]) >= Double(totals[Int(tail)]) * chainShare else { return tail }
             tail = best
         }
+        return tail
     }
 
     private static func pathKey(_ tree: DiskTree, _ id: UInt32) -> UInt64 {
@@ -126,7 +128,7 @@ struct RingLayout {
         var tail = parentNode
         if parentNode != 0 {
             var flattened = false
-            while let topIndex = kids.indices.max(by: { totals[Int(kids[$0])] < totals[Int(kids[$1])] }) {
+            while !tree.isStillGrowing(tail), let topIndex = kids.indices.max(by: { totals[Int(kids[$0])] < totals[Int(kids[$1])] }) {
                 let top = kids[topIndex]
                 let n = nodes[Int(top)]
                 guard n.has(NodeFlag.directory), n.firstChild != 0,
@@ -138,11 +140,18 @@ struct RingLayout {
                 flattened = true
             }
             if flattened, parentPiece >= 0 { pieces[Int(parentPiece)].tail = tail }
-            if flattened || !tree.isFinished { kids.sort { totals[Int($0)] > totals[Int($1)] } }
+            if flattened { kids.sort { totals[Int($0)] > totals[Int($1)] } }
         } else {
             // Free space closes the circle, right after what's hidden.
+            // While a scan is running, the big groups keep their places instead of swapping as they fill up.
+            let growing = tree.isPartial
             kids.sort { x, y in
-                func rank(_ id: UInt32) -> Int { id == tree.free ? 2 : (id == tree.hidden ? 1 : 0) }
+                func rank(_ id: UInt32) -> Int {
+                    if id == tree.free { return 5 }
+                    if id == tree.hidden { return 4 }
+                    if growing { return id == tree.home ? 0 : (nodes[Int(id)].has(NodeFlag.synthetic) ? 1 : 2) }
+                    return 0
+                }
                 let rx = rank(x), ry = rank(y)
                 return rx != ry ? rx < ry : totals[Int(x)] > totals[Int(y)]
             }

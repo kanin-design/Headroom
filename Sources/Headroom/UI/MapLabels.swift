@@ -85,7 +85,7 @@ enum LabelPlacer {
                 let isHidden = p.style == 2
                 // The top of a chain is what you'd call it. The whole chain shows when you point at it.
                 let title = isFree ? "Free" : model.displayName(p.node)
-                let value = formatBytes(p.bytes)
+                let value = tree.sizeText(p.node)
                 let w = max(width(title, titleFont), width(value, valueFont)) + 2
                 let h: CGFloat = 31
                 if let angle = fit(w: w, h: h, piece: p, radius: R) {
@@ -120,7 +120,7 @@ enum LabelPlacer {
                     a = q.parent
                 }
                 if redundant { continue }
-                candidates.append(Candidate(index: i, title: model.displayName(p.node), value: formatBytes(p.bytes), score: share * (1 - 0.13 * Double(p.ring))))
+                candidates.append(Candidate(index: i, title: model.displayName(p.node), value: tree.sizeText(p.node), score: share * (1 - 0.13 * Double(p.ring))))
             }
         case .changes:
             for row in model.changeRows.prefix(18) {
@@ -207,7 +207,8 @@ enum LabelPlacer {
             for slot in slots {
                 let p = layout.pieces[slot.c.index]
                 let edge = CGFloat(silhouette(slot.c.index, p.midAngle)) * R + 2
-                out.append(MapLabel(id: p.key ^ 0xABCD, pieceIndex: slot.c.index, node: p.node, title: slot.c.title, value: slot.c.value,
+                // A name that changes sides is a new label, so it fades across instead of flying over the ring.
+                out.append(MapLabel(id: p.key ^ (right ? 0xABCD : 0xDCBA), pieceIndex: slot.c.index, node: p.node, title: slot.c.title, value: slot.c.value,
                                     position: CGPoint(x: columnX, y: slot.y), anchor: point(slot.mid, edge), elbow: point(slot.mid, max(reach, edge + 6)),
                                     place: right ? .right : .left, dark: false, large: false))
             }
@@ -233,22 +234,25 @@ enum LabelPlacer {
 struct LabelsLayer: View {
     let model: AppModel
 
+    /// Quicker than the glide of the names that stay, so a name on its way out is soon gone.
+    private static let comeAndGo = AnyTransition.opacity.animation(.easeOut(duration: 0.18))
+
     var body: some View {
         ZStack(alignment: .topLeading) {
-            Canvas { context, _ in
-                for label in model.labels where label.place != .inside {
-                    let end = CGPoint(x: label.position.x + (label.place == .right ? -7 : 7), y: label.position.y)
-                    var path = Path()
-                    path.move(to: label.anchor)
-                    path.addLine(to: label.elbow)
-                    path.addLine(to: end)
-                    let isOn = model.hover?.node == label.node
-                    context.stroke(path, with: .color(.white.opacity(isOn ? 0.7 : 0.26)), lineWidth: isOn ? 1 : 0.75)
-                    let dot = Path(ellipseIn: CGRect(x: label.anchor.x - 1.6, y: label.anchor.y - 1.6, width: 3.2, height: 3.2))
-                    context.fill(dot, with: .color(.white.opacity(isOn ? 1 : 0.7)))
-                }
+            ForEach(model.labels.filter { $0.place != .inside }) { label in
+                let isOn = model.hover?.node == label.node
+                LeaderLine(anchor: label.anchor, elbow: label.elbow,
+                           end: CGPoint(x: label.position.x + (label.place == .right ? -7 : 7), y: label.position.y))
+                    .stroke(.white.opacity(isOn ? 0.7 : 0.26), lineWidth: isOn ? 1 : 0.75)
+                    .allowsHitTesting(false)
+                    .transition(Self.comeAndGo)
+                Circle()
+                    .fill(.white.opacity(isOn ? 1 : 0.7))
+                    .frame(width: 3.2, height: 3.2)
+                    .position(label.anchor)
+                    .allowsHitTesting(false)
+                    .transition(Self.comeAndGo)
             }
-            .allowsHitTesting(false)
 
             ForEach(model.labels) { label in
                 if label.place == .inside {
@@ -257,6 +261,7 @@ struct LabelsLayer: View {
                         .animation(.easeOut(duration: 0.14), value: model.hover?.node)
                         .position(label.position)
                         .allowsHitTesting(false)
+                        .transition(Self.comeAndGo)
                 } else {
                     let right = label.place == .right
                     let room = max(right ? model.ring.mapWidth - label.position.x - 6 : label.position.x - 12, 60)
@@ -267,10 +272,35 @@ struct LabelsLayer: View {
                         .onTapGesture { model.click(piece: label.pieceIndex) }
                         .frame(width: room, alignment: right ? .leading : .trailing)
                         .position(x: right ? label.position.x + room / 2 : label.position.x - room / 2, y: label.position.y)
+                        .transition(Self.comeAndGo)
                 }
             }
         }
         .opacity(model.labelsVisible ? 1 : 0)
+    }
+}
+
+/// The thin line from a piece to its name. It's a shape so that it can glide with the piece during a scan.
+private struct LeaderLine: Shape {
+    var anchor: CGPoint
+    var elbow: CGPoint
+    var end: CGPoint
+
+    var animatableData: AnimatablePair<AnimatablePair<CGPoint.AnimatableData, CGPoint.AnimatableData>, CGPoint.AnimatableData> {
+        get { AnimatablePair(AnimatablePair(anchor.animatableData, elbow.animatableData), end.animatableData) }
+        set {
+            anchor.animatableData = newValue.first.first
+            elbow.animatableData = newValue.first.second
+            end.animatableData = newValue.second
+        }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: anchor)
+        path.addLine(to: elbow)
+        path.addLine(to: end)
+        return path
     }
 }
 
@@ -285,6 +315,8 @@ private struct InsideLabel: View {
                 .font(.system(size: label.large ? 13 : 11, weight: .medium).monospacedDigit())
                 .opacity(label.dark ? 0.72 : 0.78)
         }
+        // New numbers replace the old ones at once. Fading between them would leave both on screen as the label moves.
+        .contentTransition(.identity)
         .foregroundStyle(label.dark ? Color.black.opacity(0.84) : Color.white.opacity(0.96))
         .shadow(color: label.dark ? .clear : .black.opacity(0.45), radius: 2, y: 0.5)
         .lineLimit(1)
@@ -306,6 +338,7 @@ private struct OuterLabel: View {
                 .font(.system(size: 11, weight: .regular).monospacedDigit())
                 .foregroundStyle(.white.opacity(isOn ? 0.85 : 0.5))
         }
+        .contentTransition(.identity)
         .lineLimit(1)
         .contentShape(Rectangle())
     }
@@ -347,15 +380,17 @@ struct CenterReadout: View {
         .animation(.snappy(duration: 0.32), value: bytes)
     }
 
+    /// Free space is on screen from the first frame, because the disk itself reports it.
     @ViewBuilder
     private func diskContent(size: CGFloat) -> some View {
-        if let tree = model.tree {
-            let free = tree.totals[Int(tree.free)]
+        // Nothing until the disk is known, so the first frame doesn't roll up from zero.
+        if let free = model.tree.map({ $0.totals[Int($0.free)] }) ?? model.volume?.free {
+            let capacity = model.tree?.capacityBytes ?? model.volume?.capacity ?? 0
             let preview = free &+ model.tickedReclaim
-            let usedShare = 1 - Double(free) / Double(max(tree.capacityBytes, 1))
+            let usedShare = 1 - Double(free) / Double(max(capacity, 1))
             VStack(spacing: size * 0.012) {
                 bigNumber(model.lens == .freeUp ? preview : free, size: size, color: model.tickedReclaim > 0 && model.lens == .freeUp ? Color(red: 0.45, green: 1, blue: 0.68) : .white)
-                Text(model.tickedReclaim > 0 && model.lens == .freeUp ? "free after this" : "free of \(formatBytes(tree.capacityBytes))")
+                Text(model.tickedReclaim > 0 && model.lens == .freeUp ? "free after this" : "free of \(formatBytes(capacity))")
                     .font(.system(size: size * 0.058, weight: .medium))
                     .foregroundStyle(.white.opacity(0.55))
                 if model.tickedReclaim > 0 && model.lens == .freeUp {
@@ -364,27 +399,12 @@ struct CenterReadout: View {
                         .foregroundStyle(Color(red: 0.45, green: 1, blue: 0.68).opacity(0.8))
                 } else if let delta = sinceLast(free) {
                     deltaCapsule(delta, size: size)
-                } else if model.isScanning && !tree.isFinished {
-                    Text("\(formatCount(model.scanFiles)) files so far")
-                        .font(.system(size: size * 0.05, weight: .medium).monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.4))
                 } else {
                     Text(String(format: "%.0f%% full", usedShare * 100))
                         .font(.system(size: size * 0.05, weight: .medium).monospacedDigit())
                         .foregroundStyle(.white.opacity(0.36))
                 }
             }
-        } else {
-            VStack(spacing: size * 0.02) {
-                Text(formatCount(model.scanFiles))
-                    .font(.system(size: size * 0.19, weight: .semibold, design: .rounded).monospacedDigit())
-                    .contentTransition(.numericText(value: Double(model.scanFiles)))
-                    .animation(.snappy(duration: 0.2), value: model.scanFiles)
-                Text("files so far")
-                    .font(.system(size: size * 0.058, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.55))
-            }
-            .foregroundStyle(.white)
         }
     }
 
@@ -427,7 +447,7 @@ struct CenterReadout: View {
             }
             .foregroundStyle(.white.opacity(0.92))
             bigNumber(tree.totals[Int(model.focus)], size: size)
-            Text(shareOfDisk(tree))
+            Text(tree.isStillGrowing(model.focus) ? "so far" : shareOfDisk(tree))
                 .font(.system(size: size * 0.052, weight: .medium))
                 .foregroundStyle(.white.opacity(0.5))
         }

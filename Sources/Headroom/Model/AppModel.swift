@@ -61,8 +61,9 @@ final class AppModel {
     /// Goes up whenever the tree's numbers change, so views can follow along.
     var treeVersion = 0
     var isScanning = false
+    /// You asked for this scan, so it isn't being quiet about it.
+    var scanIsHurrying = false
     var scanFiles = 0
-    var lastScanSeconds = 0.0
     var hasFullAccess = false
     var askPerFolder = UserDefaults.standard.bool(forKey: "askPerFolder")
     var accessCardDismissed = false
@@ -115,6 +116,10 @@ final class AppModel {
     @ObservationIgnored private var didStart = false
     /// A tree on its way to the screen, so a scan starting now knows the ring won't be empty.
     @ObservationIgnored private var treeOnItsWay = false
+    @ObservationIgnored private var zoomedAt = Date.distantPast
+    @ObservationIgnored private var heldPicture: DiskTree?
+    @ObservationIgnored private var insightsRunning = false
+    @ObservationIgnored private var insightsAt = Date.distantPast
     @ObservationIgnored var forceTouchGuarded = false
     @ObservationIgnored var cacheLoadMilliseconds = 0.0
     @ObservationIgnored private var lastHoverIndex: Int?
@@ -140,57 +145,44 @@ final class AppModel {
         scan()
     }
 
-    /// Reads the disk again in the background. The map stays usable, and glides to the new numbers at the end.
-    func scan() {
-        guard !isScanning, let volume else { return }
+    /// Reads the disk. With no map on screen, you get a picture from the first frame that fills in as the scan goes, and it
+    /// works like any other map. With a map on screen, the scan stays out of the way and the map glides to the new numbers
+    /// at the end. `hurry` is for when you asked: it runs at full power, even if a quiet scan is already under way.
+    func scan(hurry: Bool = false) {
+        if isScanning {
+            if hurry {
+                scanIsHurrying = true
+                activeScan?.scanner.setHurry(true)
+            }
+            return
+        }
+        guard let volume else { return }
         guard let facts = VolumeFacts.read(path: volume.mountPath) else { return }
         self.volume = facts
         hasFullAccess = DiskScan.hasFullDiskAccess()
         let scan = DiskScan(facts: facts, rules: rules, fullAccess: hasFullAccess, askPerFolder: askPerFolder || forceTouchGuarded)
         activeScan = scan
         isScanning = true
+        scanIsHurrying = hurry
         scanFiles = 0
         scanGeneration += 1
+        heldPicture = nil
         let generation = scanGeneration
-        let showLive = tree == nil && !treeOnItsWay
+        let showPictures = (tree == nil || tree?.isPartial == true) && !treeOnItsWay
+        let mode: ScanMode = hurry ? .full : (showPictures ? .firstLook : .quiet)
+        // Free space, macOS and swap come straight from the disk, so the very first frame already has them.
+        if showPictures { show(scan.picture()) }
 
-        // Nothing on screen yet: show the ring growing as the scan finds things.
-        let liveTree = scan.tree
-        let finished = LockedFlag()
-        let liveLoopDone = DispatchSemaphore(value: 0)
-        Thread.detachNewThread { [weak self] in
-            Thread.current.qualityOfService = .userInteractive
-            defer { liveLoopDone.signal() }
-            var first = true
-            while !finished.value {
-                Thread.sleep(forTimeInterval: first ? 0.05 : 0.12)
-                if finished.value { break }
-                let count = scan.scanner.nodesSoFar
-                let files = scan.scanner.filesSoFar
-                var layout: RingLayout?
-                if showLive {
-                    liveTree.count = count
-                    liveTree.sumTotals()
-                    liveTree.sumLiveStats()
-                    scan.reconcile()
-                    layout = RingLayout.build(tree: liveTree, focus: 0, colorer: Lenses.kindColorer(tree: liveTree))
-                }
-                let isFirst = first
-                first = false
-                DispatchQueue.main.async {
-                    guard let self, self.scanGeneration == generation else { return }
-                    self.scanFiles = Int(files)
-                    if let layout, self.tree == nil {
-                        self.engine.apply(layout, isFirst ? .appear : .live)
-                    }
-                }
-            }
-        }
         Thread.detachNewThread { [weak self] in
             Thread.current.qualityOfService = .userInitiated
-            scan.run(whenRead: {
-                finished.value = true
-                liveLoopDone.wait()
+            scan.run(mode: mode, tick: {
+                let files = Int(scan.scanner.filesSoFar)
+                let picture = showPictures ? scan.picture() : nil
+                DispatchQueue.main.async {
+                    guard let self, self.scanGeneration == generation else { return }
+                    self.scanFiles = files
+                    if let picture { self.show(picture) }
+                }
             })
             let tree = scan.tree
             // A scan that was stopped, or a disk that was unplugged halfway, has only part of the picture. Keeping it
@@ -207,13 +199,110 @@ final class AppModel {
                     return
                 }
                 self.isScanning = false
-                self.lastScanSeconds = tree.scanSeconds
+                self.scanIsHurrying = false
+                self.heldPicture = nil
                 self.scanFiles = Int(tree.totalFiles[0])
                 self.activeScan = nil
                 self.history = snapshot
                 self.present(tree, transition: .settle)
             }
         }
+    }
+
+    /// One more step of the scan that's running. Whatever you're doing carries on, and the numbers only get fuller.
+    private func show(_ picture: DiskTree) {
+        guard let current = tree else {
+            tree = picture
+            nameCache = [:]
+            treeVersion += 1
+            relayout(.appear)
+            workOutInsights(from: picture)
+            return
+        }
+        guard current.isPartial else { return }
+        // A zoom is under way. New numbers wait a moment, so they don't bend its path.
+        let sinceZoom = Date().timeIntervalSince(zoomedAt)
+        if sinceZoom < 0.5 {
+            let alreadyWaiting = heldPicture != nil
+            heldPicture = picture
+            if !alreadyWaiting {
+                Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(0.5 - sinceZoom))
+                    guard let self, let held = self.heldPicture else { return }
+                    self.heldPicture = nil
+                    self.show(held)
+                }
+            }
+            return
+        }
+        if current.scanID != picture.scanID {
+            // The scan started over, so its folders have new numbers.
+            focus = 0
+            trail = []
+            selected = nil
+            nameCache = [:]
+        }
+        tree = picture
+        treeVersion += 1
+        refreshLive()
+        workOutInsights(from: picture)
+    }
+
+    /// New numbers for the picture you're already looking at.
+    private func refreshLive() {
+        guard let tree else { return }
+        engine.apply(RingLayout.build(tree: tree, focus: focus, colorer: colorer(tree)), .live)
+        // Pieces have new places, so whatever is lit gets looked up again: under the pointer, or from a row in the panel.
+        lastHoverIndex = -1
+        if let pointer = lastPointer, let index = engine.layout.hit(angle: pointer.angle, radius: pointer.radius) {
+            setHover(index)
+        } else if let node = hover?.node {
+            highlight(node: node)
+        } else {
+            lastHoverIndex = nil
+        }
+        // The same spring as the ring's, so names stay with their pieces.
+        if labelsVisible { withAnimation(.spring(response: 0.81, dampingFraction: 1)) { labels = makeLabels() } }
+    }
+
+    /// Free Up and Changes during a scan: off the main thread and low priority, every couple of seconds.
+    private func workOutInsights(from picture: DiskTree) {
+        guard !insightsRunning, Date().timeIntervalSince(insightsAt) >= 2 else { return }
+        insightsRunning = true
+        let rules = self.rules
+        let window = changeWindow
+        Task.detached(priority: .utility) {
+            let map = ReclaimMap(tree: picture, rules: rules)
+            let wins = Wins.build(tree: picture, rules: rules)
+            let change = ChangeMap(tree: picture, window: window)
+            let rows = change.rows(tree: picture, rules: rules)
+            await MainActor.run {
+                self.insightsRunning = false
+                self.insightsAt = Date()
+                guard self.tree?.isPartial == true, self.tree?.scanID == picture.scanID else { return }
+                self.adopt(map, wins, change, rows)
+                if self.searchActive { self.runSearch() }
+                if self.lens != .map { self.refreshLive() }
+            }
+        }
+    }
+
+    /// While a scan is showing its progress, what you're looking at is read first.
+    private func readFocusFirst() {
+        guard let scan = activeScan, let tree, tree.isPartial, tree.scanID == scan.tree.scanID else { return }
+        let folder: UInt32? = focus == 0 ? nil : focus
+        DispatchQueue.global(qos: .userInitiated).async {
+            scan.scanner.prioritize(folder)
+            scan.tickSoon()
+        }
+    }
+
+    /// Stops a running scan and starts again.
+    private func restartScan(hurry: Bool = false) {
+        activeScan?.scanner.cancel()
+        isScanning = false
+        activeScan = nil
+        scan(hurry: hurry)
     }
 
     /// Shows a new tree. What the views ask of it is worked out first, so the tree and everything derived from it
@@ -231,17 +320,26 @@ final class AppModel {
                 self.treeOnItsWay = false
                 // You may have picked another disk while this was being worked out.
                 guard newTree.rootPath == self.volume?.mountPath else { return }
-                // Keep your place, if the folder you were looking at still exists.
-                var keepPath: String?
-                if self.focus != 0, let tree = self.tree { keepPath = tree.path(self.focus) }
+                // The end of a scan you've been watching: its folders are the same ones, so you simply stay where you are.
+                let sameScan = self.tree?.scanID == newTree.scanID
+                if !sameScan {
+                    // Keep your place, if the folder you were looking at still exists.
+                    var keepPath: String?
+                    if self.focus != 0, let tree = self.tree { keepPath = tree.path(self.focus) }
+                    self.focus = keepPath.flatMap { newTree.find(path: $0) } ?? 0
+                    self.trail = []
+                    self.selected = nil
+                }
                 self.tree = newTree
                 self.nameCache = [:]
-                self.focus = keepPath.flatMap { newTree.find(path: $0) } ?? 0
-                self.trail = []
-                self.selected = nil
                 self.treeVersion += 1
                 self.adopt(map, wins, change, rows)
-                self.relayout(transition)
+                if sameScan {
+                    self.refreshLive()
+                    self.refreshStory()
+                } else {
+                    self.relayout(transition)
+                }
             }
         }
     }
@@ -285,14 +383,15 @@ final class AppModel {
 
     /// The app came to the front again. If a while has passed, or the Trash may have been emptied, refresh quietly.
     func didBecomeActive() {
-        guard didStart, let tree, !isScanning else { return }
+        guard didStart, let tree else { return }
         // Coming back from System Settings with Full Disk Access switched on: read the rest straight away.
         let access = DiskScan.hasFullDiskAccess()
         if access != hasFullAccess {
             hasFullAccess = access
-            scan()
+            restartScan(hurry: true)
             return
         }
+        guard !isScanning else { return }
         let age = Date().timeIntervalSince(tree.finishedAt)
         if age > 900 || trashBytesAdded > 0 {
             trashBytesAdded = 0
@@ -384,7 +483,7 @@ final class AppModel {
 
     /// Works out the link story for what the panel is showing. It takes a moment, so it never holds up the zoom.
     func refreshStory() {
-        guard let tree, tree.isFinished, !tree.links.isEmpty else { story = nil; return }
+        guard let tree, !tree.links.isEmpty else { story = nil; return }
         let node = selected ?? focus
         guard node != 0, !tree.nodes[Int(node)].has(NodeFlag.synthetic) else { story = nil; return }
         Task.detached(priority: .userInitiated) {
@@ -488,6 +587,11 @@ final class AppModel {
         let percent = base > 0 ? Double(p.bytes) / Double(base) * 100 : 0
         let percentText = percent >= 10 ? String(format: "%.0f%%", percent) : String(format: "%.1f%%", percent)
         let scope = focus == 0 ? "of the disk" : "of \(displayName(focus))"
+        var share = "\(percentText) \(scope)"
+        if tree.isPartial, !p.isSmaller {
+            if p.node == tree.hidden { share = "not read yet" }
+            else if tree.isStillGrowing(p.node) { share = "so far" }
+        }
         var note = ""
         if lens == .changes, let changes {
             let delta = changes.value(of: p.node)
@@ -498,7 +602,7 @@ final class AppModel {
             if rule.tier != .none && rule.tier != .handsOff { note = rule.tier.title }
         }
         return HoverInfo(pieceIndex: index, node: p.node, title: displayName(piece: p), bytes: p.bytes,
-                         share: "\(percentText) \(scope)", note: note, reclaim: nil)
+                         share: share, note: note, reclaim: nil)
     }
 
     /// Lights up one thing from the panel or a label, as if the pointer were on it.
@@ -589,7 +693,9 @@ final class AppModel {
         trail.append(focus)
         focus = node
         selected = nil
+        zoomedAt = Date()
         relayout(.zoomIn(mapping), labelDelay: 0.34)
+        readFocusFirst()
     }
 
     func goUp() {
@@ -628,12 +734,14 @@ final class AppModel {
             if search == 0 { break }
             search = tree.nodes[Int(search)].parent
         }
+        zoomedAt = Date()
         engine.apply(layout, .zoomOut(mapping))
         lastHoverIndex = nil
         hover = nil
         placeLabels(after: 0.34)
         refreshStory()
         refreshHover(after: 0.42)
+        readFocusFirst()
     }
 
     func setLens(_ new: Lens) {
@@ -642,6 +750,8 @@ final class AppModel {
         selected = nil
         panelOpen = true
         relayout(.recolor, labelDelay: 0.2)
+        // Free Up and Changes want the whole picture, so now you're waiting on the scan.
+        if tree?.isPartial == true, !scanIsHurrying { activeScan?.scanner.setHurry(new != .map) }
     }
 
     // MARK: Free Up
@@ -735,7 +845,7 @@ final class AppModel {
         // A scan may have finished while this ran. Its numbers are for another tree, so read the disk again instead.
         guard tree === movedFrom else {
             message = moved.isEmpty ? nil : "That's in the Trash now. Empty it to get the space back."
-            scan()
+            restartScan()
             return
         }
         var bytes: UInt64 = 0
@@ -748,6 +858,8 @@ final class AppModel {
         treeVersion += 1
         rebuildInsights()
         relayout(.settle)
+        // A scan that's running may already have read those files, and would bring them back.
+        if isScanning, !moved.isEmpty { restartScan() }
     }
 
     /// Takes something out of the picture. If you were looking inside it, you step back to the folder that held it.
@@ -786,6 +898,7 @@ final class AppModel {
             treeVersion += 1
             rebuildInsights()
             relayout(.settle)
+            if isScanning { restartScan() }
         } catch {
             message = "That couldn't be moved to the Trash."
         }
@@ -807,7 +920,7 @@ final class AppModel {
     func useFolderPrompts() {
         askPerFolder = true
         UserDefaults.standard.set(true, forKey: "askPerFolder")
-        scan()
+        restartScan(hurry: true)
     }
 
     // MARK: Finder
@@ -851,7 +964,7 @@ final class AppModel {
             if let path = tree.path(p.node) { QuickLook.shared.show(URL(fileURLWithPath: Self.visiblePath(path))) }
         }
         add("Copy Path", "doc.on.doc") { self.copyPath(p.node) }
-        if let path = tree.path(p.node), Safety.canTrash(path) {
+        if !tree.isPartial, let path = tree.path(p.node), Safety.canTrash(path) {
             menu.addItem(.separator())
             add("Move to Trash…", "trash") {
                 let alert = NSAlert()

@@ -69,6 +69,13 @@ struct VolumeFacts {
     }
 }
 
+/// How hard a scan pushes.
+enum ScanMode {
+    case firstLook      // nothing on screen yet: full power until the big things are found, then quiet
+    case quiet          // the map is already there: low priority from the start
+    case full           // you asked for it: full power to the end
+}
+
 /// Starts a scan of one disk and builds the top of the tree so that the whole ring adds up to the disk.
 final class DiskScan: @unchecked Sendable {
     let tree = DiskTree()
@@ -166,21 +173,85 @@ final class DiskScan: @unchecked Sendable {
         return copy.withUTF8 { rules.step(state: state, name: $0.baseAddress!, length: $0.count) }
     }
 
-    /// Reads the disk, then adds it all up. `whenRead` runs in between: anything still looking at the running totals
-    /// has to be finished by then, because adding up writes to them.
-    func run(threads: Int = max(8, ProcessInfo.processInfo.activeProcessorCount), whenRead: () -> Void = {}) {
+    /// Reads the disk, then adds it all up. `tick` is called now and then from another thread, for as long as the workers
+    /// are reading and never after, because adding up writes to the totals.
+    func run(mode: ScanMode, threads: Int = max(8, ProcessInfo.processInfo.activeProcessorCount), tick: @escaping () -> Void = {}) {
         let start = DispatchTime.now()
+        func elapsed() -> Double { Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1e9 }
+        if mode == .quiet { scanner.slowDown() }
+        if mode == .full {
+            scanner.stopKeepingOrder()
+            scanner.setHurry(true)
+        }
+
+        let stop = LockedFlag()
+        let stopped = DispatchSemaphore(value: 0)
+        // The first look is over once new bytes stop pouring in: under 4% of the used space per second.
+        let enough = Double(max(facts.isBoot ? facts.data : facts.used, 1)) * 0.04
+        Thread.detachNewThread { [self] in
+            defer { stopped.signal() }
+            var looking = mode == .firstLook
+            var recent: [(time: Double, known: Double)] = []
+            var wasQuick: Bool?
+            while !stop.value {
+                let quick = looking || !scanner.isQuiet || scanner.hasUrgentWork
+                if quick != wasQuick {
+                    pthread_set_qos_class_self_np(quick ? QOS_CLASS_USER_INITIATED : QOS_CLASS_UTILITY, 0)
+                    wasQuick = quick
+                }
+                let began = elapsed()
+                tick()
+                // A picture of a huge disk takes a moment to make, so it can never take up much of a core.
+                let cost = elapsed() - began
+                // With a saved map on screen, a turn only updates the count of files, which costs nothing.
+                _ = wakeTick.wait(timeout: .now() + (quick ? max(0.1, cost * 2) : max(mode == .quiet ? 0.5 : 1.5, cost * 8)))
+                guard looking else { continue }
+                // Measured over a moment, because the bytes arrive in lumps.
+                let now = elapsed(), known = Double(knownBytes())
+                recent.append((now, known))
+                while recent.count > 1, now - recent[1].time >= 0.3 { recent.removeFirst() }
+                let rate = (known - recent[0].known) / max(now - recent[0].time, 0.01)
+                if now >= 4 || (now >= 1.5 && rate < enough) {
+                    scanner.slowDown()
+                    looking = false
+                }
+            }
+        }
         scanner.run(threads: threads)
-        whenRead()
+        stop.value = true
+        wakeTick.signal()
+        stopped.wait()
         Accounting.settleLinks(in: tree)
-        reconcile()
+        reconcile(tree)
         tree.finish()
-        tree.scanSeconds = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1e9
+        tree.scanSeconds = elapsed()
         tree.finishedAt = Date()
     }
 
+    private let wakeTick = DispatchSemaphore(value: 0)
+
+    /// The next picture is wanted now, not at the next turn.
+    func tickSoon() { wakeTick.signal() }
+
+    /// Bytes found so far, not counting what the disk reported up front.
+    func knownBytes() -> UInt64 {
+        var sum: UInt64 = 0
+        for i in 0..<scanner.nodesSoFar where !tree.nodes[i].has(NodeFlag.synthetic) { sum &+= tree.nodes[i].bytes }
+        return sum
+    }
+
+    /// A finished-looking copy of where the scan has got to, for the interface to read.
+    func picture() -> DiskTree {
+        tree.count = scanner.nodesSoFar
+        let copy = tree.picture()
+        reconcile(copy)
+        copy.displayNames[copy.hidden] = "Still reading"
+        copy.finish()
+        return copy
+    }
+
     /// What the volume reports using, minus what the scan found, is the Hidden piece. The ring then equals the disk.
-    func reconcile() {
+    func reconcile(_ tree: DiskTree) {
         tree.sumTotals()
         let nodes = tree.nodes
         if facts.isBoot {
@@ -283,8 +354,8 @@ enum Accounting {
         return story
     }
 
-    /// Hard links and clones were counted by whichever worker saw them first. This settles each one in a stable place,
-    /// the one you'd call its home: not a cache, not Downloads, and the same place on every scan.
+    /// Hard links and clones were counted by whichever worker saw them first, unless they were somewhere shy. This settles
+    /// each one in a stable place, the one you'd call its home: not a cache, not Downloads, and the same on every scan.
     static func settleLinks(in tree: DiskTree) {
         tree.links.sort { $0.key < $1.key }
         let nodes = tree.nodes
@@ -332,7 +403,12 @@ enum Accounting {
             var end = start + 1
             while end < links.count && links[end].key == links[start].key { end += 1 }
             defer { start = end }
-            if end - start == 1 { continue }
+            let counted = (start..<end).first(where: { links[$0].counted })
+            if end - start == 1 {
+                // Only one path after all, so it's this one's to count.
+                if counted == nil { claim(links[start], in: tree, now: now) }
+                continue
+            }
 
             var primary = start
             var best = UInt64.max
@@ -340,8 +416,9 @@ enum Accounting {
                 let s = score(links[i])
                 if s < best { best = s; primary = i }
             }
-            if let countedIndex = (start..<end).first(where: { links[$0].counted }), countedIndex != primary {
-                move(from: links[countedIndex], to: links[primary], in: tree, now: now)
+            if counted != primary {
+                if let counted { release(links[counted], in: tree, now: now) }
+                claim(links[primary], in: tree, now: now)
             }
             for i in start..<end {
                 var record = links[i]
@@ -352,36 +429,43 @@ enum Accounting {
         tree.links = kept
     }
 
-    private static func move(from: LinkRecord, to: LinkRecord, in tree: DiskTree, now: UInt32) {
+    /// This path now counts the file's bytes.
+    private static func claim(_ r: LinkRecord, in tree: DiskTree, now: UInt32) {
         let nodes = tree.nodes
-        let bytes = from.bytes
-        if from.file != 0 {
-            nodes[Int(from.file)].bytes = 0
-            nodes[Int(from.file)].aliasBytes = bytes
-            nodes[Int(from.file)].flags |= NodeFlag.alias
+        if r.file != 0 {
+            nodes[Int(r.file)].bytes = r.bytes
+            nodes[Int(r.file)].aliasBytes = 0
+            nodes[Int(r.file)].flags &= ~NodeFlag.alias
         } else {
-            nodes[Int(from.dir)].bytes = nodes[Int(from.dir)].bytes &- min(nodes[Int(from.dir)].bytes, bytes)
+            nodes[Int(r.dir)].bytes &+= r.bytes
         }
-        nodes[Int(from.dir)].aliasBytes &+= bytes
-        if to.file != 0 {
-            nodes[Int(to.file)].bytes = bytes
-            nodes[Int(to.file)].aliasBytes = 0
-            nodes[Int(to.file)].flags &= ~NodeFlag.alias
-        } else {
-            nodes[Int(to.dir)].bytes &+= bytes
-        }
-        nodes[Int(to.dir)].aliasBytes &-= min(nodes[Int(to.dir)].aliasBytes, bytes)
+        nodes[Int(r.dir)].aliasBytes &-= min(nodes[Int(r.dir)].aliasBytes, r.bytes)
+        adjustStats(r, in: tree, now: now) { $0 &+ $1 }
+    }
 
-        let units = UInt32(truncatingIfNeeded: (bytes &+ 8191) >> 14)
-        let a = tree.stats + Int(from.dir) * DiskTree.statStride
-        let b = tree.stats + Int(to.dir) * DiskTree.statStride
-        a[Int(from.kind)] &-= min(a[Int(from.kind)], units)
-        b[Int(to.kind)] &+= units
-        // Its date moves with it, or Changes would blame whichever folder a worker happened to reach first.
+    /// This path no longer counts the file's bytes: another one does.
+    private static func release(_ r: LinkRecord, in tree: DiskTree, now: UInt32) {
+        let nodes = tree.nodes
+        if r.file != 0 {
+            nodes[Int(r.file)].bytes = 0
+            nodes[Int(r.file)].aliasBytes = r.bytes
+            nodes[Int(r.file)].flags |= NodeFlag.alias
+        } else {
+            nodes[Int(r.dir)].bytes &-= min(nodes[Int(r.dir)].bytes, r.bytes)
+        }
+        nodes[Int(r.dir)].aliasBytes &+= r.bytes
+        adjustStats(r, in: tree, now: now) { $0 &- min($0, $1) }
+    }
+
+    /// Its kind and its date move with it, or Changes would blame whichever folder a worker happened to reach first.
+    private static func adjustStats(_ r: LinkRecord, in tree: DiskTree, now: UInt32, _ apply: (UInt32, UInt32) -> UInt32) {
+        let units = UInt32(truncatingIfNeeded: (r.bytes &+ 8191) >> 14)
+        let s = tree.stats + Int(r.dir) * DiskTree.statStride
+        s[Int(r.kind)] = apply(s[Int(r.kind)], units)
         let day: UInt32 = 86_400
-        for (field, age) in [(DiskTree.statRecent1, day), (DiskTree.statRecent7, 7 * day), (DiskTree.statRecent30, 30 * day)] {
-            if from.when >= now &- age { a[field] &-= min(a[field], units) }
-            if to.when >= now &- age { b[field] &+= units }
+        for (field, age) in [(DiskTree.statRecent1, day), (DiskTree.statRecent7, 7 * day), (DiskTree.statRecent30, 30 * day)]
+        where r.when >= now &- age {
+            s[field] = apply(s[field], units)
         }
     }
 

@@ -150,11 +150,11 @@ struct DiskChip: View {
                     Text(model.volume?.name ?? "Disk")
                         .font(.system(size: 12, weight: .semibold))
                     if model.isScanning {
-                        Text("Reading \(formatCount(model.scanFiles)) files")
+                        Text(model.scanFiles > 0 ? "Reading \(formatCount(model.scanFiles)) files" : "Reading")
                             .font(.system(size: 9.5, weight: .medium).monospacedDigit())
                             .foregroundStyle(.white.opacity(0.55))
-                    } else if model.lastScanSeconds > 0 {
-                        Text(String(format: "%@ files in %.1f s", formatCount(model.scanFiles), model.lastScanSeconds))
+                    } else if model.scanFiles > 0 {
+                        Text("\(formatCount(model.scanFiles)) files")
                             .font(.system(size: 9.5, weight: .medium).monospacedDigit())
                             .foregroundStyle(.white.opacity(0.5))
                     }
@@ -210,8 +210,8 @@ struct ToolCluster: View {
                         withAnimation(.spring(response: 0.32, dampingFraction: 0.85)) { model.searchActive = true; model.panelOpen = true }
                     }
                 }
-                toolButton("arrow.clockwise", "Scan again (⌘R)") { model.scan() }
-                    .disabled(model.isScanning)
+                toolButton("arrow.clockwise", "Scan again (⌘R)") { model.scan(hurry: true) }
+                    .disabled(model.scanIsHurrying)
                 toolButton("sidebar.right", model.panelOpen ? "Hide the panel" : "Show the panel") {
                     model.panelOpen.toggle()
                 }

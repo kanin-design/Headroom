@@ -26,6 +26,7 @@ import QuickLookUI
 ///     quicklook ~/some/file    open the preview panel, and report what it shows
 ///     volume /Volumes/Name     switch to another disk
 ///     shot file.png
+///     film 3 0.1 name          keep photographing in the background without holding anything up: 3 s, every 0.1 s
 ///     quit
 enum ScriptRunner {
     static var path: String? {
@@ -116,6 +117,20 @@ enum ScriptRunner {
             try? task.run()
             task.waitUntilExit()
             print("shot \(argument)")
+        case "film":
+            let parts = argument.split(separator: " ").map(String.init)
+            guard parts.count == 3, let seconds = Double(parts[0]), let step = Double(parts[1]), let window = mainWindow else { return }
+            let id = String(window.windowNumber)
+            let name = parts[2]
+            Task.detached {
+                for frame in 0..<Int(seconds / step) {
+                    let task = Process()
+                    task.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+                    task.arguments = ["-x", "-o", "-l", id, name + String(format: "-%03d.png", frame)]
+                    try? task.run()
+                    try? await Task.sleep(for: .seconds(step))
+                }
+            }
         case "mouse", "click":
             let numbers = argument.split(separator: " ").compactMap { Double($0) }
             guard numbers.count == 2, let view = model.mapView, let w = mainWindow else { return }
@@ -164,6 +179,7 @@ enum ScriptRunner {
     private static func report(_ model: AppModel) {
         guard let tree = model.tree else { print("no tree"); return }
         print(String(format: "scan %.2fs, %d files, %d nodes, %d link records", tree.scanSeconds, tree.totalFiles[0], tree.count, tree.links.count))
+        if tree.isPartial { print("still reading \(formatBytes(tree.totals[Int(tree.hidden)])), \(model.scanFiles) files so far") }
         print(String(format: "pieces %d, labels %d, last scan loaded in %.1f ms", model.engine.layout.pieces.count, model.labels.count, model.cacheLoadMilliseconds))
         print("focus \(model.displayName(model.focus)), ticked \(model.ticked.count), you'd get back \(formatBytes(model.tickedReclaim)), message: \(model.message ?? "none")")
         print("wins:")

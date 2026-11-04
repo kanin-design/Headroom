@@ -41,8 +41,9 @@ They also get the numbers wrong in ways that matter:
    up. That's the reward.
 6. **Never delete.** Everything goes to the Trash. The Trash stays visible on the map until you empty
    it, because space isn't back until then.
-7. **No waiting.** The last scan appears as soon as the window opens and refreshes quietly behind it. A
-   scan never blocks you, because the ring grows while it runs. Hover answers within the frame.
+7. **No waiting.** The window opens with a picture you can use. With a saved scan that's the whole map,
+   refreshed quietly behind it. Without one, it's what the disk itself reports, and the big things arrive
+   within about a second. Hover answers within the frame.
 
 ## The hero: an answer you can read at a glance
 
@@ -91,26 +92,60 @@ sunburst in the reference:
 
 ## Speed
 
-- `getattrlistbulk` on a work-sharing thread pool, which returns a whole directory's metadata in one
-  system call. No `String` per file, no per-file `stat`.
-- Fixed-size records in memory-mapped tables. Small files are summed into their folder, so memory scales
-  with folders and big files, not every file.
-- Metal draws each piece from a single analytic shape, so the frame cost doesn't depend on how complex
-  the map is. Nothing is drawn when nothing moves, so it uses no power at rest.
-- The last scan is saved, so opening the app shows the map at once.
+What matters is how soon the picture is right, not when the last small file is counted. On this Mac, 17,000
+of the 2.1 million files hold 91% of the bytes, and a folder holding big files usually has few entries. A
+folder's listing already says how many entries each subfolder has, so the scan knows what's cheap before
+opening it.
 
-Measured on this Mac, an M5 MacBook Air with 2.1 million files and a 494 GB disk:
+1. **First frame.** Free space, macOS and swap come straight from the disk, so they're exact. Everything else
+   is one hatched "Still reading" piece.
+2. **First look, under two seconds at full power.** Folders are read fewest entries first, with build
+   folders and caches last. `~/Media` has 43 files holding 98 GB, so it's done within milliseconds.
+3. **The rest, in the background.** Three threads at low priority read the tiny files, and the hatched piece
+   shrinks as they go. A size that may still grow reads `64 GB…`, and "so far" where you point at it.
+4. **What you're looking at comes first.** Zooming into an unfinished folder sends it to the front of the queue
+   at full power, until it's done.
+5. **Free Up and Changes want the whole disk.** Opening either one during that first scan puts it back to full
+   power. Moving things to the Trash waits for the scan, because the numbers aren't final yet.
+6. **With a saved scan,** the map is there at once, and the whole refresh stays in the background. ⌘R means you
+   asked, so that runs at full power.
+
+Two details keep it honest while it runs:
+
+- The interface only ever reads a copy of the tables, taken every so often. So hovering, zooming and the panels
+  all work during the scan, and nothing can read a number that's being written.
+- A hard link in Downloads or a cache doesn't claim its file's bytes during the scan, because that's rarely the
+  file's home. Without this, 90 GB of films would sit under Downloads until the last moment, then jump to Media.
+
+Underneath:
+
+- `getattrlistbulk` returns a whole directory's metadata in one system call. No `String` per file, no per-file
+  `stat`.
+- After the first look, a worker reads a folder's subfolders straight after it, because they open relative to it.
+  That wins back what strict order costs.
+- Fixed-size records in memory-mapped tables. Small files are summed into their folder, so memory scales with
+  folders and big files, not every file.
+- Metal draws each piece from a single analytic shape, so the frame cost doesn't depend on how complex the map is.
+  Nothing is drawn when nothing moves, so it uses no power at rest.
+
+Measured on this Mac, an M5 MacBook Air with 2.1 million files and a 494 GB disk, without Full Disk Access:
 
 | | |
 |---|---|
-| Full scan | 6.6 s, against 40 s for `du` on the same data, and the scan also collects kinds, dates, links and clones |
-| Opening with the last scan | The saved scan loads in 6 ms |
-| At rest | 0.0% CPU, 145 MB of memory |
-| During a scan | 290 MB of memory at peak |
+| Launch to a first frame with the disk's numbers | About 200 ms |
+| First launch: half the bytes placed | 0.4 s |
+| First launch: placed after one second | 72–81% |
+| First launch: everything read | 13–14 s, on about 1.2 cores after the first look |
+| With a saved scan: the map on screen | The saved scan loads in under 10 ms |
+| With a saved scan: the refresh | 14.5 s at low priority, on about 1.2 cores |
+| ⌘R, at full power | 6.9 s, against 40 s for `du` on the same data, and the scan also collects kinds, dates, links and clones |
+| At rest | 0.0% CPU, 170–220 MB of memory |
+| During a scan | About 260 MB of memory at peak |
 | Building the ring | Under 1 ms |
 
-The scan's limit is APFS itself: about 15 µs per file in the kernel, whichever attributes are requested. So the design
-makes the wait not matter, rather than chasing a faster scan.
+The scan's limit is APFS itself: about 15 µs per file in the kernel, whichever attributes are requested. Folders
+store no total size, and Spotlight only knows part of the disk. So the design makes the wait not matter, rather than
+chasing a faster scan.
 
 ## What it looks like
 

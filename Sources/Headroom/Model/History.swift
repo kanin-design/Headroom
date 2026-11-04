@@ -290,7 +290,6 @@ enum TreeCache {
             tree.finishedAt = meta.finishedAt
             for (key, name) in meta.displayNames { if let id = UInt32(key) { tree.displayNames[id] = name } }
             tree.numberSubtrees()
-            tree.isFinished = true
             return tree
         }
     }

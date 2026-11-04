@@ -26,9 +26,12 @@ private let objTypeDirectory: UInt32 = 2
 private let optionNoFollow: UInt64 = 0x1
 private let optionExtended: UInt64 = 0x20
 
-/// Walks a volume as fast as the disk allows. Every worker asks for whole directories' metadata in one system call
-/// (`getattrlistbulk`), adds small files to their folder without making a String, and keeps a node only for folders
-/// and for files of at least `promoteBytes`.
+/// Reads a volume in the order that gets the picture right soonest. On a typical disk, under 1% of the files hold 90% of
+/// the bytes, and a folder holding big files has few entries, so folders are read fewest entries first, with build folders
+/// and caches last. After the first look the rest is read quietly: a few threads, at low priority.
+///
+/// Every worker asks for whole directories' metadata in one system call (`getattrlistbulk`), adds small files to their
+/// folder without making a String, and keeps a node only for folders and for files of at least `promoteBytes`.
 final class Scanner: @unchecked Sendable {
     let tree: DiskTree
     let rules: RuleBook
@@ -45,14 +48,34 @@ final class Scanner: @unchecked Sendable {
     private let now = UInt32(Date().timeIntervalSince1970)
     private let extensions = ExtensionTable.shared
 
-    // Jobs shared between workers. A worker keeps its own stack and only hands jobs over when someone is idle.
+    /// One folder waiting to be read. The lowest key goes first: what you're looking at, then what's cheap, then the rest.
+    private struct Job {
+        var key: UInt64
+        var id: UInt32
+        var isUrgent: Bool { key >> 48 == 0 }
+    }
+
+    // All of this is guarded by `lock`.
     private let lock = UnsafeMutablePointer<pthread_mutex_t>.allocate(capacity: 1)
     private let wake = UnsafeMutablePointer<pthread_cond_t>.allocate(capacity: 1)
-    private var shared: [UInt32] = []
-    private var idleWorkers = 0
+    private var queue: [Job] = []
+    private var seeds: [UInt32] = []
+    private var inFlight = 0
+    private var running = 0
+    private var sleepers = 0
+    private var urgentWaiting = 0
+    private var urgentInFlight = 0
+    private var quiet = false
+    private var hurry = false
+    /// Strict order gets the big things on screen soonest. Once that's done, or with nobody watching, the cheapest order
+    /// wins: a folder's subfolders right after it, because they open relative to it.
+    private var inOrder = true
+    private var focus: UInt32?
+    private var focusGeneration = 0
     private var workerCount = 1
     private var finished = false
-    private let hungry = Atomic<Int>(0)
+    /// How many threads read while nobody is waiting.
+    private static let quietWorkers = 3
 
     // Which file IDs have been counted. Split so that workers rarely wait on each other.
     private struct Stripe {
@@ -88,7 +111,14 @@ final class Scanner: @unchecked Sendable {
     var filesSoFar: UInt64 { filesSeen.load(ordering: .relaxed) }
     /// Nodes in use. The counter itself can pass the table's size when a disk has more folders than the table holds.
     var nodesSoFar: Int { min(Int(nextNode.load(ordering: .relaxed)), DiskTree.capacity) }
-    func cancel() { cancelled.store(true, ordering: .relaxed) }
+    func cancel() {
+        cancelled.store(true, ordering: .relaxed)
+        pthread_mutex_lock(lock)
+        queue.removeAll()
+        urgentWaiting = 0
+        pthread_cond_broadcast(wake)
+        pthread_mutex_unlock(lock)
+    }
     var wasCancelled: Bool { cancelled.load(ordering: .relaxed) }
 
     // MARK: Building the top of the tree
@@ -103,6 +133,7 @@ final class Scanner: @unchecked Sendable {
         node.rule = rule
         node.kind = kind.rawValue
         node.ruleState = ruleState
+        if flags & NodeFlag.directory != 0 && path != nil { node.flags |= NodeFlag.unread }
         if let path {
             var copy = path
             copy.withUTF8 { p in
@@ -119,7 +150,7 @@ final class Scanner: @unchecked Sendable {
         tree.nodes[Int(id)] = node
         tree.displayNames[id] = display
         tree.count = Int(id) + 1
-        if flags & NodeFlag.directory != 0 && path != nil { shared.append(id) }
+        if flags & NodeFlag.directory != 0 && path != nil { seeds.append(id) }
         return id
     }
 
@@ -127,10 +158,14 @@ final class Scanner: @unchecked Sendable {
 
     // MARK: Running
 
-    /// Blocks until the whole volume has been read, then totals are ready to be finished.
+    /// Blocks until the whole volume has been read.
     func run(threads: Int) {
         workerCount = max(1, threads)
         workerLinks = Array(repeating: [], count: workerCount)
+        pthread_mutex_lock(lock)
+        for id in seeds { push(Job(key: key(tree.nodes[Int(id)], urgent: false), id: id)) }
+        seeds = []
+        pthread_mutex_unlock(lock)
         let group = DispatchGroup()
         for index in 0..<workerCount {
             group.enter()
@@ -139,13 +174,122 @@ final class Scanner: @unchecked Sendable {
                 group.leave()
             }
             thread.stackSize = 1 << 20
-            thread.qualityOfService = .userInitiated
+            thread.qualityOfService = quiet ? .utility : .userInitiated
             thread.start()
         }
         group.wait()
         tree.count = nodesSoFar
         tree.links = workerLinks.flatMap { $0 }
         workerLinks = []
+    }
+
+    /// From here on, read at low priority with a few threads.
+    func slowDown() {
+        pthread_mutex_lock(lock)
+        quiet = true
+        inOrder = false
+        pthread_mutex_unlock(lock)
+    }
+
+    /// Nobody is watching this scan's picture, so only the total time matters.
+    func stopKeepingOrder() {
+        pthread_mutex_lock(lock)
+        inOrder = false
+        pthread_mutex_unlock(lock)
+    }
+
+    /// Whether someone is waiting for the whole picture. That beats being quiet.
+    func setHurry(_ value: Bool) {
+        pthread_mutex_lock(lock)
+        hurry = value
+        pthread_cond_broadcast(wake)
+        pthread_mutex_unlock(lock)
+    }
+
+    var isQuiet: Bool {
+        pthread_mutex_lock(lock)
+        defer { pthread_mutex_unlock(lock) }
+        return quiet && !hurry
+    }
+
+    /// Whether what you're looking at is being read right now.
+    var hasUrgentWork: Bool {
+        pthread_mutex_lock(lock)
+        defer { pthread_mutex_unlock(lock) }
+        return urgentWaiting > 0 || urgentInFlight > 0
+    }
+
+    /// What's inside this folder goes to the front of the queue, at full power, because you're looking at it.
+    func prioritize(_ folder: UInt32?) {
+        pthread_mutex_lock(lock)
+        defer { pthread_mutex_unlock(lock) }
+        let nodes = tree.nodes
+        focus = folder
+        focusGeneration += 1
+        urgentWaiting = 0
+        for i in queue.indices {
+            let urgent = isInFocus(queue[i].id)
+            queue[i].key = key(nodes[Int(queue[i].id)], urgent: urgent)
+            if urgent { urgentWaiting += 1 }
+        }
+        // Back into heap order, from the last parent down.
+        var i = queue.count / 2 - 1
+        while i >= 0 {
+            sink(i)
+            i -= 1
+        }
+        if urgentWaiting > 0 { pthread_cond_broadcast(wake) }
+    }
+
+    /// Call with the lock held.
+    private func isInFocus(_ id: UInt32) -> Bool {
+        guard let focus else { return false }
+        let nodes = tree.nodes
+        var at = id
+        while true {
+            if at == focus { return true }
+            if at == 0 { return false }
+            at = nodes[Int(at)].parent
+        }
+    }
+
+    @inline(__always) private func key(_ node: Node, urgent: Bool) -> UInt64 {
+        let order: UInt64 = urgent ? 0 : (node.flags & NodeFlag.later != 0 ? 2 : 1)
+        return order << 48 | UInt64(node.fileCount)         // until a folder is read, fileCount is its entry count
+    }
+
+    private func push(_ job: Job) {
+        queue.append(job)
+        var i = queue.count - 1
+        while i > 0 {
+            let up = (i - 1) / 2
+            if queue[up].key <= queue[i].key { break }
+            queue.swapAt(up, i)
+            i = up
+        }
+    }
+
+    private func pop() -> Job {
+        let top = queue[0]
+        let last = queue.removeLast()
+        if !queue.isEmpty {
+            queue[0] = last
+            sink(0)
+        }
+        return top
+    }
+
+    private func sink(_ start: Int) {
+        var i = start
+        while true {
+            let l = 2 * i + 1, r = l + 1
+            var low = i
+            if l < queue.count && queue[l].key < queue[low].key { low = l }
+            if r < queue.count && queue[r].key < queue[low].key { low = r }
+            if low == i { return }
+            queue.swapAt(low, i)
+            i = low
+        }
     }
 
     private func work(_ index: Int) {
@@ -156,47 +300,95 @@ final class Scanner: @unchecked Sendable {
         defer { buffer.deallocate(); pathBuffer.deallocate(); opened.closeAll() }
         var local: [UInt32] = []
         local.reserveCapacity(4096)
+        var batch: [Job] = []
+        var found: [Job] = []
         var links: [LinkRecord] = []
         var cursor: UInt64 = 0
         var cursorEnd: UInt64 = 0
+        var speed = quiet ? QOS_CLASS_UTILITY : QOS_CLASS_USER_INITIATED
 
+        pthread_mutex_lock(lock)
         while true {
-            if let job = local.popLast() {
-                if hungry.load(ordering: .relaxed) > 0 && local.count > 1 {
-                    let give = local.count / 2
-                    pthread_mutex_lock(lock)
-                    shared.append(contentsOf: local[0..<give])
-                    pthread_cond_broadcast(wake)
-                    pthread_mutex_unlock(lock)
-                    local.removeFirst(give)
-                }
-                scan(job, buffer, bufferSize, pathBuffer, &local, &links, &cursor, &cursorEnd, &opened)
-                continue
-            }
-            pthread_mutex_lock(lock)
-            var job: UInt32?
-            while true {
-                if let j = shared.popLast() { job = j; break }
-                if finished { break }
-                idleWorkers += 1
-                if idleWorkers == workerCount {
+            while !finished {
+                if !queue.isEmpty && running < allowedWorkers { break }
+                if queue.isEmpty && inFlight == 0 {
                     finished = true
                     pthread_cond_broadcast(wake)
-                    idleWorkers -= 1
                     break
                 }
-                hungry.add(1, ordering: .relaxed)
+                sleepers += 1
                 pthread_cond_wait(wake, lock)
-                hungry.subtract(1, ordering: .relaxed)
-                idleWorkers -= 1
+                sleepers -= 1
             }
+            if finished { break }
+
+            // A short list keeps the order strict while it matters. A long one means less waiting on the lock.
+            batch.removeAll(keepingCapacity: true)
+            let keepOrder = inOrder
+            var urgentTaken = 0
+            for _ in 0..<(keepOrder ? min(queue.count / (workerCount * 8) + 1, 24) : 1) {
+                let job = pop()
+                if job.isUrgent {
+                    urgentWaiting -= 1
+                    urgentTaken += 1
+                }
+                batch.append(job)
+            }
+            let taken = batch.count
+            urgentInFlight += urgentTaken
+            running += 1
+            inFlight += taken
+            let generation = focusGeneration
+            let wanted = allowedWorkers == workerCount ? QOS_CLASS_USER_INITIATED : QOS_CLASS_UTILITY
             pthread_mutex_unlock(lock)
-            guard let job else { break }
-            local.append(job)
+
+            if wanted != speed {
+                pthread_set_qos_class_self_np(wanted, 0)
+                speed = wanted
+            }
+            found.removeAll(keepingCapacity: true)
+            var read = 0
+            while let job = batch.popLast() {
+                scan(job.id, buffer, bufferSize, pathBuffer, &local, &links, &cursor, &cursorEnd, &opened)
+                read += 1
+                for child in local {
+                    let next = Job(key: key(tree.nodes[Int(child)], urgent: job.isUrgent), id: child)
+                    // Carry on down this branch, but not for long, or the lock's list stops meaning anything. A build folder
+                    // inside it still waits its turn.
+                    if !keepOrder && read < 48 && batch.count < 64 && next.key >> 48 <= job.key >> 48 {
+                        batch.append(next)
+                    } else {
+                        found.append(next)
+                    }
+                }
+                local.removeAll(keepingCapacity: true)
+            }
+
+            pthread_mutex_lock(lock)
+            // You may have moved on while these were being read, so what's urgent may have changed.
+            let focusMoved = generation != focusGeneration
+            for var job in found {
+                if focusMoved { job.key = key(tree.nodes[Int(job.id)], urgent: isInFocus(job.id)) }
+                push(job)
+                if job.isUrgent { urgentWaiting += 1 }
+            }
+            urgentInFlight -= urgentTaken
+            inFlight -= taken
+            running -= 1
+            // This worker takes the next job itself, so wake only as many others as there's work and room for.
+            var helpers = min(sleepers, allowedWorkers - running - 1, queue.count - 1)
+            while helpers > 0 {
+                pthread_cond_signal(wake)
+                helpers -= 1
+            }
         }
-        pthread_mutex_lock(lock)
         workerLinks[index] = links
         pthread_mutex_unlock(lock)
+    }
+
+    /// Call with the lock held. Full power unless it's quiet time and nobody is waiting on anything.
+    private var allowedWorkers: Int {
+        quiet && !hurry && urgentWaiting == 0 && urgentInFlight == 0 ? min(Self.quietWorkers, workerCount) : workerCount
     }
 
     /// A worker's recently opened folders. Almost every job is a child of one of them, and opening relative to it
@@ -224,8 +416,8 @@ final class Scanner: @unchecked Sendable {
         }
     }
 
-    /// Opens a folder from the nearest open ancestor, or from its absolute path if there is none.
-    @inline(__always)
+    /// Opens a folder from the nearest open ancestor, or from its absolute path if there is none. A path longer than the
+    /// system accepts is opened a stretch at a time.
     private func openFolder(_ id: UInt32, _ out: UnsafeMutablePointer<UInt8>, _ open: inout OpenFolders) -> Int32 {
         var end = 8191
         out[end] = 0
@@ -236,7 +428,7 @@ final class Scanner: @unchecked Sendable {
             let n = nodes[Int(i)]
             let length = Int(n.nameLength)
             end -= length
-            if end < 8191 - 1023 { return -1 }
+            if end < 1 { return -1 }
             (out + end).update(from: names + Int(n.nameOffset), count: length)
             if n.flags & NodeFlag.anchor != 0 { break }
             let parentFD = open.fd(of: n.parent)
@@ -245,9 +437,29 @@ final class Scanner: @unchecked Sendable {
             out[end] = 0x2F
             i = n.parent
         }
-        return (out + end).withMemoryRebound(to: CChar.self, capacity: 8191 - end) {
-            openat(base, $0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
+        let flags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK
+        func openHere(_ from: Int32, _ at: Int) -> Int32 {
+            (out + at).withMemoryRebound(to: CChar.self, capacity: 8191 - at) { openat(from, $0, flags) }
         }
+        var at = end
+        var current = base
+        while 8191 - at > 1000 {
+            var cut = at + 1000
+            while cut > at && out[cut] != 0x2F { cut -= 1 }
+            if cut == at {
+                if current != base { close(current) }
+                return -1
+            }
+            out[cut] = 0
+            let next = openHere(current, at)
+            if current != base { close(current) }
+            if next < 0 { return -1 }
+            current = next
+            at = cut + 1
+        }
+        let fd = openHere(current, at)
+        if current != base { close(current) }
+        return fd
     }
 
     private func scan(_ id: UInt32, _ buffer: UnsafeMutableRawPointer, _ bufferSize: Int, _ pathBuffer: UnsafeMutablePointer<UInt8>,
@@ -257,7 +469,7 @@ final class Scanner: @unchecked Sendable {
         let nodes = tree.nodes
         let fd = openFolder(id, pathBuffer, &opened)
         if fd < 0 {
-            nodes[Int(id)].flags |= NodeFlag.denied
+            nodes[Int(id)].flags = (nodes[Int(id)].flags | NodeFlag.denied) & ~NodeFlag.unread
             nodes[Int(id)].fileCount = 0
             return
         }
@@ -363,12 +575,20 @@ final class Scanner: @unchecked Sendable {
                     let startsProjects = isHome && name[0] != 0x2E && !(nameLength == 7 && memcmp(name, "Library", 7) == 0)
                         && !(nameLength == 12 && memcmp(name, "Applications", 12) == 0)
                     if (inProjects || startsProjects) && !rules.isPackage(name, nameLength) { node.flags |= NodeFlag.projects }
+                    if parent.flags & NodeFlag.later != 0 || rules.isSlowFolder(name, nameLength) { node.flags |= NodeFlag.later }
                     if open && inProjects && node.flags & NodeFlag.ruleRoot == 0 {
                         let rule = rules.ruleForName(name, nameLength)
                         if rule != 0 {
                             node.rule = rule
                             node.flags |= NodeFlag.ruleRoot
                         }
+                    }
+
+                    // A link in Downloads or a cache rarely marks a file's real home, so it doesn't claim the bytes.
+                    // Otherwise the picture would show them in the wrong folder, then jump when the scan ends.
+                    if parent.flags & NodeFlag.shyLinks != 0 || node.rule > rules.neutralLimit
+                        || (isHome && nameLength == 9 && memcmp(name, "Downloads", 9) == 0) {
+                        node.flags |= NodeFlag.shyLinks
                     }
 
                     var descend = !isMount
@@ -384,11 +604,13 @@ final class Scanner: @unchecked Sendable {
                             descend = false
                         }
                     }
+                    // An empty folder needs no system calls at all.
+                    let toRead = descend && !(dirAttrs & attrDirEntryCount != 0 && entries == 0)
+                    if toRead { node.flags |= NodeFlag.unread }
                     node.nextSibling = firstChild
                     nodes[Int(child)] = node
                     firstChild = child
-                    // An empty folder needs no system calls at all.
-                    if descend && !(dirAttrs & attrDirEntryCount != 0 && entries == 0) { local.append(child) }
+                    if toRead { local.append(child) }
                     continue
                 }
 
@@ -423,7 +645,7 @@ final class Scanner: @unchecked Sendable {
                     } else if links32 > 1 {
                         linkKey = fileID
                     }
-                    if linkKey != 0 { counted = firstTime(linkKey) }
+                    if linkKey != 0 { counted = parent.flags & NodeFlag.shyLinks == 0 && firstTime(linkKey) }
                 }
                 let share: UInt64 = counted ? alloc : 0
                 if !counted { aliasBytes &+= alloc }
@@ -487,6 +709,7 @@ final class Scanner: @unchecked Sendable {
         nodes[Int(id)].aliasBytes = aliasBytes
         nodes[Int(id)].firstChild = firstChild
         nodes[Int(id)].bytes = bytes
+        nodes[Int(id)].flags &= ~NodeFlag.unread
         tree.count = max(tree.count, nodesSoFar)
     }
 

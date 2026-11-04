@@ -57,6 +57,33 @@ struct Rule {
     var marker: String? = nil
 }
 
+/// A fixed set of names the scanner can ask about from any thread, with no String and no reference counting.
+struct NameTable {
+    private static let slots = 128
+    private let keys: UnsafeMutablePointer<UInt64>
+
+    init(_ names: [String]) {
+        keys = .allocate(capacity: Self.slots)
+        keys.initialize(repeating: 0, count: Self.slots)
+        for name in names {
+            let h = RuleBook.hash(name)
+            var slot = Int(truncatingIfNeeded: h >> 7) & (Self.slots - 1)
+            while keys[slot] != 0 { slot = (slot + 1) & (Self.slots - 1) }
+            keys[slot] = h
+        }
+    }
+
+    @inline(__always) func contains(_ p: UnsafePointer<UInt8>, _ n: Int) -> Bool {
+        let h = RuleBook.hash(p, n)
+        var slot = Int(truncatingIfNeeded: h >> 7) & (Self.slots - 1)
+        while keys[slot] != 0 {
+            if keys[slot] == h { return true }
+            slot = (slot + 1) & (Self.slots - 1)
+        }
+        return false
+    }
+}
+
 /// Everything Headroom knows about particular folders, and the tables the scanner uses to look that up quickly.
 final class RuleBook: @unchecked Sendable {
     static let swap = Rule(title: "Memory swap", detail: "Memory that macOS moved to disk. It fills up when many apps are open and resets on restart.",
@@ -92,11 +119,12 @@ final class RuleBook: @unchecked Sendable {
     private var stateCount = 1
 
     // Folder extensions that make a folder one thing to the Finder. What's inside isn't yours to pick apart.
-    private var packageKeys: UnsafeMutablePointer<UInt64>
-    private static let packageSlots = 128
-    private static let packageExtensions = ["app", "appex", "bundle", "framework", "kext", "xcframework", "plugin", "pkg",
-                                            "photoslibrary", "aplibrary", "fcpbundle", "imovielibrary", "tvlibrary", "musiclibrary",
-                                            "logicx", "band", "xcarchive", "sparsebundle", "dtbase2", "lrlibrary", "rtfd"]
+    private let packages = NameTable(["app", "appex", "bundle", "framework", "kext", "xcframework", "plugin", "pkg",
+                                      "photoslibrary", "aplibrary", "fcpbundle", "imovielibrary", "tvlibrary", "musiclibrary",
+                                      "logicx", "band", "xcarchive", "sparsebundle", "dtbase2", "lrlibrary", "rtfd"])
+    // Folders that are nearly all tiny files: about half the reading on a typical disk, for under a tenth of the bytes.
+    private let slowFolders = NameTable(["node_modules", ".venv", "venv", "__pycache__", "site-packages", ".git", "Pods", ".build",
+                                         "DerivedData", ".gradle", ".cargo", ".npm", ".pnpm", "Caches", ".cache"])
 
     private(set) var swapRule: UInt16 = 0
     private(set) var updatesRule: UInt16 = 0
@@ -111,8 +139,6 @@ final class RuleBook: @unchecked Sendable {
         stateRule = .allocate(capacity: Self.maxStates)
         nameKeys = .allocate(capacity: Self.nameSlots)
         nameRules = .allocate(capacity: Self.nameSlots)
-        packageKeys = .allocate(capacity: Self.packageSlots)
-        packageKeys.initialize(repeating: 0, count: Self.packageSlots)
         forcedKinds = .allocate(capacity: 512)
         forcedKinds.initialize(repeating: 255, count: 512)
         transitionKeys.initialize(repeating: 0, count: Self.transitionSlots)
@@ -121,13 +147,6 @@ final class RuleBook: @unchecked Sendable {
         stateRule.initialize(repeating: 0, count: Self.maxStates)
         nameKeys.initialize(repeating: 0, count: Self.nameSlots)
         nameRules.initialize(repeating: 0, count: Self.nameSlots)
-
-        for ext in Self.packageExtensions {
-            let h = Self.hash(ext)
-            var slot = Int(truncatingIfNeeded: h >> 7) & (Self.packageSlots - 1)
-            while packageKeys[slot] != 0 { slot = (slot + 1) & (Self.packageSlots - 1) }
-            packageKeys[slot] = h
-        }
 
         for (pattern, rule) in Self.neutralRules { insert(pattern.split(separator: "/").map(String.init), rule: add(rule)) }
         neutralLimit = UInt16(rules.count - 1)
@@ -151,7 +170,7 @@ final class RuleBook: @unchecked Sendable {
 
     deinit {
         transitionKeys.deallocate(); transitionValues.deallocate(); wildcard.deallocate(); stateRule.deallocate()
-        nameKeys.deallocate(); nameRules.deallocate(); forcedKinds.deallocate(); packageKeys.deallocate()
+        nameKeys.deallocate(); nameRules.deallocate(); forcedKinds.deallocate()
     }
 
     /// The kind every file under this rule counts as, read without touching any reference counts.
@@ -266,18 +285,14 @@ final class RuleBook: @unchecked Sendable {
         var i = length - 1
         let stop = max(0, length - 16)
         while i > stop {
-            if name[i] == 0x2E {
-                let h = Self.hash(name + i + 1, length - i - 1)
-                var slot = Int(truncatingIfNeeded: h >> 7) & (Self.packageSlots - 1)
-                while packageKeys[slot] != 0 {
-                    if packageKeys[slot] == h { return true }
-                    slot = (slot + 1) & (Self.packageSlots - 1)
-                }
-                return false
-            }
+            if name[i] == 0x2E { return packages.contains(name + i + 1, length - i - 1) }
             i -= 1
         }
         return false
+    }
+
+    @inline(__always) func isSlowFolder(_ name: UnsafePointer<UInt8>, _ length: Int) -> Bool {
+        length <= 16 && slowFolders.contains(name, length)
     }
 
     // MARK: What Headroom knows

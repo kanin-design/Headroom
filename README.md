@@ -17,6 +17,13 @@ The first time, the ring shows a hatched "Hidden" piece, because macOS keeps Dow
 others private. Click **Allow Full Disk Access** and switch Headroom on in the pane that opens. The app is signed with
 your development certificate if you have one, so the permission survives rebuilds.
 
+After that, the last scan appears as soon as the window opens, and a refresh runs quietly at low priority. To see what
+a first launch looks like, quit the app and start it without the saved scan:
+
+```bash
+open build/Headroom.app --args --no-cache
+```
+
 ## How to use it
 
 - **Map** shows what's on the disk. Colour is the kind of data. Point at anything to see its name, its size and what
@@ -32,7 +39,7 @@ your development certificate if you have one, so the permission survives rebuild
 | Esc or ⌘[ | Back |
 | Space | Quick Look what you're pointing at |
 | ⌘F | Find a file or folder |
-| ⌘R | Scan again |
+| ⌘R | Scan again, at full power |
 | Right-click | Reveal in Finder, Quick Look, Copy Path, Move to Trash |
 | Pinch | Zoom in and out |
 
@@ -43,13 +50,15 @@ your development certificate if you have one, so the permission survives rebuild
   removing that folder alone frees nothing. The panel says where the other copies are.
 - The ring always adds up to the whole disk. Whatever can't be read is the hatched Hidden piece.
 - Partly changed clones are counted in full, so a folder of them can look slightly bigger than it is.
+- During a first scan, a size with dots (`64 GB…`) may still grow, and the hatched piece says "Still reading". Zooming
+  into a folder reads it first.
 
 ## How it's built
 
 | Where | What |
 |---|---|
-| `Model/Scanner.swift` | The scan: `getattrlistbulk` on a thread pool, flat memory-mapped tables |
-| `Model/Volume.swift` | The disk's own numbers, the top of the tree, and hard-link and clone accounting |
+| `Model/Scanner.swift` | The scan: `getattrlistbulk` on a thread pool, big things first, then the rest at low priority |
+| `Model/Volume.swift` | The disk's own numbers, the top of the tree, the scan's two speeds, and hard-link and clone accounting |
 | `Model/Rules.swift` | What Headroom knows about particular folders, and how safe each is to remove |
 | `Model/Insights.swift` | Free Up rows, Changes rows, and the colours for each view |
 | `Model/History.swift` | The saved last scan, snapshots for comparison, free-space history |
