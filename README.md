@@ -2,6 +2,10 @@
 
 Shows where your disk space went and how to get it back. A native Mac app in Swift and Metal.
 
+![Headroom's map of a disk: a glowing ring of folders on near-black, each group in its own colour, with free space as an open wedge and a panel listing the biggest folders](docs/screenshot.png)
+
+*The folder names in this screenshot are made up, using `--hide-names`.*
+
 The design thinking is in [DESIGN.md](DESIGN.md).
 
 ## Run it
@@ -23,6 +27,9 @@ a first launch looks like, quit the app and start it without the saved scan:
 ```bash
 open build/Headroom.app --args --no-cache
 ```
+
+To take a screenshot without showing what's on your disk, start it with `--hide-names`. That swaps folder and file names in
+the Map for made-up ones, and turns off moving anything to the Trash.
 
 ## How to use it
 
@@ -64,6 +71,7 @@ open build/Headroom.app --args --no-cache
 | `Model/Insights.swift` | Free Up rows, Changes rows, and the colours for each view |
 | `Model/History.swift` | The saved last scan, snapshots for comparison, free-space history |
 | `Render/Layout.swift` | Turns part of the tree into pieces of a ring |
+| `Render/RingColours.swift` | The Map view's colours, and remembering which folder has which |
 | `Render/MapEngine.swift` | Transitions: where each piece starts and ends, and one spring that carries them |
 | `Render/Shaders.metal` | Each piece's shape and light, the glow and the scale. macOS compiles this at launch |
 | `UI/` | Labels, the centre readout, and the glass panels |
