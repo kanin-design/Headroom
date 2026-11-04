@@ -1,0 +1,398 @@
+import Foundation
+
+/// What removing something costs you. This is how Free Up sorts everything.
+enum Tier: UInt8, Comparable {
+    case none = 0
+    case noLoss          // a restart, an update or emptying the Trash brings it back
+    case rebuilds        // caches and build output: the tool makes it again when it needs to
+    case redownload      // models, games, simulators: it comes back, but you wait for it
+    case yourCall        // yours to judge: installers, archives, backups, old big files
+    case handsOff        // shown and explained, never offered for removal
+
+    static func < (a: Tier, b: Tier) -> Bool { a.rawValue < b.rawValue }
+
+    var title: String {
+        switch self {
+        case .none: ""
+        case .noLoss: "No loss"
+        case .rebuilds: "Rebuilds itself"
+        case .redownload: "Download again"
+        case .yourCall: "Your call"
+        case .handsOff: "Leave it"
+        }
+    }
+
+    var promise: String {
+        switch self {
+        case .none: ""
+        case .noLoss: "Nothing is lost."
+        case .rebuilds: "The tool makes it again when it needs to."
+        case .redownload: "It comes back, but you wait for the download."
+        case .yourCall: "Only you know if these still matter."
+        case .handsOff: "macOS looks after this."
+        }
+    }
+}
+
+struct Rule {
+    var title: String
+    var detail: String
+    var tier: Tier
+    var kind: Kind? = nil
+    /// A command that does this better than moving files to the Trash.
+    var command: String? = nil
+    /// List every match as one row ("node_modules in 14 projects") instead of one row each.
+    var groups = false
+    /// The folder's own name is a bundle ID: the row is named after the app, and warns while it's running.
+    var namedByBundleID = false
+    /// A restart clears it. It's never moved to the Trash by hand.
+    var restartClears = false
+    /// macOS or a running system owns it, so it's never offered for the Trash.
+    var notTrashable = false
+    /// The app that owns this, when it isn't in the folder's own name. It's named if it's running.
+    var appBundleID: String? = nil
+    /// The folder's own name says what this is ("Stray"), and the rule's title says what kind of thing that is.
+    var usesFolderName = false
+    /// A file that must be inside for this to be what its name suggests. "venv" is also a folder inside Python itself.
+    var marker: String? = nil
+}
+
+/// Everything Headroom knows about particular folders, and the tables the scanner uses to look that up quickly.
+final class RuleBook: @unchecked Sendable {
+    static let swap = Rule(title: "Memory swap", detail: "Memory that macOS moved to disk. It fills up when many apps are open and resets on restart.",
+                           tier: .noLoss, kind: .system, restartClears: true, notTrashable: true)
+    static let updates = Rule(title: "Startup and updates", detail: "The files your Mac starts from, plus any macOS update that's downloaded and waiting. Installing a waiting update frees most of what's extra.",
+                              tier: .noLoss, kind: .system, notTrashable: true)
+    static let macOS = Rule(title: "macOS", detail: "The operating system, on its own sealed volume. It can't be changed or removed.",
+                            tier: .handsOff, kind: .system, notTrashable: true)
+    static let recovery = Rule(title: "Recovery", detail: "The tools your Mac starts into when something has gone wrong.",
+                               tier: .handsOff, kind: .system, notTrashable: true)
+    static let hiddenData = Rule(title: "Hidden", detail: "Space that's in use but that Headroom can't look inside: folders macOS keeps private, root-only data, and files held by APFS snapshots.",
+                                 tier: .handsOff, kind: .system, notTrashable: true)
+
+    private(set) var rules: [Rule] = [Rule(title: "", detail: "", tier: .none)]
+    /// Rule IDs up to this one only set a colour.
+    private(set) var neutralLimit: UInt16 = 0
+    private var forcedKinds: UnsafeMutablePointer<UInt8>
+    private var ruleIDs: [String: UInt16] = [:]
+
+    // Path rules: a small table of (state, folder name hash) → next state, plus a wildcard per state.
+    private var transitionKeys: UnsafeMutablePointer<UInt64>
+    private var transitionValues: UnsafeMutablePointer<UInt8>
+    private var wildcard: UnsafeMutablePointer<UInt8>
+    private var stateRule: UnsafeMutablePointer<UInt16>
+    private static let transitionSlots = 4096
+    private static let maxStates = 256
+
+    // Rules that apply anywhere a folder has this name.
+    private var nameKeys: UnsafeMutablePointer<UInt64>
+    private var nameRules: UnsafeMutablePointer<UInt16>
+    private static let nameSlots = 512
+
+    private var stateCount = 1
+
+    // Folder extensions that make a folder one thing to the Finder. What's inside isn't yours to pick apart.
+    private var packageKeys: UnsafeMutablePointer<UInt64>
+    private static let packageSlots = 128
+    private static let packageExtensions = ["app", "appex", "bundle", "framework", "kext", "xcframework", "plugin", "pkg",
+                                            "photoslibrary", "aplibrary", "fcpbundle", "imovielibrary", "tvlibrary", "musiclibrary",
+                                            "logicx", "band", "xcarchive", "sparsebundle", "dtbase2", "lrlibrary", "rtfd"]
+
+    private(set) var swapRule: UInt16 = 0
+    private(set) var updatesRule: UInt16 = 0
+    private(set) var macOSRule: UInt16 = 0
+    private(set) var recoveryRule: UInt16 = 0
+    private(set) var hiddenRule: UInt16 = 0
+
+    init(homePath: String) {
+        transitionKeys = .allocate(capacity: Self.transitionSlots)
+        transitionValues = .allocate(capacity: Self.transitionSlots)
+        wildcard = .allocate(capacity: Self.maxStates)
+        stateRule = .allocate(capacity: Self.maxStates)
+        nameKeys = .allocate(capacity: Self.nameSlots)
+        nameRules = .allocate(capacity: Self.nameSlots)
+        packageKeys = .allocate(capacity: Self.packageSlots)
+        packageKeys.initialize(repeating: 0, count: Self.packageSlots)
+        forcedKinds = .allocate(capacity: 512)
+        forcedKinds.initialize(repeating: 255, count: 512)
+        transitionKeys.initialize(repeating: 0, count: Self.transitionSlots)
+        transitionValues.initialize(repeating: 0, count: Self.transitionSlots)
+        wildcard.initialize(repeating: 0, count: Self.maxStates)
+        stateRule.initialize(repeating: 0, count: Self.maxStates)
+        nameKeys.initialize(repeating: 0, count: Self.nameSlots)
+        nameRules.initialize(repeating: 0, count: Self.nameSlots)
+
+        for ext in Self.packageExtensions {
+            let h = Self.hash(ext)
+            var slot = Int(truncatingIfNeeded: h >> 7) & (Self.packageSlots - 1)
+            while packageKeys[slot] != 0 { slot = (slot + 1) & (Self.packageSlots - 1) }
+            packageKeys[slot] = h
+        }
+
+        for (pattern, rule) in Self.neutralRules { insert(pattern.split(separator: "/").map(String.init), rule: add(rule)) }
+        neutralLimit = UInt16(rules.count - 1)
+
+        swapRule = add(Self.swap)
+        updatesRule = add(Self.updates)
+        macOSRule = add(Self.macOS)
+        recoveryRule = add(Self.recovery)
+        hiddenRule = add(Self.hiddenData)
+
+        let home = homePath.split(separator: "/").map(String.init)
+        for (pattern, rule) in Self.pathRules {
+            var parts = pattern.split(separator: "/").map(String.init)
+            if parts.first == "~" { parts.replaceSubrange(0...0, with: home) }
+            insert(parts, rule: add(rule))
+        }
+        for (name, rule) in Self.nameRuleList {
+            insertName(name, rule: add(rule))
+        }
+    }
+
+    deinit {
+        transitionKeys.deallocate(); transitionValues.deallocate(); wildcard.deallocate(); stateRule.deallocate()
+        nameKeys.deallocate(); nameRules.deallocate(); forcedKinds.deallocate(); packageKeys.deallocate()
+    }
+
+    /// The kind every file under this rule counts as, read without touching any reference counts.
+    @inline(__always) func forcedKind(_ id: UInt16) -> UInt8? {
+        let k = forcedKinds[Int(id)]
+        return k == 255 ? nil : k
+    }
+
+    func rule(_ id: UInt16) -> Rule { rules[Int(id)] }
+
+    private func add(_ rule: Rule) -> UInt16 {
+        let key = rule.title + "\u{1}" + rule.detail
+        if let id = ruleIDs[key] { return id }
+        rules.append(rule)
+        let id = UInt16(rules.count - 1)
+        ruleIDs[key] = id
+        if let kind = rule.kind { forcedKinds[Int(id)] = kind.rawValue }
+        return id
+    }
+
+    private func insert(_ parts: [String], rule: UInt16) {
+        var state = 0
+        for part in parts {
+            if part == "*" {
+                if wildcard[state] == 0 { wildcard[state] = newState() }
+                state = Int(wildcard[state])
+            } else {
+                let key = Self.key(state: state, hash: Self.hash(part))
+                var slot = Int(truncatingIfNeeded: key &* 0x9E37_79B9_7F4A_7C15 >> 40) & (Self.transitionSlots - 1)
+                var found = false
+                while transitionKeys[slot] != 0 {
+                    if transitionKeys[slot] == key { state = Int(transitionValues[slot]); found = true; break }
+                    slot = (slot + 1) & (Self.transitionSlots - 1)
+                }
+                if !found {
+                    let next = newState()
+                    transitionKeys[slot] = key
+                    transitionValues[slot] = next
+                    state = Int(next)
+                }
+            }
+        }
+        stateRule[state] = rule
+    }
+
+    private func newState() -> UInt8 {
+        precondition(stateCount < Self.maxStates - 1)
+        stateCount += 1
+        return UInt8(stateCount - 1)
+    }
+
+    private func insertName(_ name: String, rule: UInt16) {
+        let h = Self.hash(name)
+        var slot = Int(truncatingIfNeeded: h >> 7) & (Self.nameSlots - 1)
+        while nameKeys[slot] != 0 { slot = (slot + 1) & (Self.nameSlots - 1) }
+        nameKeys[slot] = h
+        nameRules[slot] = rule
+    }
+
+    private static func key(state: Int, hash: UInt64) -> UInt64 { (hash << 8 | UInt64(state)) | 1 << 63 }
+
+    static func hash(_ s: String) -> UInt64 {
+        var copy = s
+        return copy.withUTF8 { hash($0.baseAddress!, $0.count) }
+    }
+
+    @inline(__always) static func hash(_ p: UnsafePointer<UInt8>, _ n: Int) -> UInt64 {
+        var h: UInt64 = 0xCBF2_9CE4_8422_2325
+        for i in 0..<n { h = (h ^ UInt64(p[i])) &* 0x0000_0100_0000_01B3 }
+        return h | 1
+    }
+
+    /// Follows the path table one folder down. Returns the next state and the rule found there, if any.
+    @inline(__always) func step(state: UInt8, name: UnsafePointer<UInt8>, length: Int) -> (state: UInt8, rule: UInt16) {
+        if state == 0 && !isRootStep { return (0, 0) }
+        let key = Self.key(state: Int(state), hash: Self.hash(name, length))
+        var slot = Int(truncatingIfNeeded: key &* 0x9E37_79B9_7F4A_7C15 >> 40) & (Self.transitionSlots - 1)
+        while transitionKeys[slot] != 0 {
+            if transitionKeys[slot] == key {
+                let next = transitionValues[slot]
+                return (next, stateRule[Int(next)])
+            }
+            slot = (slot + 1) & (Self.transitionSlots - 1)
+        }
+        let wild = wildcard[Int(state)]
+        return wild == 0 ? (0, 0) : (wild, stateRule[Int(wild)])
+    }
+
+    /// State 0 is both the root and "no match", so only the very top of the scan may step from it.
+    var isRootStep = false
+
+    func stepFromRoot(_ name: String) -> (state: UInt8, rule: UInt16) {
+        var copy = name
+        isRootStep = true
+        defer { isRootStep = false }
+        return copy.withUTF8 { step(state: 0, name: $0.baseAddress!, length: $0.count) }
+    }
+
+    @inline(__always) func ruleForName(_ p: UnsafePointer<UInt8>, _ n: Int) -> UInt16 {
+        if n < 3 || n > 24 { return 0 }
+        let h = Self.hash(p, n)
+        var slot = Int(truncatingIfNeeded: h >> 7) & (Self.nameSlots - 1)
+        while nameKeys[slot] != 0 {
+            if nameKeys[slot] == h { return nameRules[slot] }
+            slot = (slot + 1) & (Self.nameSlots - 1)
+        }
+        return 0
+    }
+
+    /// Whether this folder name makes it a package, such as an app or a Photos library.
+    @inline(__always) func isPackage(_ name: UnsafePointer<UInt8>, _ length: Int) -> Bool {
+        var i = length - 1
+        let stop = max(0, length - 16)
+        while i > stop {
+            if name[i] == 0x2E {
+                let h = Self.hash(name + i + 1, length - i - 1)
+                var slot = Int(truncatingIfNeeded: h >> 7) & (Self.packageSlots - 1)
+                while packageKeys[slot] != 0 {
+                    if packageKeys[slot] == h { return true }
+                    slot = (slot + 1) & (Self.packageSlots - 1)
+                }
+                return false
+            }
+            i -= 1
+        }
+        return false
+    }
+
+    // MARK: What Headroom knows
+
+    private static func cache(_ title: String, _ detail: String, command: String? = nil) -> Rule {
+        Rule(title: title, detail: detail, tier: .rebuilds, kind: .cache, command: command)
+    }
+    private static func build(_ title: String, _ detail: String, command: String? = nil) -> Rule {
+        Rule(title: title, detail: detail, tier: .rebuilds, kind: .cache, command: command, groups: true)
+    }
+    private static func marked(_ rule: Rule, _ marker: String) -> Rule {
+        var copy = rule
+        copy.marker = marker
+        return copy
+    }
+    private static func model(_ title: String, _ detail: String) -> Rule {
+        Rule(title: title, detail: detail, tier: .redownload, kind: .model)
+    }
+    private static func owned(_ rule: Rule, _ bundleID: String) -> Rule {
+        var copy = rule
+        copy.appBundleID = bundleID
+        return copy
+    }
+    private static func named(_ rule: Rule) -> Rule {
+        var copy = rule
+        copy.usesFolderName = true
+        return copy
+    }
+
+    /// Whole areas with one colour. They say nothing about removing anything.
+    static let neutralRules: [(String, Rule)] = [
+        ("Applications", Rule(title: "Apps", detail: "Your apps. Removing an app you no longer use is a clean win, and its settings stay behind.", tier: .none, kind: .app)),
+        ("Library", Rule(title: "System Library", detail: "Files shared by every user and by the system.", tier: .none, kind: .system)),
+        ("System", Rule(title: "System", detail: "The parts of macOS that live on your data volume.", tier: .none, kind: .system)),
+        ("private", Rule(title: "System data", detail: "Logs, temporary files and the working data of macOS.", tier: .none, kind: .system)),
+        ("usr", Rule(title: "System tools", detail: "Command-line tools.", tier: .none, kind: .code)),
+        ("opt", Rule(title: "Installed tools", detail: "Command-line tools, usually from Homebrew.", tier: .none, kind: .code)),
+    ]
+
+    /// `~` is your home folder, and `*` is any one folder. The most specific match wins, because it's reached later.
+    static let pathRules: [(String, Rule)] = [
+        ("~/.Trash", Rule(title: "Trash", detail: "Already thrown away, but it still takes up space until you empty it.", tier: .noLoss, notTrashable: true)),
+
+        ("private/tmp", Rule(title: "Temporary files", detail: "Scratch files from running apps and sessions. A restart clears them.", tier: .noLoss, kind: .cache, restartClears: true, notTrashable: true)),
+        ("private/var/folders/*/*/X/com.google.Chrome.code_sign_clone", Rule(title: "Chrome signing copies", detail: "Copies Chrome makes of itself to check its signature. They look huge but mostly share blocks with Chrome, and a restart clears them.", tier: .noLoss, kind: .cache, restartClears: true, notTrashable: true)),
+        ("System/Library/AssetsV2", Rule(title: "System downloads", detail: "Siri voices, Apple Intelligence models and other things macOS fetches for itself. macOS manages them.", tier: .handsOff, kind: .system, notTrashable: true)),
+        ("Library/Caches/*", Rule(title: "System cache", detail: "Cached files shared by every user. They rebuild themselves.", tier: .rebuilds, kind: .cache)),
+
+        ("~/Library/Caches/*", Rule(title: "App cache", detail: "An app's cache. It rebuilds as you use the app, so the app may be a little slower at first.", tier: .rebuilds, kind: .cache, namedByBundleID: true)),
+        ("~/Library/Caches/Homebrew", cache("Homebrew downloads", "Installers Homebrew kept after installing.", command: "brew cleanup -s")),
+        ("~/Library/Caches/pip", cache("pip downloads", "Python packages pip kept after installing.", command: "pip cache purge")),
+        ("~/Library/Caches/Google", Rule(title: "Chrome's browser cache", detail: "Copies of web pages. Sites load a little slower at first. Your logins aren't stored here.", tier: .rebuilds, kind: .cache, appBundleID: "com.google.Chrome")),
+        ("~/Library/Caches/ms-playwright", cache("Playwright browsers", "Browsers Playwright downloads for testing.", command: "npx playwright uninstall --all")),
+        ("~/.cache/*", named(cache("Tool cache", "A command-line tool's cache. It rebuilds the next time the tool runs."))),
+        ("~/.cache/uv", cache("uv cache", "Python packages kept by uv. Quit anything using them first, so it doesn't pull packages out from under a running tool.", command: "uv cache prune")),
+        ("~/.cache/huggingface", model("Hugging Face models", "AI model weights. Each one downloads again the next time it's used.")),
+        ("~/.npm/_cacache", cache("npm cache", "Packages npm has downloaded before.", command: "npm cache clean --force")),
+        ("~/.npm/_npx", cache("npx cache", "Tools npx has downloaded before.")),
+        ("~/.gradle/caches", cache("Gradle cache", "Android and Java build dependencies. The next build downloads them again and takes longer.")),
+        ("~/.gradle/wrapper/dists", cache("Gradle versions", "Copies of Gradle itself, downloaded by project builds.")),
+        ("~/.cargo/registry", cache("Cargo packages", "Rust dependencies. The next build downloads them again.")),
+        ("~/go/pkg/mod", cache("Go modules", "Go dependencies. The next build downloads them again.", command: "go clean -modcache")),
+        ("~/Library/pnpm/store", cache("pnpm store", "Packages shared between your projects.", command: "pnpm store prune")),
+        ("~/.pnpm-store", cache("pnpm store", "Packages shared between your projects.", command: "pnpm store prune")),
+        ("~/.bun/install/cache", cache("Bun cache", "Packages Bun has downloaded before.", command: "bun pm cache rm")),
+        ("~/Library/Developer/Xcode/DerivedData", cache("Xcode build output", "Xcode makes it again on the next build, which takes longer.")),
+        ("~/Library/Developer/CoreSimulator/Caches", cache("Simulator caches", "They rebuild the next time a simulator starts.")),
+        ("~/Library/Application Support/Claude/Cache", owned(cache("Claude app cache", "Web content cached by the Claude app."), "com.anthropic.claudefordesktop")),
+        ("~/Library/Application Support/Claude/Code Cache", owned(cache("Claude app code cache", "Compiled code cached by the Claude app."), "com.anthropic.claudefordesktop")),
+        ("~/Library/Application Support/Code/Cache", owned(cache("VS Code cache", "Web content cached by VS Code."), "com.microsoft.VSCode")),
+        ("~/Library/Application Support/Code/CachedData", owned(cache("VS Code compiled cache", "Compiled code cached by VS Code."), "com.microsoft.VSCode")),
+
+        ("~/Library/Developer/Xcode/iOS DeviceSupport", Rule(title: "iPhone debug symbols", detail: "Xcode copies these from each iPhone or iOS version you've debugged. It copies them again when needed.", tier: .redownload, kind: .cache)),
+        ("~/Library/Developer/CoreSimulator/Devices", Rule(title: "Simulator devices", detail: "Simulated iPhones and their data. Apps and files inside them are lost.", tier: .redownload, kind: .app, command: "xcrun simctl delete unavailable")),
+        ("~/Library/Application Support/Steam/steamapps/common/*", named(Rule(title: "Steam game", detail: "Steam can download it again. Check first that your saves are in Steam Cloud.", tier: .redownload, kind: .app))),
+        ("~/.ollama/models", model("Ollama models", "AI model weights. Pull them again with Ollama.")),
+        ("~/.lmstudio/models", model("LM Studio models", "AI model weights. Download them again from LM Studio.")),
+        ("~/LLM/*", named(model("Local AI models", "AI model weights. They can be downloaded again from where they came from."))),
+        ("~/Library/Android/sdk/system-images", Rule(title: "Android system images", detail: "Android versions for the emulator. Android Studio downloads them again, but emulators using them won't start until it does.", tier: .redownload, kind: .app)),
+        ("~/Library/Android/sdk/ndk/*", named(Rule(title: "Android NDK", detail: "A version of the native build tools. A project that asks for it downloads it again.", tier: .redownload, kind: .app))),
+        ("~/.rustup/toolchains", Rule(title: "Rust toolchains", detail: "Versions of the Rust compiler. rustup installs them again.", tier: .redownload, kind: .app)),
+        ("~/Library/Application Support/com.apple.wallpaper", Rule(title: "Aerial wallpapers", detail: "Video wallpapers. macOS downloads them again when you pick one.", tier: .redownload, kind: .video, notTrashable: true)),
+
+        ("~/.android/avd/*", named(Rule(title: "Android emulator", detail: "A virtual Android device and everything on it. Removing it loses that data.", tier: .yourCall, kind: .app))),
+        ("~/Library/Developer/Xcode/Archives", Rule(title: "Xcode archives", detail: "Past app builds. You only need them to look into crashes from those versions.", tier: .yourCall, kind: .app)),
+        ("~/Library/Application Support/MobileSync/Backup", Rule(title: "iPhone backups", detail: "Local backups of your iPhone or iPad. They can't be recreated if the device is gone.", tier: .yourCall, kind: .archive)),
+        ("~/Library/Containers/com.docker.docker", Rule(title: "Docker", detail: "Docker's images and volumes. Prune inside Docker: moving this folder removes everything at once.", tier: .yourCall, kind: .app, command: "docker system prune", notTrashable: true)),
+    ]
+
+    static let nameRuleList: [(String, Rule)] = [
+        ("node_modules", build("node_modules", "JavaScript packages for a project. `npm install` brings them back.")),
+        (".venv", marked(build("Python environments", "A project's Python packages. Recreate them with its requirements or `uv sync`."), "pyvenv.cfg")),
+        ("venv", marked(build("Python environments", "A project's Python packages. Recreate them with its requirements or `uv sync`."), "pyvenv.cfg")),
+        ("__pycache__", build("Python bytecode", "Compiled Python. It's made again the next time the code runs.")),
+        (".pytest_cache", build("Python tool caches", "Caches from Python tools. They rebuild on the next run.")),
+        (".mypy_cache", build("Python tool caches", "Caches from Python tools. They rebuild on the next run.")),
+        (".ruff_cache", build("Python tool caches", "Caches from Python tools. They rebuild on the next run.")),
+        (".build", build("Swift build output", "SwiftPM makes it again on the next build.")),
+        ("DerivedData", build("Xcode build output", "Xcode makes it again on the next build, which takes longer.")),
+        (".gradle", build("Gradle project caches", "Gradle makes them again on the next build.")),
+        ("Pods", marked(build("CocoaPods packages", "`pod install` brings them back."), "Manifest.lock")),
+        (".next", build("Web build output", "The framework makes it again on the next build.")),
+        (".nuxt", build("Web build output", "The framework makes it again on the next build.")),
+        (".turbo", build("Web build output", "The framework makes it again on the next build.")),
+        (".parcel-cache", build("Web build output", "The framework makes it again on the next build.")),
+        (".dart_tool", build("Flutter build output", "`flutter pub get` and the next build make it again.")),
+        (".terraform", build("Terraform plugins", "`terraform init` brings them back.")),
+        (".tox", build("Python test environments", "tox makes them again on the next run.")),
+        ("huggingface", model("Hugging Face models", "AI model weights. Each one downloads again the next time it's used.")),
+    ]
+
+    /// Folders macOS guards. Touching one without permission brings up a prompt, so these wait for Full Disk Access.
+    static let guardedInHome: Set<String> = ["Desktop", "Documents", "Downloads", "Pictures", "Movies", "Music", ".Trash"]
+    static let guardedInLibrary: Set<String> = ["Containers", "Group Containers", "Mail", "Messages", "Safari", "Calendars", "Reminders",
+                                                "Mobile Documents", "CloudStorage", "HomeKit", "IdentityServices", "Metadata", "Cookies",
+                                                "Autosave Information", "Biome", "Suggestions", "Accounts", "PersonalizationPortrait",
+                                                "DuetExpertCenter", "Shortcuts", "Weather", "Sharing", "Daemon Containers"]
+}

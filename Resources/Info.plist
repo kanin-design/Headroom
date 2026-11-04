@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key><string>Headroom</string>
+    <key>CFBundleDisplayName</key><string>Headroom</string>
+    <key>CFBundleIdentifier</key><string>local.headroom.app</string>
+    <key>CFBundleExecutable</key><string>Headroom</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>1.0</string>
+    <key>CFBundleVersion</key><string>1</string>
+    <key>LSMinimumSystemVersion</key><string>26.0</string>
+    <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
+    <key>NSHighResolutionCapable</key><true/>
+    <key>NSHumanReadableCopyright</key><string></string>
+    <key>NSDesktopFolderUsageDescription</key><string>Headroom measures how much space your Desktop uses.</string>
+    <key>NSDocumentsFolderUsageDescription</key><string>Headroom measures how much space your Documents use.</string>
+    <key>NSDownloadsFolderUsageDescription</key><string>Headroom measures how much space your Downloads use.</string>
+    <key>NSRemovableVolumesUsageDescription</key><string>Headroom measures how much space is used on external disks.</string>
+</dict>
+</plist>

@@ -1,0 +1,466 @@
+import AppKit
+import SwiftUI
+
+/// A name on the map: inside a piece if it fits, otherwise out at the side with a thin line to its piece.
+struct MapLabel: Identifiable, Equatable {
+    enum Place { case inside, left, right }
+    var id: UInt64
+    var pieceIndex: Int
+    var node: UInt32
+    var title: String
+    var value: String
+    var position: CGPoint
+    var anchor: CGPoint
+    var elbow: CGPoint
+    var place: Place
+    var dark: Bool
+    var large: Bool
+}
+
+enum LabelPlacer {
+    private static let titleFont = NSFont.systemFont(ofSize: 12.5, weight: .semibold)
+    private static let valueFont = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+
+    private static func width(_ text: String, _ font: NSFont) -> CGFloat {
+        ceil((text as NSString).size(withAttributes: [.font: font]).width)
+    }
+
+    /// Where a box of this size fits inside a piece: its middle if possible, otherwise slid along the arc to where the
+    /// ring runs closer to level. A name that fits nearby is better than one out at the side.
+    private static func fit(w: CGFloat, h: CGFloat, piece p: Piece, radius R: CGFloat) -> CGFloat? {
+        let mid = CGFloat(p.midAngle)
+        let sweep = CGFloat(p.sweep)
+        for step in [0.0, 0.1, -0.1, 0.2, -0.2, 0.3, -0.3, 0.38, -0.38] {
+            let angle = mid + sweep * CGFloat(step)
+            if fits(w: w, h: h, angle: angle, piece: p, radius: R) { return angle }
+        }
+        return nil
+    }
+
+    private static func fits(w: CGFloat, h: CGFloat, angle: CGFloat, piece p: Piece, radius R: CGFloat) -> Bool {
+        let mid = CGFloat(p.midAngle)
+        let rm = CGFloat(p.r0 + p.r1) * 0.5 * R
+        let cx = sin(angle) * rm, cy = -cos(angle) * rm
+        let inner = CGFloat(p.r0) * R + 3, outer = CGFloat(p.r1) * R - 3
+        for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+            let x = cx + CGFloat(sx) * w / 2, y = cy + CGFloat(sy) * h / 2
+            let r = hypot(x, y)
+            if r < inner || r > outer { return false }
+            var a = atan2(x, -y)
+            if a < 0 { a += 2 * .pi }
+            // Near 12 o'clock the angle wraps around, so measure from the piece's middle.
+            var delta = a - mid
+            if delta > .pi { delta -= 2 * .pi }
+            if delta < -.pi { delta += 2 * .pi }
+            let half = CGFloat(p.sweep) * 0.5 - 3 / max(r, 1)
+            if abs(delta) > half { return false }
+        }
+        return true
+    }
+
+    private static func isBright(_ c: SIMD3<Float>) -> Bool {
+        0.2289 * c.x + 0.6917 * c.y + 0.0793 * c.z > 0.40
+    }
+
+    @MainActor
+    static func place(layout: RingLayout, ring: RingGeometry, lens: Lens, tree: DiskTree, model: AppModel) -> [MapLabel] {
+        let R = ring.radius
+        guard R > 0, !layout.pieces.isEmpty else { return [] }
+        var out: [MapLabel] = []
+        var labelled = Set<Int>()
+        let cx = ring.center.x, cy = ring.center.y
+
+        func point(_ angle: CGFloat, _ radius: CGFloat) -> CGPoint {
+            CGPoint(x: cx + sin(angle) * radius, y: cy - cos(angle) * radius)
+        }
+
+        // Inside the pieces, biggest first. Only in the Map view: elsewhere most of the ring is dimmed on purpose.
+        let order = layout.pieces.indices.sorted { layout.pieces[$0].bytes > layout.pieces[$1].bytes }
+        if lens == .map || lens == .freeUp {
+            for i in order.prefix(160) {
+                let p = layout.pieces[i]
+                if p.isSmaller || p.ring > 3 { continue }
+                if lens == .freeUp && p.style != 1 { continue }
+                let isFree = p.style == 1
+                let isHidden = p.style == 2
+                // The top of a chain is what you'd call it. The whole chain shows when you point at it.
+                let title = isFree ? "Free" : model.displayName(p.node)
+                let value = formatBytes(p.bytes)
+                let w = max(width(title, titleFont), width(value, valueFont)) + 2
+                let h: CGFloat = 31
+                if let angle = fit(w: w, h: h, piece: p, radius: R) {
+                    // Free space reads best out in the open part of the wedge, away from the crowded middle.
+                    let rm = CGFloat(p.r0 + p.r1) * 0.5 * R * (isFree ? 1.08 : 1)
+                    out.append(MapLabel(id: p.key, pieceIndex: i, node: p.node, title: title, value: value, position: point(angle, rm),
+                                        anchor: .zero, elbow: .zero, place: .inside, dark: !isFree && !isHidden && isBright(p.color), large: isFree))
+                    labelled.insert(i)
+                    if out.count >= 36 { break }
+                }
+            }
+        }
+
+        // Out at the sides: what's big but can't hold its own name.
+        struct Candidate { var index: Int; var title: String; var value: String; var score: Double }
+        var candidates: [Candidate] = []
+        switch lens {
+        case .map:
+            let total = Double(max(tree.totals[Int(layout.focus)], 1))
+            for i in order.prefix(260) where !labelled.contains(i) {
+                let p = layout.pieces[i]
+                if p.isSmaller || p.style == 1 || p.ring > 4 { continue }
+                let share = Double(p.bytes) / total
+                if share < 0.015 { continue }
+                if p.ring == 0 && layout.focus == 0 { continue }
+                // Skip it if the name on a piece just inside it says nearly the same thing.
+                var a = p.parent
+                var redundant = false
+                while a >= 0 {
+                    let q = layout.pieces[Int(a)]
+                    if labelled.contains(Int(a)) && Double(p.bytes) > Double(q.bytes) * 0.72 { redundant = true }
+                    a = q.parent
+                }
+                if redundant { continue }
+                candidates.append(Candidate(index: i, title: model.displayName(p.node), value: formatBytes(p.bytes), score: share * (1 - 0.13 * Double(p.ring))))
+            }
+        case .changes:
+            for row in model.changeRows.prefix(18) {
+                if let i = visiblePiece(for: row.node, layout: layout, tree: tree), !candidates.contains(where: { $0.index == i }) {
+                    candidates.append(Candidate(index: i, title: row.title, value: "+" + formatBytes(UInt64(max(row.delta, 0))), score: Double(row.delta)))
+                }
+            }
+        case .freeUp:
+            // Things spread over many places are lit up from the panel. A line to just one of them would mislead.
+            let bar = Double(max(tree.capacityBytes, 1)) * 0.002
+            for row in model.wins.prefix(40) where row.action != .restart && row.action != .softwareUpdate && row.nodes.count <= 3 && Double(row.bytes) >= bar {
+                let biggest = row.nodes.max { tree.totals[Int($0)] < tree.totals[Int($1)] }
+                if let biggest, let i = visiblePiece(for: biggest, layout: layout, tree: tree), !candidates.contains(where: { $0.index == i }) {
+                    candidates.append(Candidate(index: i, title: row.title, value: formatBytes(row.bytes), score: Double(row.bytes)))
+                }
+            }
+        }
+        candidates.sort { $0.score > $1.score }
+        // A name just outside a piece that's already named would say nearly the same thing.
+        var kept: [Candidate] = []
+        for c in candidates {
+            let p = layout.pieces[c.index]
+            var a = p.parent
+            var repeats = false
+            while a >= 0 {
+                let q = layout.pieces[Int(a)]
+                if kept.contains(where: { $0.index == Int(a) }) && Double(p.bytes) > Double(q.bytes) * 0.72 { repeats = true }
+                a = q.parent
+            }
+            if !repeats { kept.append(c) }
+        }
+        candidates = kept
+
+        let spacing: CGFloat = 35
+        let maxPerSide = min(max(Int((ring.windowHeight - 120) / spacing), 3), 7)
+        var rightSide: [Candidate] = [], leftSide: [Candidate] = []
+        for c in candidates {
+            let mid = layout.pieces[c.index].midAngle
+            if mid < .pi {
+                if rightSide.count < maxPerSide { rightSide.append(c) }
+            } else if leftSide.count < maxPerSide {
+                leftSide.append(c)
+            }
+        }
+
+        /// How far out this wedge reaches along its own centre line. The line to a name starts there, so it never
+        /// crosses the ring.
+        func silhouette(_ index: Int, _ angle: Float) -> Float {
+            let p = layout.pieces[index]
+            var edge = p.r1
+            var j = index + 1
+            while j < Int(p.end) {
+                let q = layout.pieces[j]
+                if angle >= q.a0 && angle < q.a1 {
+                    edge = max(edge, q.r1)
+                    j += 1
+                } else {
+                    j = Int(q.end)
+                }
+            }
+            return edge
+        }
+
+        func layoutSide(_ side: [Candidate], right: Bool) {
+            guard !side.isEmpty else { return }
+            let reach = R + 26
+            struct Slot { var c: Candidate; var y: CGFloat; var mid: CGFloat }
+            var slots = side.map { c -> Slot in
+                let mid = CGFloat(layout.pieces[c.index].midAngle)
+                return Slot(c: c, y: cy - cos(mid) * reach, mid: mid)
+            }.sorted { $0.y < $1.y }
+            let top: CGFloat = 78, bottom = ring.windowHeight - 26
+            for i in slots.indices {
+                slots[i].y = max(slots[i].y, i == 0 ? top : slots[i - 1].y + spacing)
+            }
+            if let last = slots.last, last.y > bottom {
+                var limit = bottom
+                for i in slots.indices.reversed() {
+                    slots[i].y = min(slots[i].y, limit)
+                    limit = slots[i].y - spacing
+                }
+            }
+            let columnX = right ? cx + R + 34 : cx - R - 34
+            for slot in slots {
+                let p = layout.pieces[slot.c.index]
+                let edge = CGFloat(silhouette(slot.c.index, p.midAngle)) * R + 2
+                out.append(MapLabel(id: p.key ^ 0xABCD, pieceIndex: slot.c.index, node: p.node, title: slot.c.title, value: slot.c.value,
+                                    position: CGPoint(x: columnX, y: slot.y), anchor: point(slot.mid, edge), elbow: point(slot.mid, max(reach, edge + 6)),
+                                    place: right ? .right : .left, dark: false, large: false))
+            }
+        }
+        // Only when there's room beside the ring.
+        if ring.mapWidth - R * 2 > 200 {
+            layoutSide(rightSide, right: true)
+            layoutSide(leftSide, right: false)
+        }
+        return out
+    }
+
+    private static func visiblePiece(for node: UInt32, layout: RingLayout, tree: DiskTree) -> Int? {
+        var target = node
+        while true {
+            if let i = layout.pieces.firstIndex(where: { !$0.isSmaller && $0.node == target }) { return i }
+            if target == 0 || target == layout.focus { return nil }
+            target = tree.nodes[Int(target)].parent
+        }
+    }
+}
+
+struct LabelsLayer: View {
+    let model: AppModel
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            Canvas { context, _ in
+                for label in model.labels where label.place != .inside {
+                    let end = CGPoint(x: label.position.x + (label.place == .right ? -7 : 7), y: label.position.y)
+                    var path = Path()
+                    path.move(to: label.anchor)
+                    path.addLine(to: label.elbow)
+                    path.addLine(to: end)
+                    let isOn = model.hover?.node == label.node
+                    context.stroke(path, with: .color(.white.opacity(isOn ? 0.7 : 0.26)), lineWidth: isOn ? 1 : 0.75)
+                    let dot = Path(ellipseIn: CGRect(x: label.anchor.x - 1.6, y: label.anchor.y - 1.6, width: 3.2, height: 3.2))
+                    context.fill(dot, with: .color(.white.opacity(isOn ? 1 : 0.7)))
+                }
+            }
+            .allowsHitTesting(false)
+
+            ForEach(model.labels) { label in
+                if label.place == .inside {
+                    InsideLabel(label: label)
+                        .opacity(model.hover == nil || model.hover?.node == label.node ? 1 : 0.5)
+                        .animation(.easeOut(duration: 0.14), value: model.hover?.node)
+                        .position(label.position)
+                        .allowsHitTesting(false)
+                } else {
+                    let right = label.place == .right
+                    let room = max(right ? model.ring.mapWidth - label.position.x - 6 : label.position.x - 12, 60)
+                    OuterLabel(label: label, isOn: model.hover?.node == label.node)
+                        .onHover { inside in
+                            if inside { model.setHover(label.pieceIndex) } else { model.setHover(nil) }
+                        }
+                        .onTapGesture { model.click(piece: label.pieceIndex) }
+                        .frame(width: room, alignment: right ? .leading : .trailing)
+                        .position(x: right ? label.position.x + room / 2 : label.position.x - room / 2, y: label.position.y)
+                }
+            }
+        }
+        .opacity(model.labelsVisible ? 1 : 0)
+    }
+}
+
+private struct InsideLabel: View {
+    let label: MapLabel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Text(label.title)
+                .font(.system(size: label.large ? 14 : 12.5, weight: .semibold))
+            Text(label.value)
+                .font(.system(size: label.large ? 13 : 11, weight: .medium).monospacedDigit())
+                .opacity(label.dark ? 0.72 : 0.78)
+        }
+        .foregroundStyle(label.dark ? Color.black.opacity(0.84) : Color.white.opacity(0.96))
+        .shadow(color: label.dark ? .clear : .black.opacity(0.45), radius: 2, y: 0.5)
+        .lineLimit(1)
+        .fixedSize()
+    }
+}
+
+private struct OuterLabel: View {
+    let label: MapLabel
+    let isOn: Bool
+
+    var body: some View {
+        VStack(alignment: label.place == .left ? .trailing : .leading, spacing: 0) {
+            Text(label.title)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white.opacity(isOn ? 1 : 0.88))
+                .truncationMode(.tail)
+            Text(label.value)
+                .font(.system(size: 11, weight: .regular).monospacedDigit())
+                .foregroundStyle(.white.opacity(isOn ? 0.85 : 0.5))
+        }
+        .lineLimit(1)
+        .contentShape(Rectangle())
+    }
+}
+
+/// The middle of the ring: the one number that matters, until you point at something else.
+struct CenterReadout: View {
+    let model: AppModel
+    let ring: RingGeometry
+
+    var body: some View {
+        let size = ring.radius * CGFloat(RingLayout.hole) * 2 * 0.86
+        Group {
+            if let hover = model.hover {
+                hoverContent(hover, size: size)
+            } else if model.focus != 0, let tree = model.tree {
+                folderContent(tree, size: size)
+            } else {
+                diskContent(size: size)
+            }
+        }
+        .frame(width: size, height: size)
+        .multilineTextAlignment(.center)
+        .position(ring.center)
+        .allowsHitTesting(false)
+    }
+
+    private func bigNumber(_ bytes: UInt64, size: CGFloat, color: Color = .white) -> some View {
+        let (value, unit) = splitBytes(bytes)
+        return HStack(alignment: .firstTextBaseline, spacing: size * 0.016) {
+            Text(value)
+                .font(.system(size: size * 0.235, weight: .semibold, design: .rounded).monospacedDigit())
+                .contentTransition(.numericText(value: Double(bytes)))
+            Text(unit)
+                .font(.system(size: size * 0.105, weight: .semibold, design: .rounded))
+                .foregroundStyle(color.opacity(0.62))
+        }
+        .foregroundStyle(color)
+        .animation(.snappy(duration: 0.32), value: bytes)
+    }
+
+    @ViewBuilder
+    private func diskContent(size: CGFloat) -> some View {
+        if let tree = model.tree {
+            let free = tree.totals[Int(tree.free)]
+            let preview = free &+ model.tickedReclaim
+            let usedShare = 1 - Double(free) / Double(max(tree.capacityBytes, 1))
+            VStack(spacing: size * 0.012) {
+                bigNumber(model.lens == .freeUp ? preview : free, size: size, color: model.tickedReclaim > 0 && model.lens == .freeUp ? Color(red: 0.45, green: 1, blue: 0.68) : .white)
+                Text(model.tickedReclaim > 0 && model.lens == .freeUp ? "free after this" : "free of \(formatBytes(tree.capacityBytes))")
+                    .font(.system(size: size * 0.058, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.55))
+                if model.tickedReclaim > 0 && model.lens == .freeUp {
+                    Text("+\(formatBytes(model.tickedReclaim))")
+                        .font(.system(size: size * 0.05, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(Color(red: 0.45, green: 1, blue: 0.68).opacity(0.8))
+                } else if let delta = sinceLast(free) {
+                    deltaCapsule(delta, size: size)
+                } else if model.isScanning && !tree.isFinished {
+                    Text("\(formatCount(model.scanFiles)) files so far")
+                        .font(.system(size: size * 0.05, weight: .medium).monospacedDigit())
+                        .foregroundStyle(.white.opacity(0.4))
+                } else {
+                    Text(String(format: "%.0f%% full", usedShare * 100))
+                        .font(.system(size: size * 0.05, weight: .medium).monospacedDigit())
+                        .foregroundStyle(.white.opacity(0.36))
+                }
+            }
+        } else {
+            VStack(spacing: size * 0.02) {
+                Text(formatCount(model.scanFiles))
+                    .font(.system(size: size * 0.19, weight: .semibold, design: .rounded).monospacedDigit())
+                    .contentTransition(.numericText(value: Double(model.scanFiles)))
+                    .animation(.snappy(duration: 0.2), value: model.scanFiles)
+                Text("files so far")
+                    .font(.system(size: size * 0.058, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.55))
+            }
+            .foregroundStyle(.white)
+        }
+    }
+
+    /// How much free space has changed since a day or so ago, once there's a history to compare with.
+    private func sinceLast(_ free: UInt64) -> (delta: Int64, label: String)? {
+        guard model.history.count >= 2 else { return nil }
+        let now = Date()
+        let day: TimeInterval = 86_400
+        let older = model.history.dropLast().last { now.timeIntervalSince($0.date) >= day * 0.6 }
+        guard let older else { return nil }
+        let delta = Int64(bitPattern: free) - Int64(bitPattern: older.free)
+        guard abs(delta) >= 500_000_000 else { return nil }
+        let hours = now.timeIntervalSince(older.date) / 3600
+        let label = hours < 36 ? "since yesterday" : (hours < 24 * 9 ? "in \(Int(hours / 24)) days" : "in \(Int(hours / 24 / 7)) weeks")
+        return (delta, label)
+    }
+
+    private func deltaCapsule(_ info: (delta: Int64, label: String), size: CGFloat) -> some View {
+        let down = info.delta < 0
+        return HStack(spacing: 3) {
+            Image(systemName: down ? "arrow.down" : "arrow.up")
+                .font(.system(size: size * 0.042, weight: .bold))
+            Text("\(formatBytes(UInt64(abs(info.delta)))) \(info.label)")
+                .font(.system(size: size * 0.05, weight: .semibold).monospacedDigit())
+        }
+        .foregroundStyle(down ? Color(red: 1, green: 0.58, blue: 0.48) : Color(red: 0.5, green: 0.95, blue: 0.68))
+        .padding(.top, size * 0.01)
+    }
+
+    private func folderContent(_ tree: DiskTree, size: CGFloat) -> some View {
+        VStack(spacing: size * 0.012) {
+            HStack(spacing: 2) {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: size * 0.05, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.42))
+                Text(model.displayName(model.focus))
+                    .font(.system(size: size * 0.072, weight: .semibold))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .foregroundStyle(.white.opacity(0.92))
+            bigNumber(tree.totals[Int(model.focus)], size: size)
+            Text(shareOfDisk(tree))
+                .font(.system(size: size * 0.052, weight: .medium))
+                .foregroundStyle(.white.opacity(0.5))
+        }
+    }
+
+    private func shareOfDisk(_ tree: DiskTree) -> String {
+        let percent = Double(tree.totals[Int(model.focus)]) / Double(max(tree.capacityBytes, 1)) * 100
+        return (percent >= 10 ? String(format: "%.0f%%", percent) : String(format: "%.1f%%", percent)) + " of the disk"
+    }
+
+    private func hoverContent(_ hover: HoverInfo, size: CGFloat) -> some View {
+        VStack(spacing: size * 0.008) {
+            Text(hover.title)
+                .font(.system(size: size * 0.072, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.95))
+                .lineLimit(2)
+                .truncationMode(.middle)
+            bigNumber(hover.bytes, size: size)
+            if let reclaim = hover.reclaim, Double(reclaim) < Double(hover.bytes) * 0.9 {
+                Text("You'd get back \(formatBytes(reclaim))")
+                    .font(.system(size: size * 0.052, weight: .semibold))
+                    .foregroundStyle(Color(red: 1, green: 0.74, blue: 0.42))
+            } else if !hover.note.isEmpty {
+                Text(hover.note)
+                    .font(.system(size: size * 0.052, weight: .semibold))
+                    .foregroundStyle(Color(red: 0.5, green: 0.95, blue: 0.68))
+            } else {
+                Text(hover.share)
+                    .font(.system(size: size * 0.052, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.5))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        }
+    }
+}

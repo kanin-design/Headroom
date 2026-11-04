@@ -1,0 +1,140 @@
+import Foundation
+import SwiftUI
+import simd
+
+/// Colour in OKLab, which mixes and steps the way the eye expects. Everything ends up in linear Display P3.
+struct Lab {
+    var l: Float, a: Float, b: Float
+
+    init(l: Float, a: Float, b: Float) { self.l = l; self.a = a; self.b = b }
+
+    /// Lightness, chroma and hue in degrees.
+    init(lch l: Float, _ c: Float, _ h: Float) {
+        self.l = l
+        a = c * cos(h * .pi / 180)
+        b = c * sin(h * .pi / 180)
+    }
+
+    var chroma: Float { (a * a + b * b).squareRoot() }
+
+    var linearP3: SIMD3<Float> {
+        let L = l + 0.3963377774 * a + 0.2158037573 * b
+        let M = l - 0.1055613458 * a - 0.0638541728 * b
+        let S = l - 0.0894841775 * a - 1.2914855480 * b
+        let lc = L * L * L, mc = M * M * M, sc = S * S * S
+        let x = 1.2270138511 * lc - 0.5577999807 * mc + 0.2812561490 * sc
+        let y = -0.0405801784 * lc + 1.1122568696 * mc - 0.0716766787 * sc
+        let z = -0.0763812845 * lc - 0.4214819784 * mc + 1.5861632204 * sc
+        let r = 2.4934969 * x - 0.9313836 * y - 0.4027108 * z
+        let g = -0.8294890 * x + 1.7626641 * y + 0.0236247 * z
+        let bl = 0.0358458 * x - 0.0761724 * y + 0.9568845 * z
+        return SIMD3(max(r, 0), max(g, 0), max(bl, 0))
+    }
+
+    /// The same colour for SwiftUI, so that panels and the ring match exactly.
+    var swiftUI: Color {
+        func encode(_ v: Float) -> Double {
+            let x = min(max(v, 0), 1)
+            return Double(x <= 0.0031308 ? 12.92 * x : 1.055 * pow(x, 1 / 2.4) - 0.055)
+        }
+        let c = linearP3
+        return Color(.displayP3, red: encode(c.x), green: encode(c.y), blue: encode(c.z))
+    }
+
+    static func mix(_ x: Lab, _ y: Lab, _ t: Float) -> Lab {
+        Lab(l: x.l + (y.l - x.l) * t, a: x.a + (y.a - x.a) * t, b: x.b + (y.b - x.b) * t)
+    }
+}
+
+enum Palette {
+    /// One colour per Kind. Hues are spread so that neighbours stay apart, and what you can remove runs hot.
+    static let kinds: [Lab] = [
+        Lab(lch: 0.45, 0.028, 285),     // other: muted lilac grey
+        Lab(lch: 0.58, 0.205, 298),     // video: violet
+        Lab(lch: 0.66, 0.195, 352),     // audio: rose
+        Lab(lch: 0.79, 0.150, 72),      // images: amber
+        Lab(lch: 0.85, 0.105, 100),     // documents: pale gold
+        Lab(lch: 0.75, 0.120, 208),     // code: cyan
+        Lab(lch: 0.58, 0.170, 258),     // apps: blue
+        Lab(lch: 0.65, 0.105, 50),      // archives: copper
+        Lab(lch: 0.80, 0.180, 158),     // AI models: jade
+        Lab(lch: 0.66, 0.190, 30),      // caches and builds: coral
+        Lab(lch: 0.38, 0.014, 255),     // system: slate
+    ]
+
+    static func color(_ kind: Kind) -> Lab { kinds[Int(kind.rawValue)] }
+
+    /// The colour of something made of these kinds. Mixing dulls colours, so chroma is restored toward the strongest
+    /// share: a folder that's mostly video still reads as video, and a true mix sits somewhere calmer.
+    static func blend(_ bytes: UnsafePointer<UInt32>) -> Lab {
+        var total: Float = 0
+        for k in 0..<Kind.count { total += Float(bytes[k]) }
+        guard total > 0 else { return kinds[0] }
+        var l: Float = 0, a: Float = 0, b: Float = 0, chroma: Float = 0
+        for k in 0..<Kind.count where bytes[k] > 0 {
+            let w = Float(bytes[k]) / total
+            l += kinds[k].l * w
+            a += kinds[k].a * w
+            b += kinds[k].b * w
+            chroma += kinds[k].chroma * w
+        }
+        let mixed = (a * a + b * b).squareRoot()
+        if mixed > 0.0001 {
+            let restore = min(chroma / mixed, 1.8)
+            let target = 1 + (restore - 1) * 0.85
+            a *= target
+            b *= target
+        }
+        return Lab(l: l, a: a, b: b)
+    }
+
+    /// Heat for the Changes view: from a dull ember up to white-hot.
+    static func heat(_ t: Float) -> Lab {
+        let x = max(0, min(1, t))
+        if x < 0.5 { return Lab.mix(Lab(lch: 0.45, 0.14, 25), Lab(lch: 0.71, 0.225, 38), x * 2) }
+        return Lab.mix(Lab(lch: 0.71, 0.225, 38), Lab(lch: 0.93, 0.13, 92), (x - 0.5) * 2)
+    }
+
+    /// Something that shrank.
+    static let cool = Lab(lch: 0.62, 0.15, 240)
+    /// For pieces that aren't part of the question being asked.
+    static let quiet = Lab(lch: 0.27, 0.010, 265)
+
+    /// What can go, in Free Up. The surer it is, the greener and brighter.
+    static func reclaim(_ tier: Tier) -> Lab {
+        switch tier {
+        case .noLoss: Lab(lch: 0.90, 0.205, 155)
+        case .rebuilds: Lab(lch: 0.80, 0.225, 150)
+        case .redownload: Lab(lch: 0.76, 0.145, 200)
+        case .yourCall: Lab(lch: 0.78, 0.150, 75)
+        default: quiet
+        }
+    }
+}
+
+/// Decimal units, the ones Finder uses. Three significant figures at most, so numbers stay readable.
+func splitBytes(_ bytes: UInt64) -> (value: String, unit: String) {
+    let units = ["B", "KB", "MB", "GB", "TB", "PB"]
+    var value = Double(bytes)
+    var index = 0
+    while value >= 999.5 && index < units.count - 1 {
+        value /= 1000
+        index += 1
+    }
+    let text: String
+    if index == 0 || value >= 99.95 { text = String(format: "%.0f", value) }
+    else if value >= 9.995 { text = String(format: "%.1f", value) }
+    else { text = String(format: "%.2f", value) }
+    return (text, units[index])
+}
+
+func formatBytes(_ bytes: UInt64) -> String {
+    let (value, unit) = splitBytes(bytes)
+    return "\(value) \(unit)"
+}
+
+func formatCount(_ n: Int) -> String {
+    if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1_000_000) }
+    if n >= 10_000 { return "\(n / 1000)K" }
+    return n.formatted()
+}
