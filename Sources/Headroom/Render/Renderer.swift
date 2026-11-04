@@ -25,6 +25,7 @@ struct UniformsGPU {
     var freeStart: Float = 0        // where the free wedge begins
     var hideScale: Float = 0
     var restSaturation: Float = 1
+    var glowAtRest: Float = 1
 }
 
 /// Draws the ring. Pieces are one instanced quad each, shaped in the fragment shader, so the cost barely depends on
@@ -48,6 +49,7 @@ final class MapRenderer {
     private var emphasisOffset = 0
 
     private var piecesTexture: MTLTexture?
+    private var glowTexture: MTLTexture?
     private var levels: [MTLTexture] = []
     private var renderSize: (Int, Int) = (0, 0)
 
@@ -68,24 +70,26 @@ final class MapRenderer {
             return nil
         }
 
-        func pipeline(_ vertex: String, _ fragment: String, format: MTLPixelFormat, blended: Bool) -> MTLRenderPipelineState? {
+        func pipeline(_ vertex: String, _ fragment: String, format: MTLPixelFormat, blended: Bool, targets: Int = 1) -> MTLRenderPipelineState? {
             let d = MTLRenderPipelineDescriptor()
             d.vertexFunction = library.makeFunction(name: vertex)
             d.fragmentFunction = library.makeFunction(name: fragment)
-            let a = d.colorAttachments[0]!
-            a.pixelFormat = format
-            if blended {
-                a.isBlendingEnabled = true
-                a.rgbBlendOperation = .add
-                a.alphaBlendOperation = .add
-                a.sourceRGBBlendFactor = .one
-                a.sourceAlphaBlendFactor = .one
-                a.destinationRGBBlendFactor = .oneMinusSourceAlpha
-                a.destinationAlphaBlendFactor = .oneMinusSourceAlpha
+            for target in 0..<targets {
+                let a = d.colorAttachments[target]!
+                a.pixelFormat = format
+                if blended {
+                    a.isBlendingEnabled = true
+                    a.rgbBlendOperation = .add
+                    a.alphaBlendOperation = .add
+                    a.sourceRGBBlendFactor = .one
+                    a.sourceAlphaBlendFactor = .one
+                    a.destinationRGBBlendFactor = .oneMinusSourceAlpha
+                    a.destinationAlphaBlendFactor = .oneMinusSourceAlpha
+                }
             }
             return try? device.makeRenderPipelineState(descriptor: d)
         }
-        guard let seg = pipeline("segment_vertex", "segment_fragment", format: Self.hdrFormat, blended: true),
+        guard let seg = pipeline("segment_vertex", "segment_fragment", format: Self.hdrFormat, blended: true, targets: 2),
               let down = pipeline("quad_vertex", "blur_down", format: Self.hdrFormat, blended: false),
               let up = pipeline("quad_vertex", "blur_up", format: Self.hdrFormat, blended: false),
               let comp = pipeline("quad_vertex", "composite", format: Self.outputFormat, blended: false),
@@ -136,15 +140,18 @@ final class MapRenderer {
             return device.makeTexture(descriptor: d)!
         }
         piecesTexture = texture(width, height)
+        glowTexture = texture(width, height)
         levels = (1...6).map { texture(width >> $0, height >> $0) }
     }
 
-    private func pass(_ commands: MTLCommandBuffer, target: MTLTexture, clear: Bool = false, _ body: (MTLRenderCommandEncoder) -> Void) {
+    private func pass(_ commands: MTLCommandBuffer, target: MTLTexture, also second: MTLTexture? = nil, clear: Bool = false, _ body: (MTLRenderCommandEncoder) -> Void) {
         let d = MTLRenderPassDescriptor()
-        d.colorAttachments[0].texture = target
-        d.colorAttachments[0].loadAction = clear ? .clear : .dontCare
-        d.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
-        d.colorAttachments[0].storeAction = .store
+        for (index, texture) in [target, second].compactMap({ $0 }).enumerated() {
+            d.colorAttachments[index].texture = texture
+            d.colorAttachments[index].loadAction = clear ? .clear : .dontCare
+            d.colorAttachments[index].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+            d.colorAttachments[index].storeAction = .store
+        }
         guard let e = commands.makeRenderCommandEncoder(descriptor: d) else { return }
         body(e)
         e.endEncoding()
@@ -153,10 +160,10 @@ final class MapRenderer {
     func encode(into commands: MTLCommandBuffer, target: MTLTexture, uniforms: UniformsGPU) {
         let width = target.width, height = target.height
         prepareTargets(width: width, height: height)
-        guard let pieces = piecesTexture else { return }
+        guard let pieces = piecesTexture, let glow = glowTexture else { return }
         var u = uniforms
 
-        pass(commands, target: pieces, clear: true) { e in
+        pass(commands, target: pieces, also: glow, clear: true) { e in
             e.setRenderPipelineState(segmentPipeline)
             e.setVertexBuffer(instanceBuffer, offset: 0, index: 0)
             e.setVertexBytes(&u, length: MemoryLayout<UniformsGPU>.stride, index: 1)
@@ -168,7 +175,7 @@ final class MapRenderer {
         }
 
         // Down through a chain of smaller and smaller copies, then back up: a wide glow from few samples.
-        var source = pieces
+        var source = glow
         for level in levels {
             var texel = SIMD2<Float>(1 / Float(source.width), 1 / Float(source.height))
             pass(commands, target: level) { e in

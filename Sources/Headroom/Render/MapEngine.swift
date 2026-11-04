@@ -64,8 +64,6 @@ final class MapEngine {
     private var calmGoal: Float = 1
     private static let colourAtRest: Float = 0.86
     private static let glowAtRest: Float = 0.25
-    /// How far pieces step back when something else is lit: `dimGoal` when it's on.
-    private static let fullDim: Float = 0.62
 
     /// A slower clock for checking motion by eye.
     var timeScale: Float = 1
@@ -225,7 +223,7 @@ final class MapEngine {
         }
         for i in ancestors where i < pieceCount { emphasisGoal[i] = max(emphasisGoal[i], 0.62) }
         if let primary, primary < pieceCount { emphasisGoal[primary] = 2 }
-        dimGoal = (primary != nil || !related.isEmpty) ? Self.fullDim : 0
+        dimGoal = (primary != nil || !related.isEmpty) ? 0.62 : 0
         requestFrame()
     }
 
@@ -348,10 +346,9 @@ final class MapEngine {
         u.scale = Float(scale)
         u.dim = dimNow
         u.liftPixels = Float(scale) * 5
-        // Everything else steps back while something is lit, so the glow that comes up is almost all from what you're on.
-        let lit = min(dimNow / Self.fullDim, 1)
-        u.bloom = 1 - calmNow * (1 - Self.glowAtRest) * (1 - lit)
+        u.bloom = 1
         u.restSaturation = 1 - calmNow * (1 - Self.colourAtRest)
+        u.glowAtRest = 1 - calmNow * (1 - Self.glowAtRest)
         u.headroom = Float(headroom)
         if let free = layout.pieces.first(where: { $0.style == 1 }) {
             u.ghost = ghostNow

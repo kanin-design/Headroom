@@ -25,6 +25,7 @@ struct Uniforms {
     float freeStart;    // where the free wedge begins
     float hideScale;    // 1 leaves out the scale around the disk
     float restSaturation;   // how much colour a piece keeps until you point at it, 0...1
+    float glowAtRest;       // how much glow a piece gives off until you point at it, 0...1
 };
 
 enum Style { StyleNormal = 0, StyleFree = 1, StyleHidden = 2, StyleSmaller = 3, StyleFile = 4 };
@@ -92,7 +93,12 @@ static float hash21(float2 p) {
     return fract(p.x * p.y);
 }
 
-fragment float4 segment_fragment(SegmentOut in [[stage_in]], constant Uniforms &u [[buffer(1)]]) {
+struct PieceOut {
+    float4 color [[color(0)]];
+    float4 glow [[color(1)]];       // what this piece gives off, which the blur spreads into its halo
+};
+
+fragment PieceOut segment_fragment(SegmentOut in [[stage_in]], constant Uniforms &u [[buffer(1)]]) {
     if (in.color.a <= 0.002) discard_fragment();
     float r = length(in.p);
     float theta = atan2(in.p.x, -in.p.y);
@@ -175,7 +181,12 @@ fragment float4 segment_fragment(SegmentOut in [[stage_in]], constant Uniforms &
     color *= 1.0 + 0.30 * e * u.dim;
 
     alpha *= coverage;
-    return float4(color * alpha, alpha);
+    // Each piece gives off its own glow. Only what you're pointing at, and what's inside it, gets the full amount. The
+    // folders it sits in get none of that, and everything else keeps its faint glow, which fades as it dims.
+    PieceOut out;
+    out.color = float4(color * alpha, alpha);
+    out.glow = out.color * mix(u.glowAtRest, 1.0, smoothstep(0.7, 1.0, e));
+    return out;
 }
 
 // MARK: Light
