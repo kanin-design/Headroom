@@ -152,7 +152,7 @@ struct MapPanel: View {
 
     private func header(_ tree: DiskTree, _ subject: UInt32) -> some View {
         let name = subject == 0 ? (model.volume?.name ?? "Disk") : model.displayName(subject)
-        let path = subject == 0 ? nil : tree.path(subject).map(DiskTree.friendly)
+        let path = subject == 0 || HiddenNames.isOn ? nil : tree.path(subject).map(DiskTree.friendly)
         return PanelTitle(title: name, subtitle: path)
     }
 

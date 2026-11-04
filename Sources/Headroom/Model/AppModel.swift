@@ -214,6 +214,10 @@ final class AppModel {
 
     /// One more step of the scan that's running. Whatever you're doing carries on, and the numbers only get fuller.
     private func show(_ picture: DiskTree) {
+        if HiddenNames.isOn {
+            HiddenNames.apply(to: picture)
+            nameCache = [:]
+        }
         guard let current = tree else {
             tree = picture
             nameCache = [:]
@@ -311,6 +315,7 @@ final class AppModel {
     /// Shows a new tree. What the views ask of it is worked out first, so the tree and everything derived from it
     /// change in one step and nothing ever reads one tree with another tree's numbers.
     private func present(_ newTree: DiskTree, transition: RingTransition) {
+        if HiddenNames.isOn { HiddenNames.apply(to: newTree) }
         let rules = self.rules
         let window = changeWindow
         treeOnItsWay = true
@@ -1050,6 +1055,7 @@ final class QuickLook: NSObject, QLPreviewPanelDataSource {
 /// The last check before anything moves. Only your own files, never the folders that hold everything together.
 enum Safety {
     static func canTrash(_ path: String) -> Bool {
+        if HiddenNames.isOn { return false }
         let visible = path.hasPrefix("/System/Volumes/Data/") ? String(path.dropFirst("/System/Volumes/Data".count)) : path
         let home = NSHomeDirectory()
         let protected: Set<String> = [
