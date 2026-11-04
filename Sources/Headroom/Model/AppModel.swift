@@ -120,6 +120,9 @@ final class AppModel {
     @ObservationIgnored private var heldPicture: DiskTree?
     @ObservationIgnored private var insightsRunning = false
     @ObservationIgnored private var insightsAt = Date.distantPast
+    /// The Map view's colours for the picture on screen, so the list on the right can match the ring.
+    @ObservationIgnored private var ringColours: RingColours?
+    @ObservationIgnored private let colourMemory = ColourMemory()
     @ObservationIgnored var forceTouchGuarded = false
     @ObservationIgnored var cacheLoadMilliseconds = 0.0
     @ObservationIgnored private var lastHoverIndex: Int?
@@ -251,7 +254,7 @@ final class AppModel {
     /// New numbers for the picture you're already looking at.
     private func refreshLive() {
         guard let tree else { return }
-        engine.apply(RingLayout.build(tree: tree, focus: focus, colorer: colorer(tree)), .live)
+        engine.apply(drawing(tree), .live)
         // Pieces have new places, so whatever is lit gets looked up again: under the pointer, or from a row in the panel.
         lastHoverIndex = -1
         if let pointer = lastPointer, let index = engine.layout.hit(angle: pointer.angle, radius: pointer.radius) {
@@ -435,7 +438,7 @@ final class AppModel {
 
     func relayout(_ transition: RingTransition, labelDelay: Double = 0.18) {
         guard let tree else { return }
-        let layout = RingLayout.build(tree: tree, focus: focus, colorer: colorer(tree))
+        let layout = drawing(tree)
         engine.apply(layout, transition)
         lastHoverIndex = nil
         hover = nil
@@ -444,10 +447,19 @@ final class AppModel {
         refreshHover(after: 0.42)
     }
 
+    /// The picture for the folder in view.
+    private func drawing(_ tree: DiskTree) -> RingLayout {
+        var layout = RingLayout.build(tree: tree, focus: focus, colorer: colorer(tree))
+        if lens == .map { layout.calmTinyPieces(viewBytes: tree.totals[Int(focus)]) }
+        return layout
+    }
+
     private func colorer(_ tree: DiskTree) -> RingLayout.Colorer {
         switch lens {
         case .map:
-            return Lenses.kindColorer(tree: tree)
+            let colours = RingColours(tree: tree, focus: focus, memory: colourMemory)
+            ringColours = colours
+            return { colours.lab($0).linearP3 }
         case .changes:
             guard let changes else { return Lenses.kindColorer(tree: tree) }
             return Lenses.changeColorer(tree: tree, changes: changes)
@@ -457,6 +469,9 @@ final class AppModel {
             return Lenses.reclaimColorer(tree: tree, map: reclaim, rules: rules, ticked: chosen)
         }
     }
+
+    /// A row's dot in the panel: the same colour as its piece on the ring.
+    func mapColor(_ node: UInt32) -> Lab? { ringColours?.lab(node) }
 
     func setRing(_ geometry: RingGeometry) {
         guard geometry != ring else { return }
@@ -722,7 +737,7 @@ final class AppModel {
         let old = focus
         focus = node
         selected = nil
-        let layout = RingLayout.build(tree: tree, focus: node, colorer: colorer(tree))
+        let layout = drawing(tree)
         // The piece that holds where you were tells the zoom which way to go.
         var mapping: ZoomMapping?
         var search = old
@@ -749,6 +764,7 @@ final class AppModel {
         lens = new
         selected = nil
         panelOpen = true
+        engine.setCalm(new == .map)
         relayout(.recolor, labelDelay: 0.2)
         // Free Up and Changes want the whole picture, so now you're waiting on the scan.
         if tree?.isPartial == true, !scanIsHurrying { activeScan?.scanner.setHurry(new != .map) }
@@ -760,7 +776,7 @@ final class AppModel {
         if ticked.contains(row.id) { ticked.remove(row.id) } else { ticked.insert(row.id) }
         updateTickedReclaim()
         if lens == .freeUp, let tree {
-            let layout = RingLayout.build(tree: tree, focus: focus, colorer: colorer(tree))
+            let layout = drawing(tree)
             engine.apply(layout, .recolor)
             lastHoverIndex = nil
         }

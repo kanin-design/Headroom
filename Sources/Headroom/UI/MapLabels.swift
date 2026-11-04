@@ -30,18 +30,22 @@ enum LabelPlacer {
     private static func fit(w: CGFloat, h: CGFloat, piece p: Piece, radius R: CGFloat) -> CGFloat? {
         let mid = CGFloat(p.midAngle)
         let sweep = CGFloat(p.sweep)
-        for step in [0.0, 0.1, -0.1, 0.2, -0.2, 0.3, -0.3, 0.38, -0.38] {
-            let angle = mid + sweep * CGFloat(step)
-            if fits(w: w, h: h, angle: angle, piece: p, radius: R) { return angle }
+        // A big piece's name belongs on it, so those look harder for a place.
+        let big = p.ring <= 1
+        let steps: [CGFloat] = big ? [0, 0.08, -0.08, 0.16, -0.16, 0.24, -0.24, 0.3, -0.3, 0.36, -0.36, 0.42, -0.42]
+                                   : [0, 0.1, -0.1, 0.2, -0.2, 0.3, -0.3, 0.38, -0.38]
+        for step in steps {
+            let angle = mid + sweep * step
+            if fits(w: w, h: h, angle: angle, piece: p, radius: R, margin: big ? 2 : 3) { return angle }
         }
         return nil
     }
 
-    private static func fits(w: CGFloat, h: CGFloat, angle: CGFloat, piece p: Piece, radius R: CGFloat) -> Bool {
+    private static func fits(w: CGFloat, h: CGFloat, angle: CGFloat, piece p: Piece, radius R: CGFloat, margin: CGFloat) -> Bool {
         let mid = CGFloat(p.midAngle)
         let rm = CGFloat(p.r0 + p.r1) * 0.5 * R
         let cx = sin(angle) * rm, cy = -cos(angle) * rm
-        let inner = CGFloat(p.r0) * R + 3, outer = CGFloat(p.r1) * R - 3
+        let inner = CGFloat(p.r0) * R + margin, outer = CGFloat(p.r1) * R - margin
         for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
             let x = cx + CGFloat(sx) * w / 2, y = cy + CGFloat(sy) * h / 2
             let r = hypot(x, y)
@@ -52,7 +56,7 @@ enum LabelPlacer {
             var delta = a - mid
             if delta > .pi { delta -= 2 * .pi }
             if delta < -.pi { delta += 2 * .pi }
-            let half = CGFloat(p.sweep) * 0.5 - 3 / max(r, 1)
+            let half = CGFloat(p.sweep) * 0.5 - margin / max(r, 1)
             if abs(delta) > half { return false }
         }
         return true
@@ -207,9 +211,19 @@ enum LabelPlacer {
             for slot in slots {
                 let p = layout.pieces[slot.c.index]
                 let edge = CGFloat(silhouette(slot.c.index, p.midAngle)) * R + 2
+                let anchor = point(slot.mid, edge)
+                // The line leaves along its wedge until it's level with the name, then runs dead level to it.
+                let side: CGFloat = right ? 1 : -1
+                let rise = slot.y - anchor.y
+                let along = -cos(slot.mid)
+                var bend = anchor.x + side * max(abs(rise) * 1.5, 14)
+                if abs(along) > 0.05, rise * along > 0 { bend = anchor.x + sin(slot.mid) * rise / along }
+                // Never back into the ring, and never past the name.
+                let nameEnd = columnX - side * 7
+                bend = right ? min(max(bend, anchor.x + 6), nameEnd - 8) : max(min(bend, anchor.x - 6), nameEnd + 8)
                 // A name that changes sides is a new label, so it fades across instead of flying over the ring.
                 out.append(MapLabel(id: p.key ^ (right ? 0xABCD : 0xDCBA), pieceIndex: slot.c.index, node: p.node, title: slot.c.title, value: slot.c.value,
-                                    position: CGPoint(x: columnX, y: slot.y), anchor: point(slot.mid, edge), elbow: point(slot.mid, max(reach, edge + 6)),
+                                    position: CGPoint(x: columnX, y: slot.y), anchor: anchor, elbow: CGPoint(x: bend, y: slot.y),
                                     place: right ? .right : .left, dark: false, large: false))
             }
         }

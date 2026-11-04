@@ -8,7 +8,7 @@ struct Segment {
     float4 to;
     float4 colorFrom;   // alpha fades pieces in and out
     float4 colorTo;
-    float4 params;      // style, seed, unused, unused
+    float4 params;      // style, seed, how far it steps back until pointed at, unused
 };
 
 struct Uniforms {
@@ -24,6 +24,7 @@ struct Uniforms {
     float ghost;        // share of the disk a cleanup would free
     float freeStart;    // where the free wedge begins
     float hideScale;    // 1 leaves out the scale around the disk
+    float restSaturation;   // how much colour a piece keeps until you point at it, 0...1
 };
 
 enum Style { StyleNormal = 0, StyleFree = 1, StyleHidden = 2, StyleSmaller = 3, StyleFile = 4 };
@@ -38,6 +39,7 @@ struct SegmentOut {
     float4 color [[flat]];
     float style [[flat]];
     float seed [[flat]];
+    float calm [[flat]];
     float emphasis [[flat]];
 };
 
@@ -79,6 +81,7 @@ vertex SegmentOut segment_vertex(uint vid [[vertex_id]],
     o.color = mix(s.colorFrom, s.colorTo, saturate(u.t));
     o.style = s.params.x;
     o.seed = s.params.y;
+    o.calm = s.params.z;
     o.emphasis = e;
     return o;
 }
@@ -157,7 +160,12 @@ fragment float4 segment_fragment(SegmentOut in [[stage_in]], constant Uniforms &
         float outer = saturate(1.0 - (in.r1 - radialGap - r) / (u.scale * 1.1));
         color += (base * 0.55 + float3(0.035)) * outer * outer;
         color += base * 0.10 * edge;
-        if (in.style == StyleSmaller) color = mix(color, float3(dot(color, float3(0.3, 0.6, 0.1))), 0.6) * 0.50;
+        // Smaller items stay in their wedge's colour, only quieter, so the wedge still reads as one group.
+        if (in.style == StyleSmaller) color = mix(color, float3(dot(color, float3(0.3, 0.6, 0.1))), 0.3) * 0.55;
+        // At rest, colours sit a step below full, and tiny pieces lower still. Pointing at something brings it all the way up.
+        float strength = mix(u.restSaturation * (1.0 - 0.5 * in.calm), 1.0, e);
+        color = mix(float3(dot(color, float3(0.3, 0.6, 0.1))), color, strength);
+        color *= mix(1.0 - 0.2 * in.calm, 1.0, e);
     }
 
     // Emphasis lifts a piece; everything else steps back.
@@ -242,7 +250,7 @@ fragment float4 composite(QuadOut in [[stage_in]],
     float length0 = mix(3.0, 8.0, isMajor) * scalePx;
     float inBand = smoothstep(base - 0.5, base + 0.5, rPx) * (1.0 - smoothstep(base + length0 - 0.5, base + length0 + 0.5, rPx));
     float tick = inBand * (1.0 - smoothstep(0.35 * scalePx, 0.35 * scalePx + 1.0, toMark));
-    color += float3(0.16, 0.17, 0.20) * tick * mix(0.34, 0.95, isMajor) * (1.0 - u.hideScale);
+    color += float3(0.16, 0.17, 0.20) * tick * mix(0.22, 0.60, isMajor) * (1.0 - u.hideScale);
 
     color = color * (1.0 - p.a) + p.rgb;
 

@@ -17,6 +17,7 @@ struct Piece {
     var style: Float
     var seed: Float
     var bytes: UInt64
+    var calm: Float = 0           // how far it steps back until you point at it
 
     var sweep: Float { a1 - a0 }
     var midAngle: Float { (a0 + a1) * 0.5 }
@@ -66,6 +67,43 @@ struct RingLayout {
         return layout
     }
 
+    /// Tiny pieces step back until you point at them, so the big ones are easier to see.
+    mutating func calmTinyPieces(viewBytes: UInt64) {
+        let total = Float(max(viewBytes, 1))
+        for i in pieces.indices { pieces[i].calm = min(max(1 - Float(pieces[i].bytes) / total / 0.006, 0), 0.8) }
+    }
+
+    /// What's drawn directly inside a folder, once a folder that's nearly all one subfolder is drawn as one with it.
+    static func visibleChildren(tree: DiskTree, of parent: UInt32) -> (kids: [UInt32], tail: UInt32, ownBytes: UInt64) {
+        let nodes = tree.nodes, totals = tree.totals
+        func listChildren(_ id: UInt32, into out: inout [UInt32]) {
+            var c = nodes[Int(id)].firstChild
+            while c != 0 {
+                if totals[Int(c)] > 0 { out.append(c) }
+                c = nodes[Int(c)].nextSibling
+            }
+        }
+        var kids: [UInt32] = []
+        listChildren(parent, into: &kids)
+        var ownBytes = nodes[Int(parent)].bytes
+        var tail = parent
+        var flattened = false
+        guard parent != 0 else { return (kids, tail, ownBytes) }
+        while !tree.isStillGrowing(tail), let topIndex = kids.indices.max(by: { totals[Int(kids[$0])] < totals[Int(kids[$1])] }) {
+            let top = kids[topIndex]
+            let n = nodes[Int(top)]
+            guard n.has(NodeFlag.directory), n.firstChild != 0,
+                  Double(totals[Int(top)]) >= Double(totals[Int(tail)]) * chainShare else { break }
+            kids.remove(at: topIndex)
+            listChildren(top, into: &kids)
+            ownBytes &+= n.bytes
+            tail = top
+            flattened = true
+        }
+        if flattened { kids.sort { totals[Int($0)] > totals[Int($1)] } }
+        return (kids, tail, ownBytes)
+    }
+
     /// Whether a node draws as one with its biggest subfolder, and which one that ends at.
     static func chainTail(tree: DiskTree, _ id: UInt32) -> UInt32 {
         guard id != 0 else { return id }
@@ -112,35 +150,13 @@ struct RingLayout {
         let r0 = edges[ring], r1 = edges[ring + 1]
         let midArc = (r0 + r1) * 0.5 * Self.typicalRadius
 
-        func listChildren(_ id: UInt32, into out: inout [UInt32]) {
-            var c = nodes[Int(id)].firstChild
-            while c != 0 {
-                if totals[Int(c)] > 0 { out.append(c) }
-                c = nodes[Int(c)].nextSibling
-            }
-        }
-        var kids: [UInt32] = []
-        listChildren(parentNode, into: &kids)
-        var ownBytes = nodes[Int(parentNode)].bytes
-
         // A folder that is nearly all one subfolder would only repeat its shape on the next ring. Those chains are
         // drawn as one piece, so every ring shows something new.
-        var tail = parentNode
+        let visible = Self.visibleChildren(tree: tree, of: parentNode)
+        var kids = visible.kids
+        let ownBytes = visible.ownBytes
         if parentNode != 0 {
-            var flattened = false
-            while !tree.isStillGrowing(tail), let topIndex = kids.indices.max(by: { totals[Int(kids[$0])] < totals[Int(kids[$1])] }) {
-                let top = kids[topIndex]
-                let n = nodes[Int(top)]
-                guard n.has(NodeFlag.directory), n.firstChild != 0,
-                      Double(totals[Int(top)]) >= Double(totals[Int(tail)]) * Self.chainShare else { break }
-                kids.remove(at: topIndex)
-                listChildren(top, into: &kids)
-                ownBytes &+= n.bytes
-                tail = top
-                flattened = true
-            }
-            if flattened, parentPiece >= 0 { pieces[Int(parentPiece)].tail = tail }
-            if flattened { kids.sort { totals[Int($0)] > totals[Int($1)] } }
+            if visible.tail != parentNode, parentPiece >= 0 { pieces[Int(parentPiece)].tail = visible.tail }
         } else {
             // Free space closes the circle, right after what's hidden.
             // While a scan is running, the big groups keep their places instead of swapping as they fill up.

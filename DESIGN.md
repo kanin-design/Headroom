@@ -12,8 +12,8 @@ They also get the numbers wrong in ways that matter:
 - **They don't add up to the disk.** Swap, a downloaded macOS update and root-only data never appear,
   so the total is short and you can't tell why. Those three moved tens of gigabytes on this Mac in a
   single day.
-- **Their colours mean nothing.** Hue follows position, so a whole colour channel carries no
-  information.
+- **Their colours can't be learned.** Hue follows position, so a folder changes colour whenever anything
+  around it changes.
 - **They stop at "here is a big thing".** They don't tell you whether it's safe to remove.
 
 ## Who is using it, and when
@@ -31,7 +31,7 @@ They also get the numbers wrong in ways that matter:
 
 1. **The map is the interface.** It fills the window. Everything else floats on top in glass, and the
    window should still look complete with the panel closed.
-2. **Colour means something.** In **Map**, colour is the kind of data. In **Changes**, it's heat. In
+2. **Colour means something.** In **Map**, it shows what belongs together. In **Changes**, it's heat. In
    **Free Up**, it's what can go. One geometry, three questions: changing the question recolours the
    same picture, so you never lose your place.
 3. **Name things directly.** Big things are labelled on the map, so you don't need a legend or a hover
@@ -58,14 +58,18 @@ sunburst in the reference:
   Rings get thinner as they go out to offset that.
 - **Tidy edges.** Slivers too small to see merge into one "smaller items" piece, so the outer edge reads
   as shape and not noise.
-- **Light that carries meaning.** Colours are in the wider Display P3 range with a soft glow. Hover lifts
-  the piece you're on and dims the rest, and related items light up together.
+- **Light that carries meaning.** Colours are in the wider Display P3 range. In Map they hold back a step at
+  rest, with only a faint glow. Pointing at something brings it to full colour with its glow, lifts it and dims
+  the rest, and related items light up together.
 
 ## The three views
 
-- **Map:** colour by kind, such as video, audio, code, AI models, apps, caches and system. A parent's
-  colour blends its children's, so colour flows inward and you can tell what a folder is mostly made of
-  before opening it.
+- **Map:** you can read the structure from colour alone. Each big thing in view has its own colour from the
+  whole spectrum, kept far from the pieces beside it. Headroom remembers it, so a folder keeps its colour
+  between scans even when sizes change. Everything inside stays close to that colour and gets lighter going
+  out, so one group reads as one wedge from the middle to the edge. Big files are the brightest, and tiny
+  things step back. System data stays slate on the whole disk. The panel lists the kinds of data, and
+  pointing at one lights it up.
 - **Changes:** what grew. Uses scan history when there is any, and file dates on the first run, so it's
   useful on day one. Keeps a free-space history, including system volumes, which is how a downloaded
   update gets caught.

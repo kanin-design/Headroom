@@ -59,6 +59,14 @@ final class MapEngine {
     private var ghostNow: Float = 0
     private var ghostGoal: Float = 0
 
+    /// In the Map view, colour and glow hold back until you point at something. The other views use both to say something.
+    private var calmNow: Float = 1
+    private var calmGoal: Float = 1
+    private static let colourAtRest: Float = 0.86
+    private static let glowAtRest: Float = 0.25
+    /// How far pieces step back when something else is lit: `dimGoal` when it's on.
+    private static let fullDim: Float = 0.62
+
     /// A slower clock for checking motion by eye.
     var timeScale: Float = 1
 
@@ -123,7 +131,7 @@ final class MapEngine {
                 from = m.apply(to)
             }
             newIndex[p.key] = index
-            out.append(SegmentGPU(from: from, to: to, colorFrom: colorFrom, colorTo: colorTo, params: SIMD4(p.style, p.seed, 0, 0)))
+            out.append(SegmentGPU(from: from, to: to, colorFrom: colorFrom, colorTo: colorTo, params: SIMD4(p.style, p.seed, p.calm, 0)))
             outKeys.append(p.key)
             outParents.append(p.parent)
         }
@@ -217,7 +225,13 @@ final class MapEngine {
         }
         for i in ancestors where i < pieceCount { emphasisGoal[i] = max(emphasisGoal[i], 0.62) }
         if let primary, primary < pieceCount { emphasisGoal[primary] = 2 }
-        dimGoal = (primary != nil || !related.isEmpty) ? 0.62 : 0
+        dimGoal = (primary != nil || !related.isEmpty) ? Self.fullDim : 0
+        requestFrame()
+    }
+
+    /// Whether colour and glow hold back until you point at something.
+    func setCalm(_ on: Bool) {
+        calmGoal = on ? 1 : 0
         requestFrame()
     }
 
@@ -307,6 +321,14 @@ final class MapEngine {
             moving = true
         }
 
+        if abs(calmGoal - calmNow) > 0.002 {
+            calmNow += (calmGoal - calmNow) * ease
+            moving = true
+        } else if calmNow != calmGoal {
+            calmNow = calmGoal
+            moving = true
+        }
+
         if abs(ghostGoal - ghostNow) > 0.0002 {
             ghostNow += (ghostGoal - ghostNow) * ease
             moving = true
@@ -326,7 +348,10 @@ final class MapEngine {
         u.scale = Float(scale)
         u.dim = dimNow
         u.liftPixels = Float(scale) * 5
-        u.bloom = 1
+        // Everything else steps back while something is lit, so the glow that comes up is almost all from what you're on.
+        let lit = min(dimNow / Self.fullDim, 1)
+        u.bloom = 1 - calmNow * (1 - Self.glowAtRest) * (1 - lit)
+        u.restSaturation = 1 - calmNow * (1 - Self.colourAtRest)
         u.headroom = Float(headroom)
         if let free = layout.pieces.first(where: { $0.style == 1 }) {
             u.ghost = ghostNow

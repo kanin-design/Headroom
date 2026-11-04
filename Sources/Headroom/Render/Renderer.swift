@@ -24,6 +24,7 @@ struct UniformsGPU {
     var ghost: Float = 0            // share of the disk a cleanup would free
     var freeStart: Float = 0        // where the free wedge begins
     var hideScale: Float = 0
+    var restSaturation: Float = 1
 }
 
 /// Draws the ring. Pieces are one instanced quad each, shaped in the fragment shader, so the cost barely depends on

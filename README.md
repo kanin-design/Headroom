@@ -26,8 +26,9 @@ open build/Headroom.app --args --no-cache
 
 ## How to use it
 
-- **Map** shows what's on the disk. Colour is the kind of data. Point at anything to see its name, its size and what
-  you'd really get back. Click to zoom in, and click the middle (or press Esc) to go back.
+- **Map** shows what's on the disk. Colour shows what belongs together: each big thing has its own colour, and
+  everything inside it stays close to that colour. Point at anything to see its name, its size and what you'd really
+  get back. Click to zoom in, and click the middle (or press Esc) to go back.
 - **Changes** shows what has grown. It lights up in heat colours and lists the folders responsible. It reads file dates
   on the first day, then compares scans as history builds up.
 - **Free Up** shows what can go, sorted by what it costs you. Tick things and watch the free wedge grow as a preview.

@@ -262,20 +262,22 @@ struct MapPanel: View {
         let sorted = Kind.allCases.map { ($0, values[Int($0.rawValue)]) }.filter { Double($0.1) / Double(total) > 0.004 }.sorted { $0.1 > $1.1 }
         if !sorted.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
+                // The ring's colours say which folder is which, so these stay plain steps of grey. Point at one to see it lit.
                 GeometryReader { g in
                     HStack(spacing: 1.5) {
-                        ForEach(sorted, id: \.0) { kind, bytes in
-                            Palette.color(kind).swiftUI
-                                .frame(width: max((g.size.width - CGFloat(sorted.count - 1) * 1.5) * CGFloat(Double(bytes) / Double(total)), 1.5))
+                        ForEach(Array(sorted.enumerated()), id: \.element.0) { index, entry in
+                            Self.tone(index)
+                                .frame(width: max((g.size.width - CGFloat(sorted.count - 1) * 1.5) * CGFloat(Double(entry.1) / Double(total)), 1.5))
                         }
                     }
                 }
                 .frame(height: 8)
                 .clipShape(Capsule())
                 LazyVGrid(columns: [GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading)], alignment: .leading, spacing: 5) {
-                    ForEach(sorted.prefix(8), id: \.0) { kind, bytes in
+                    ForEach(Array(sorted.prefix(8).enumerated()), id: \.element.0) { index, entry in
+                        let kind = entry.0, bytes = entry.1
                         HStack(spacing: 5) {
-                            Circle().fill(Palette.color(kind).swiftUI).frame(width: 6, height: 6)
+                            Circle().fill(Self.tone(index)).frame(width: 6, height: 6)
                             Text(kind.title)
                                 .font(.system(size: 11))
                                 .foregroundStyle(.white.opacity(0.72))
@@ -291,6 +293,10 @@ struct MapPanel: View {
                 }
             }
         }
+    }
+
+    private static func tone(_ index: Int) -> Color {
+        .white.opacity(max(0.78 - Double(index) * 0.1, 0.18))
     }
 
     @ViewBuilder
@@ -335,6 +341,7 @@ struct MapPanel: View {
     }
 
     private func color(_ tree: DiskTree, _ node: UInt32) -> Color {
+        if let matching = model.mapColor(node) { return matching.swiftUI }
         let n = tree.nodes[Int(node)]
         if n.has(NodeFlag.directory) { return Palette.blend(UnsafePointer(tree.stats + Int(node) * DiskTree.statStride)).swiftUI }
         if n.has(NodeFlag.synthetic) { return Palette.color(.system).swiftUI }
