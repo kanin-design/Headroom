@@ -169,8 +169,8 @@ final class DiskScan: @unchecked Sendable {
 
     private func stepNamed(_ state: UInt8, _ name: String) -> (UInt8, UInt16) {
         guard state != 0 else { return (0, 0) }
-        var copy = name
-        return copy.withUTF8 { rules.step(state: state, name: $0.baseAddress!, length: $0.count) }
+        let bytes = Array(name.utf8)
+        return bytes.withUnsafeBufferPointer { rules.step(state: state, name: $0.baseAddress!, length: $0.count) }
     }
 
     /// Reads the disk, then adds it all up. `tick` is called now and then from another thread, for as long as the workers
@@ -221,7 +221,8 @@ final class DiskScan: @unchecked Sendable {
         stop.value = true
         wakeTick.signal()
         stopped.wait()
-        Accounting.settleLinks(in: tree)
+        Accounting.settleLinks(scanner.collectedLinks(), in: tree)
+        scanner.freeLinks()
         reconcile(tree)
         tree.finish()
         tree.scanSeconds = elapsed()
@@ -330,7 +331,7 @@ enum Accounting {
             var outside: UInt32?, counted: UInt32?
             for i in start..<end {
                 let r = links[i]
-                if tree.isInside(r.dir, node) {
+                if tree.isInside(r.dir, node) || r.file == node {
                     anyInside = true
                     if r.counted { countedInside = true }
                 } else {
@@ -356,13 +357,22 @@ enum Accounting {
 
     /// Hard links and clones were counted by whichever worker saw them first, unless they were somewhere shy. This settles
     /// each one in a stable place, the one you'd call its home: not a cache, not Downloads, and the same on every scan.
-    static func settleLinks(in tree: DiskTree) {
-        tree.links.sort { $0.key < $1.key }
+    static func settleLinks(_ links: UnsafeMutableBufferPointer<LinkRecord>, in tree: DiskTree) {
+        groupByKey(links)
         let nodes = tree.nodes
         let home = tree.home
         var downloads: UInt32 = 0
-        if home != 0 {
-            var c = nodes[Int(home)].firstChild
+        // In your home folder, or at the top of any other disk.
+        var top = home
+        if top == 0 {
+            var c = nodes[0].firstChild
+            while c != 0 {
+                if nodes[Int(c)].has(NodeFlag.anchor) { top = c; break }
+                c = nodes[Int(c)].nextSibling
+            }
+        }
+        if top != 0 {
+            var c = nodes[Int(top)].firstChild
             while c != 0 {
                 if tree.name(c) == "Downloads" { downloads = c; break }
                 c = nodes[Int(c)].nextSibling
@@ -394,10 +404,8 @@ enum Accounting {
             return value + depth << 24 + (hash & 0xFFFFFF)
         }
 
-        // Files with one path need no further thought, so only real groups are kept.
-        var kept: [LinkRecord] = []
-        kept.reserveCapacity(tree.links.count / 2)
-        let links = tree.links
+        // Files with one path need no further thought, so only real groups are kept: moved up to the front, in place.
+        var count = 0
         var start = 0
         while start < links.count {
             var end = start + 1
@@ -423,10 +431,94 @@ enum Accounting {
             for i in start..<end {
                 var record = links[i]
                 record.counted = i == primary
-                kept.append(record)
+                links[count] = record
+                count += 1
             }
         }
-        tree.links = kept
+        let groups = UnsafeMutableBufferPointer(rebasing: links[0..<count])
+        tree.links = Array(groups.prefix(merge(groups)))
+    }
+
+    /// Puts each file's records next to each other, without asking for more memory than it gives straight back.
+    static func groupByKey(_ links: UnsafeMutableBufferPointer<LinkRecord>) {
+        guard links.count > 1, let base = links.baseAddress else { return }
+        let digits = 1 << 16
+        let spare = vmAlloc(LinkRecord.self, links.count)
+        let starts = vmAlloc(Int.self, digits)
+        defer {
+            vmFree(spare, links.count)
+            vmFree(starts, digits)
+        }
+        var from = base, to = spare
+        for shift in stride(from: 0, to: 64, by: 16) {
+            memset(starts, 0, digits * MemoryLayout<Int>.stride)
+            for at in 0..<links.count { starts[Int((from[at].key >> UInt64(shift)) & 0xFFFF)] += 1 }
+            // Nothing to do for a part they all have in common.
+            if starts[Int((from[0].key >> UInt64(shift)) & 0xFFFF)] == links.count { continue }
+            var sum = 0
+            for digit in 0..<digits {
+                let many = starts[digit]
+                starts[digit] = sum
+                sum += many
+            }
+            for at in 0..<links.count {
+                let digit = Int((from[at].key >> UInt64(shift)) & 0xFFFF)
+                to[starts[digit]] = from[at]
+                starts[digit] += 1
+            }
+            swap(&from, &to)
+        }
+        if from != base { memcpy(base, from, links.count * MemoryLayout<LinkRecord>.stride) }
+    }
+
+    /// Leaves the same links with no repeats. A folder full of linked files says the same places over and over, and everything
+    /// that reads these looks at one group at a time and only adds up its bytes. So groups with the same paths can be one
+    /// group with their bytes added together, and one whose paths are all in one place can't change any answer at all.
+    /// A group's records have to be next to each other.
+    static func merge(_ records: inout [LinkRecord]) {
+        let count = records.withUnsafeMutableBufferPointer { merge($0) }
+        // Exactly as big as it has to be, because this stays for as long as the tree does.
+        records = records.withUnsafeBufferPointer { Array($0.prefix(count)) }
+    }
+
+    /// In place, and says how many are left at the front.
+    private static func merge(_ links: UnsafeMutableBufferPointer<LinkRecord>) -> Int {
+        var count = 0
+        var seen: [UInt64: (at: Int, count: Int)] = [:]
+        var start = 0
+        while start < links.count {
+            var end = start + 1
+            while end < links.count && links[end].key == links[start].key { end += 1 }
+            defer { start = end }
+            let size = end - start
+            // In the same order, however the workers happened to find them.
+            links[start..<end].sort { ($0.dir, $0.file) < ($1.dir, $1.file) }
+            if links[start].dir == links[end - 1].dir, links[start].file == links[end - 1].file { continue }
+            var hash = UInt64(size)
+            for i in start..<end {
+                let r = links[i]
+                hash = (hash ^ UInt64(r.dir) ^ UInt64(r.file) << 32 ^ UInt64(r.kind) << 8 ^ (r.counted ? 1 : 0)) &* 0x9E37_79B9_7F4A_7C15
+                hash ^= hash >> 29
+            }
+            if let same = seen[hash] {
+                let isSame = same.count == size && (0..<size).allSatisfy { at in
+                    let a = links[same.at + at], b = links[start + at]
+                    return a.dir == b.dir && a.file == b.file && a.kind == b.kind && a.counted == b.counted
+                }
+                if isSame {
+                    for at in 0..<size { links[same.at + at].bytes &+= links[start].bytes }
+                    continue
+                }
+            } else {
+                seen[hash] = (count, size)
+            }
+            // What's been kept so far is always behind where this is reading.
+            for i in start..<end {
+                links[count] = links[i]
+                count += 1
+            }
+        }
+        return count
     }
 
     /// This path now counts the file's bytes.
@@ -463,7 +555,7 @@ enum Accounting {
         let s = tree.stats + Int(r.dir) * DiskTree.statStride
         s[Int(r.kind)] = apply(s[Int(r.kind)], units)
         let day: UInt32 = 86_400
-        for (field, age) in [(DiskTree.statRecent1, day), (DiskTree.statRecent7, 7 * day), (DiskTree.statRecent30, 30 * day)]
+        for (field, age) in [(DiskTree.statRecent1, day), (DiskTree.statRecent7, 7 * day), (DiskTree.statRecent14, 14 * day), (DiskTree.statRecent30, 30 * day)]
         where r.when >= now &- age {
             s[field] = apply(s[field], units)
         }
@@ -484,7 +576,7 @@ enum Accounting {
             defer { start = end }
             var all = true, countedInside = false
             for i in start..<end {
-                if set.contains(links[i].dir) {
+                if set.holds(links[i]) {
                     if links[i].counted { countedInside = true }
                 } else {
                     all = false

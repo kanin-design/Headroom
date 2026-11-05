@@ -58,6 +58,12 @@ final class MapEngine {
     private var radiusGoal: Float = 0
     private var ghostNow: Float = 0
     private var ghostGoal: Float = 0
+    private var ghostSlices: [(end: Float, color: SIMD3<Float>)] = []
+    private var previewNow: Float = 0
+    private var previewGoal: Float = 0
+    private var previewColor: SIMD3<Float> = .zero
+    /// How many colours the new free space can have at once.
+    static let ghostSliceLimit = 12
 
     /// In the Map view, colour and glow hold back until you point at something. The other views use both to say something.
     private var calmNow: Float = 1
@@ -109,9 +115,11 @@ final class MapEngine {
             let colorTo = SIMD4<Float>(p.color.x, p.color.y, p.color.z, 1)
             var from = to
             var colorFrom = SIMD4<Float>(p.color.x, p.color.y, p.color.z, 0)
+            var plannedFrom = p.planned
             if let i = currentIndex[p.key], !appearing {
                 from = geometryNow(i)
                 colorFrom = colorNow(i)
+                plannedFrom = instances[i].plan.x + (instances[i].plan.y - instances[i].plan.x) * colorT
                 used[i] = true
             } else if appearing {
                 // Unfurls out of the middle, like something opening.
@@ -129,7 +137,8 @@ final class MapEngine {
                 from = m.apply(to)
             }
             newIndex[p.key] = index
-            out.append(SegmentGPU(from: from, to: to, colorFrom: colorFrom, colorTo: colorTo, params: SIMD4(p.style, p.seed, p.calm, 0)))
+            out.append(SegmentGPU(from: from, to: to, colorFrom: colorFrom, colorTo: colorTo, params: SIMD4(p.style, p.seed, p.calm, 0),
+                                  plan: SIMD4(plannedFrom, p.planned, 0, 0)))
             outKeys.append(p.key)
             outParents.append(p.parent)
         }
@@ -160,7 +169,9 @@ final class MapEngine {
                 } else if let m = exitMapping {
                     to = m.apply(g)
                 }
-                out.append(SegmentGPU(from: g, to: to, colorFrom: nowColor, colorTo: SIMD4(nowColor.x, nowColor.y, nowColor.z, 0), params: instances[i].params))
+                let leaving = instances[i].plan.x + (instances[i].plan.y - instances[i].plan.x) * colorT
+                out.append(SegmentGPU(from: g, to: to, colorFrom: nowColor, colorTo: SIMD4(nowColor.x, nowColor.y, nowColor.z, 0), params: instances[i].params,
+                                      plan: SIMD4(leaving, leaving, 0, 0)))
                 outKeys.append(keys[i])
                 outParents.append(-1)
             }
@@ -227,15 +238,28 @@ final class MapEngine {
         requestFrame()
     }
 
-    /// Whether colour and glow hold back until you point at something.
-    func setCalm(_ on: Bool) {
-        calmGoal = on ? 1 : 0
+    /// How far colour and glow hold back until you point at something, from none to all.
+    func setCalm(_ amount: Float) {
+        calmGoal = amount
         requestFrame()
     }
 
     /// The bytes a cleanup would free, shown as a ghost growing out of the free wedge.
     func setGhost(_ share: Float) {
         ghostGoal = share
+        requestFrame()
+    }
+
+    /// Its colours: where each one ends, as a share of the whole.
+    func setGhostColours(_ slices: [(end: Float, color: SIMD3<Float>)]) {
+        ghostSlices = Array(slices.prefix(Self.ghostSliceLimit))
+        requestFrame()
+    }
+
+    /// What the thing you're pointing at would add to it.
+    func setPreview(_ share: Float, color: SIMD3<Float>) {
+        previewGoal = share
+        if share > 0 { previewColor = color }
         requestFrame()
     }
 
@@ -327,6 +351,13 @@ final class MapEngine {
             moving = true
         }
 
+        if abs(previewGoal - previewNow) > 0.0002 {
+            previewNow += (previewGoal - previewNow) * ease
+            moving = true
+        } else if previewNow != previewGoal {
+            previewNow = previewGoal
+            moving = true
+        }
         if abs(ghostGoal - ghostNow) > 0.0002 {
             ghostNow += (ghostGoal - ghostNow) * ease
             moving = true
@@ -353,6 +384,13 @@ final class MapEngine {
         if let free = layout.pieces.first(where: { $0.style == 1 }) {
             u.ghost = ghostNow
             u.freeStart = free.a0
+            u.previewShare = previewNow
+            u.previewColor = SIMD4(previewColor, 0)
+            u.ghostCount = Float(ghostSlices.count)
+            withUnsafeMutableBytes(of: &u.ghostSlices) { raw in
+                let slots = raw.bindMemory(to: SIMD4<Float>.self)
+                for (at, slice) in ghostSlices.enumerated() where at < slots.count { slots[at] = SIMD4(slice.color, slice.end) }
+            }
         }
         return u
     }

@@ -13,6 +13,12 @@ let package = Package(
                 .swiftLanguageMode(.v5),
                 .unsafeFlags(["-Ounchecked", "-enforce-exclusivity=unchecked"], .when(configuration: .release)),
             ]
-        )
+        ),
+        .testTarget(
+            name: "HeadroomTests",
+            dependencies: ["Headroom"],
+            path: "Tests/HeadroomTests",
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
     ]
 )

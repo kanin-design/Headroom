@@ -6,7 +6,7 @@ struct RootView: View {
 
     var body: some View {
         GeometryReader { geometry in
-            let ring = RingGeometry.make(size: geometry.size, panelOpen: model.panelOpen)
+            let ring = RingGeometry.make(size: geometry.size, panelOpen: model.panelOpen, lens: model.lens)
             ZStack(alignment: .topLeading) {
                 MapView(model: model, ring: ring)
                     .frame(width: geometry.size.width, height: geometry.size.height)
@@ -41,7 +41,7 @@ struct RootView: View {
                     HStack {
                         Spacer()
                         SidePanel(model: model)
-                            .frame(width: RingGeometry.panelWidth)
+                            .frame(width: RingGeometry.panelWidth(for: model.lens))
                             .padding(.trailing, 14)
                             .padding(.top, 60)
                             .padding(.bottom, 14)
@@ -91,6 +91,16 @@ struct LensSwitcher: View {
                                 .font(.system(size: 12, weight: .semibold))
                             Text(lens.rawValue)
                                 .font(.system(size: 13, weight: .semibold))
+                            // How many things are selected, wherever you are.
+                            if lens == .freeUp, !model.plan.isEmpty {
+                                Text("\(model.plan.count)")
+                                    .font(.system(size: 10.5, weight: .bold).monospacedDigit())
+                                    .foregroundStyle(.black.opacity(0.8))
+                                    .padding(.horizontal, 5)
+                                    .frame(minHeight: 15)
+                                    .background(Capsule().fill(Palette.reclaim(.rebuilds).swiftUI))
+                                    .help("\(model.plan.count) selected. Nothing happens until you clean.")
+                            }
                         }
                         .foregroundStyle(model.lens == lens ? Color.white : Color.white.opacity(0.62))
                         .padding(.horizontal, 14)
@@ -117,7 +127,7 @@ struct LensSwitcher: View {
         switch lens {
         case .map: "What's on the disk, by kind"
         case .changes: "What has grown lately"
-        case .freeUp: "What can go, and what it costs you"
+        case .freeUp: "Get space back, what you'd miss least first"
         }
     }
 }
@@ -255,6 +265,15 @@ struct BottomArea: View {
                 MessageCard(model: model, message: message)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
+            if let tip = model.tip {
+                Text(tip)
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.92))
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 9)
+                    .glassEffect(.regular, in: Capsule())
+                    .transition(.opacity)
+            }
             if !model.hasFullAccess && !model.askPerFolder && !model.accessCardDismissed && !model.forceTouchGuarded, model.volume?.isBoot == true {
                 AccessCard(model: model)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -265,6 +284,7 @@ struct BottomArea: View {
         }
         .padding(.bottom, 12)
         .animation(.spring(response: 0.38, dampingFraction: 0.86), value: model.message)
+        .animation(.easeOut(duration: 0.18), value: model.tip)
         .animation(.spring(response: 0.38, dampingFraction: 0.86), value: model.focus)
     }
 }
@@ -308,14 +328,9 @@ struct MessageCard: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: "trash")
-                .foregroundStyle(.white.opacity(0.8))
             Text(message)
                 .font(.system(size: 12.5, weight: .medium))
                 .foregroundStyle(.white.opacity(0.92))
-            Button("Open Trash") { model.openTrash() }
-                .buttonStyle(.glass)
-                .controlSize(.small)
             Button {
                 model.message = nil
             } label: {

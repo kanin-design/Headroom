@@ -93,25 +93,27 @@ enum History {
         return points
     }
 
-    /// Keeps every snapshot from the last two days, then one a day, and at most `keepSnapshots`.
     private static func prune(_ folder: URL) {
         let files = ((try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? [])
             .filter { $0.pathExtension == "snap" }
-            .sorted { (Double($0.deletingPathExtension().lastPathComponent) ?? 0) > (Double($1.deletingPathExtension().lastPathComponent) ?? 0) }
-        var seenDays = Set<Int>()
-        let now = Date().timeIntervalSince1970
-        var kept = 0
-        for file in files {
-            let time = Double(file.deletingPathExtension().lastPathComponent) ?? 0
-            let day = Int(time / 86_400)
-            let recent = now - time < 2 * 86_400
-            if (recent || !seenDays.contains(day)) && kept < keepSnapshots {
-                seenDays.insert(day)
-                kept += 1
-            } else {
-                try? FileManager.default.removeItem(at: file)
-            }
+        let keep = snapshotsToKeep(files.map { Double($0.deletingPathExtension().lastPathComponent) ?? 0 }, now: Date().timeIntervalSince1970)
+        for file in files where !keep.contains(Double(file.deletingPathExtension().lastPathComponent) ?? 0) {
+            try? FileManager.default.removeItem(at: file)
         }
+    }
+
+    /// The two newest, then one every three hours for two days, then one a day, and at most `keepSnapshots`. Scans minutes
+    /// apart say the same thing, and there's always room for the old ones that "the last 30 days" needs.
+    static func snapshotsToKeep(_ times: [Double], now: Double) -> Set<Double> {
+        var seen = Set<Int>()
+        var keep = Set<Double>()
+        for (at, time) in times.sorted(by: >).enumerated() {
+            let span: Double = now - time < 2 * 86_400 ? 10_800 : 86_400
+            // A three-hour stretch and a day never get the same number.
+            let stretch = Int(time / span) * (span == 86_400 ? -1 : 1)
+            if (seen.insert(stretch).inserted || at < 2) && keep.count < keepSnapshots { keep.insert(time) }
+        }
+        return keep
     }
 
     /// The most recent snapshot at least `olderThan` seconds before this scan, or, for `isLast`, the one before it.
@@ -164,7 +166,7 @@ enum TreeCache {
     }
 
     /// Changes whenever the layout of a saved scan does, so an old file is simply ignored.
-    private static let magic: UInt64 = 0x4852_4F4F_4D30_3033
+    private static let magic: UInt64 = 0x4852_4F4F_4D30_3035
 
     /// Folders smaller than this are folded into their parent in the saved copy. They wouldn't show on the ring.
     private static let smallest: UInt64 = 1 << 20
@@ -181,8 +183,10 @@ enum TreeCache {
         var keptOld: [UInt32] = []
         keptOld.reserveCapacity(n / 4)
         for i in 0..<n {
+            // Links take no space, but what they point at is still worth knowing: the other copy of a series, say.
+            let matters = tree.totals[i] >= smallest || tree.aliasTotals[i] >= smallest || nodes[i].aliasBytes >= smallest
             let keep = i == 0 || nodes[i].has(NodeFlag.synthetic) || nodes[i].has(NodeFlag.anchor)
-                || (tree.totals[i] >= smallest && newID[Int(nodes[i].parent)] != UInt32.max)
+                || (matters && newID[Int(nodes[i].parent)] != UInt32.max)
             if keep {
                 newID[i] = UInt32(keptOld.count)
                 keptOld.append(UInt32(i))
@@ -239,32 +243,57 @@ enum TreeCache {
                         freeNode: newID[Int(tree.free)], hiddenNode: newID[Int(tree.hidden)], scanSeconds: tree.scanSeconds, finishedAt: tree.finishedAt,
                         displayNames: display)
         guard let metaData = try? JSONEncoder().encode(meta) else { return }
-        var out = Data()
-        let header: [UInt64] = [magic, UInt64(count), UInt64(names.count), UInt64(metaData.count)]
-        header.withUnsafeBytes { out.append(contentsOf: $0) }
-        out.append(metaData)
-        outNodes.withUnsafeBytes { out.append(contentsOf: $0) }
-        outStats.withUnsafeBytes { out.append(contentsOf: $0) }
-        outTotals.withUnsafeBytes { out.append(contentsOf: $0) }
-        outFiles.withUnsafeBytes { out.append(contentsOf: $0) }
-        outAlias.withUnsafeBytes { out.append(contentsOf: $0) }
-        out.append(names)
-        try? out.write(to: url(facts.name), options: .atomic)
+        // Files with several paths, so what you'd get back is right from the first frame after a restart. With the smallest
+        // folders folded away, most of them now say the same thing.
+        var remapped = tree.links
+        for at in remapped.indices {
+            var dir = remapped[at].dir
+            while newID[Int(dir)] == UInt32.max { dir = nodes[Int(dir)].parent }
+            remapped[at].dir = newID[Int(dir)]
+            let file = remapped[at].file
+            remapped[at].file = file != 0 && newID[Int(file)] != UInt32.max ? newID[Int(file)] : 0
+        }
+        Accounting.merge(&remapped)
+        let outLinks = remapped
+        let header: [UInt64] = [magic, UInt64(count), UInt64(names.count), UInt64(metaData.count), UInt64(outLinks.count)]
+
+        // A piece at a time, so the file never has to be in memory as a whole. It only replaces the old one once it's all there.
+        let target = url(facts.name)
+        let temporary = target.appendingPathExtension("new")
+        guard FileManager.default.createFile(atPath: temporary.path, contents: nil), let file = try? FileHandle(forWritingTo: temporary) else { return }
+        var wrote = true
+        func write(_ bytes: UnsafeRawBufferPointer) {
+            guard wrote, bytes.count > 0 else { return }
+            do { try file.write(contentsOf: bytes) } catch { wrote = false }
+        }
+        header.withUnsafeBytes { write($0) }
+        metaData.withUnsafeBytes { write($0) }
+        outNodes.withUnsafeBytes { write($0) }
+        outStats.withUnsafeBytes { write($0) }
+        outTotals.withUnsafeBytes { write($0) }
+        outFiles.withUnsafeBytes { write($0) }
+        outAlias.withUnsafeBytes { write($0) }
+        names.withUnsafeBytes { write($0) }
+        outLinks.withUnsafeBytes { write($0) }
+        try? file.close()
+        if wrote, rename(temporary.path, target.path) == 0 { return }
+        try? FileManager.default.removeItem(at: temporary)
     }
 
     static func load(for facts: VolumeFacts) -> DiskTree? {
-        guard let data = try? Data(contentsOf: url(facts.name), options: .alwaysMapped), data.count > 32 else { return nil }
+        guard let data = try? Data(contentsOf: url(facts.name), options: .alwaysMapped), data.count > 40 else { return nil }
         return data.withUnsafeBytes { raw -> DiskTree? in
             let stored = raw.loadUnaligned(fromByteOffset: 0, as: UInt64.self)
             guard stored == magic else { return nil }
             let count = Int(raw.loadUnaligned(fromByteOffset: 8, as: UInt64.self))
             let nameBytes = Int(raw.loadUnaligned(fromByteOffset: 16, as: UInt64.self))
             let metaBytes = Int(raw.loadUnaligned(fromByteOffset: 24, as: UInt64.self))
-            var at = 32
+            let linkCount = Int(raw.loadUnaligned(fromByteOffset: 32, as: UInt64.self))
+            var at = 40
             guard at + metaBytes <= raw.count, count > 0, count < DiskTree.capacity else { return nil }
             guard let meta = try? JSONDecoder().decode(Meta.self, from: Data(bytes: raw.baseAddress! + at, count: metaBytes)) else { return nil }
             at += metaBytes
-            let needed = count * MemoryLayout<Node>.stride + count * DiskTree.statStride * 4 + count * 8 + count * 4 + count * 8 + nameBytes
+            let needed = count * MemoryLayout<Node>.stride + count * DiskTree.statStride * 4 + count * 8 + count * 4 + count * 8 + nameBytes + linkCount * MemoryLayout<LinkRecord>.stride
             guard at + needed <= raw.count else { return nil }
             let tree = DiskTree()
             func copy<T>(_ target: UnsafeMutablePointer<T>, _ items: Int) {
@@ -278,6 +307,10 @@ enum TreeCache {
             copy(tree.totalFiles, count)
             copy(tree.aliasTotals, count)
             copy(tree.names, nameBytes)
+            tree.links = [LinkRecord](unsafeUninitializedCapacity: linkCount) { buffer, used in
+                UnsafeMutableRawPointer(buffer.baseAddress!).copyMemory(from: raw.baseAddress! + at, byteCount: linkCount * MemoryLayout<LinkRecord>.stride)
+                used = linkCount
+            }
             tree.count = count
             tree.volumeName = meta.volumeName
             tree.capacityBytes = meta.capacity

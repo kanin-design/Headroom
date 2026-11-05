@@ -1,4 +1,5 @@
 import AppKit
+import IOSurface
 import Metal
 import QuartzCore
 import QuickLookUI
@@ -13,6 +14,12 @@ final class MapHostView: NSView {
     private var trackingArea: NSTrackingArea?
     private var downPoint: NSPoint?
     private var pinch: CGFloat = 0
+    private var framesDrawn = 0
+    private var surfaces: [IOSurfaceRef] = []
+    private var surfaceOnScreen: IOSurfaceRef?
+    private var surfacesAreResting = false
+    // kIOSurfacePurgeableNonVolatile, Volatile and Empty, which Swift doesn't get by name.
+    private static let mustBeKept: UInt32 = 0, mayBePurged: UInt32 = 1, isEmptied: UInt32 = 2
     private var engine: MapEngine? { model?.engine }
 
     override var isFlipped: Bool { true }
@@ -44,11 +51,13 @@ final class MapHostView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        guard window != nil else {
+        NotificationCenter.default.removeObserver(self, name: NSWindow.didChangeOcclusionStateNotification, object: nil)
+        guard let window else {
             link?.invalidate()
             link = nil
             return
         }
+        NotificationCenter.default.addObserver(self, selector: #selector(windowCameOrWent(_:)), name: NSWindow.didChangeOcclusionStateNotification, object: window)
         link?.invalidate()
         let l = displayLink(target: self, selector: #selector(step(_:)))
         l.add(to: .main, forMode: .common)
@@ -87,10 +96,20 @@ final class MapHostView: NSView {
         }
     }
 
+    override func viewDidEndLiveResize() {
+        super.viewDidEndLiveResize()
+        startAnimating()
+    }
+
     private func updateDrawableSize() {
         let scale = contentScale
         metalLayer.contentsScale = scale
-        metalLayer.drawableSize = CGSize(width: max(bounds.width * scale, 1), height: max(bounds.height * scale, 1))
+        let size = CGSize(width: max(bounds.width * scale, 1), height: max(bounds.height * scale, 1))
+        guard size != metalLayer.drawableSize else { return }
+        metalLayer.drawableSize = size
+        // The layer makes new ones in the new size, and nothing should be keeping the old ones around.
+        wakeSurfaces()
+        surfaces = []
     }
 
     func startAnimating() {
@@ -107,13 +126,23 @@ final class MapHostView: NSView {
         let dt = lastFrame == 0 ? 1.0 / 60 : now - lastFrame
         lastFrame = now
         let moving = engine.advance(dt: Float(dt))
-        drawFrame()
+        drawFrame(isLast: !moving)
         if !moving { link.isPaused = true }
     }
 
-    private func drawFrame() {
+    private func drawFrame(isLast: Bool = false) {
         guard let engine, let renderer = engine.renderer, bounds.width > 1, let drawable = metalLayer.nextDrawable(),
               let commands = renderer.commandQueue.makeCommandBuffer() else { return }
+        framesDrawn &+= 1
+        wakeSurfaces()
+        if let surface = drawable.texture.iosurface { note(surface) }
+        if isLast {
+            let frame = framesDrawn
+            // A moment after it's on screen, so moving the pointer from piece to piece doesn't keep going back and forth.
+            commands.addCompletedHandler { [weak self] _ in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { self?.restAfter(frame) }
+            }
+        }
         let headroom = window?.screen?.maximumExtendedDynamicRangeColorComponentValue ?? 1
         let u = engine.uniforms(viewport: metalLayer.drawableSize, scale: contentScale, headroom: headroom)
         renderer.encode(into: commands, target: drawable.texture, uniforms: u)
@@ -124,6 +153,58 @@ final class MapHostView: NSView {
         } else {
             commands.present(drawable)
             commands.commit()
+        }
+    }
+
+    /// Once the ring has stopped and its last frame is done, it holds on to nothing but what's on screen.
+    private func restAfter(_ frame: Int) {
+        guard frame == framesDrawn, link?.isPaused ?? true, !inLiveResize else { return }
+        engine?.renderer?.rest()
+        restSurfaces()
+    }
+
+    /// The drawing surfaces behind the one on screen, or all of them when the window can't be seen. Their memory can go and
+    /// they stay where they are, so there's nothing to make again when the ring next moves.
+    private func restSurfaces() {
+        surfacesAreResting = true
+        let isVisible = window?.occlusionState.contains(.visible) ?? false
+        for surface in surfaces where surface !== surfaceOnScreen || !isVisible {
+            IOSurfaceSetPurgeable(surface, Self.mayBePurged, nil)
+        }
+    }
+
+    private func wakeSurfaces() {
+        guard surfacesAreResting else { return }
+        surfacesAreResting = false
+        for surface in surfaces { IOSurfaceSetPurgeable(surface, Self.mustBeKept, nil) }
+    }
+
+    /// The layer doesn't say which surfaces it has, so they're noted as they come. It uses them in turn, and never more than this.
+    private func note(_ surface: IOSurfaceRef) {
+        surfaceOnScreen = surface
+        if let at = surfaces.firstIndex(where: { $0 === surface }) {
+            surfaces.remove(at: at)
+        } else if surfaces.count > metalLayer.maximumDrawableCount {
+            IOSurfaceSetPurgeable(surfaces.removeFirst(), Self.mustBeKept, nil)
+        }
+        surfaces.append(surface)
+    }
+
+    /// For a check: what happens when the Mac is short of memory and really takes what it's allowed to.
+    func loseWhatItMayLose() {
+        engine?.renderer?.rest()
+        engine?.renderer?.loseTargets()
+        for surface in surfaces where surface !== surfaceOnScreen { IOSurfaceSetPurgeable(surface, Self.isEmptied, nil) }
+        surfacesAreResting = true
+    }
+
+    @objc private func windowCameOrWent(_ note: Notification) {
+        if window?.occlusionState.contains(.visible) == true {
+            // What was on screen may be gone, so the ring is always drawn again.
+            wakeSurfaces()
+            startAnimating()
+        } else if link?.isPaused ?? true, framesDrawn > 0 {
+            restSurfaces()
         }
     }
 
@@ -163,7 +244,7 @@ final class MapHostView: NSView {
         guard let downPoint, let model else { return }
         let dx = event.locationInWindow.x - downPoint.x, dy = event.locationInWindow.y - downPoint.y
         guard dx * dx + dy * dy < 16 else { return }
-        model.click(at: pointInRing(event))
+        model.click(at: pointInRing(event), count: event.clickCount)
     }
 
     override func rightMouseDown(with event: NSEvent) {
@@ -186,11 +267,19 @@ final class MapHostView: NSView {
 
     override func keyDown(with event: NSEvent) {
         guard let model else { return super.keyDown(with: event) }
+        // In Free Up the keyboard steps through the list: nothing here does anything until you clean.
+        if model.lens == .freeUp, model.handlePlanKey(event) { return }
         switch event.keyCode {
         case 53, 51: model.goUp()                 // escape, delete
         case 49: model.quickLookHovered()         // space
         default: super.keyDown(with: event)
         }
+    }
+
+    // Hold Option to see the disk as it will be after the clean.
+    override func flagsChanged(with event: NSEvent) {
+        model?.setPreviewAfter(event.modifierFlags.contains(.option))
+        super.flagsChanged(with: event)
     }
 }
 

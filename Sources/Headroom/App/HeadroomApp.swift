@@ -4,6 +4,7 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.appearance = NSAppearance(named: .darkAqua)
+        Scanner.askForEnoughOpenFiles()
         if ScriptRunner.path != nil {
             // Checking itself: stay out of the way of whatever you're doing.
             NSApp.setActivationPolicy(.accessory)
@@ -15,6 +16,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+
+    /// A clean under way stops at the next safe point and writes down what it did, so it can still be undone.
+    @MainActor
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        let model = AppModel.shared
+        guard model.cleanProgress != nil else {
+            model.savePlan()
+            return .terminateNow
+        }
+        model.quitAfterClean = true
+        model.stopCleaning()
+        return .terminateLater
+    }
 }
 
 struct HeadroomApp: App {

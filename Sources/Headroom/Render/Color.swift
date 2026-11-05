@@ -142,6 +142,29 @@ enum Palette {
     /// For pieces that aren't part of the question being asked.
     static let quiet = Lab(lch: 0.27, 0.010, 265)
 
+    /// Each box in Free Up has a colour of its own, and its files wear it on the ring, so the list is the legend.
+    enum Box {
+        static let trash = Lab(lch: 0.93, 0.012, 250)
+        static let quick = Lab(lch: 0.80, 0.205, 150)
+        static let models = Lab(lch: 0.79, 0.135, 207)
+        static let leftovers = Lab(lch: 0.69, 0.165, 298)
+        static let installers = Lab(lch: 0.91, 0.155, 106)
+        static let watched = Lab(lch: 0.74, 0.165, 55)
+        static let apps = Lab(lch: 0.69, 0.155, 258)
+        static let left = Lab(lch: 0.63, 0.035, 255)
+        static let used = Lab(lch: 0.85, 0.19, 128)
+        static let android = Lab(lch: 0.72, 0.175, 350)
+        static let games = Lab(lch: 0.68, 0.185, 25)
+        static let repos = Lab(lch: 0.80, 0.09, 300)
+        static let films = Lab(lch: 0.82, 0.085, 10)
+        static let other = Lab(lch: 0.66, 0.015, 260)
+        static let series = Lab(lch: 0.85, 0.165, 92)
+        /// What you picked yourself on the ring.
+        static let hand = Lab(lch: 0.95, 0, 0)
+        /// A folder that's all one kind of thing has a colour for each thing, from all around the wheel.
+        static let spread: [Lab] = [apps, quick, series, android, models, watched, leftovers, games, used, films, repos, Lab(lch: 0.78, 0.13, 180), installers, Lab(lch: 0.76, 0.09, 250), Lab(lch: 0.86, 0.11, 150), Lab(lch: 0.8, 0.12, 70)]
+    }
+
     /// What can go, in Free Up. The surer it is, the greener and brighter.
     static func reclaim(_ tier: Tier) -> Lab {
         switch tier {

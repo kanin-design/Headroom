@@ -17,6 +17,8 @@ mkdir -p $APP/Contents/MacOS $APP/Contents/Resources
 # A new file, not an overwrite: writing into a signed binary that is running makes macOS kill that copy.
 rm -f $APP/Contents/MacOS/Headroom
 cp .build/release/Headroom $APP/Contents/MacOS/Headroom
+# Its names are only for debugging, and they're over half the file.
+strip -x $APP/Contents/MacOS/Headroom
 cp Resources/Info.plist $APP/Contents/Info.plist
 [ -f Resources/AppIcon.icns ] && cp Resources/AppIcon.icns $APP/Contents/Resources/AppIcon.icns
 cp Sources/Headroom/Render/Shaders.metal $APP/Contents/Resources/Shaders.metal

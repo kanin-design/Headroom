@@ -33,6 +33,18 @@ private let optionExtended: UInt64 = 0x20
 /// Every worker asks for whole directories' metadata in one system call (`getattrlistbulk`), adds small files to their
 /// folder without making a String, and keeps a node only for folders and for files of at least `promoteBytes`.
 final class Scanner: @unchecked Sendable {
+    /// A Mac app may only hold 256 open files unless it asks for more, and a scan's workers alone can keep nearly that many
+    /// folders open. Whatever else was open at launch would tip it over.
+    static func askForEnoughOpenFiles() {
+        var limit = rlimit()
+        guard getrlimit(RLIMIT_NOFILE, &limit) == 0 else { return }
+        let wanted = min(rlim_t(OPEN_MAX), limit.rlim_max)
+        if limit.rlim_cur < wanted {
+            limit.rlim_cur = wanted
+            setrlimit(RLIMIT_NOFILE, &limit)
+        }
+    }
+
     let tree: DiskTree
     let rules: RuleBook
     /// Below this, a file is only counted in its folder.
@@ -42,6 +54,7 @@ final class Scanner: @unchecked Sendable {
 
     private let nextNode = Atomic<UInt32>(0)
     private let nextName = Atomic<UInt64>(0)
+    private let nextLink = Atomic<UInt64>(0)
     private let filesSeen = Atomic<UInt64>(0)
     private let cancelled = Atomic<Bool>(false)
 
@@ -85,7 +98,10 @@ final class Scanner: @unchecked Sendable {
     private let stripes: UnsafeMutablePointer<Stripe>
     private static let stripeCount = 256
 
-    private var workerLinks: [[LinkRecord]] = []
+    /// Every path of a file that has several, until `Accounting` has settled them. Mapped, like the tree's own tables: each
+    /// worker fills its own stretch, nothing moves as it grows, and all of it goes back the moment it's let go of.
+    private var linkTable: UnsafeMutablePointer<LinkRecord>?
+    private static let linkCapacity = DiskTree.capacity
     private var homeID: UInt32 = 0
     private let libraryName = RuleBook.hash("Library")
 
@@ -93,6 +109,7 @@ final class Scanner: @unchecked Sendable {
         self.tree = tree
         self.rules = rules
         self.touchGuarded = touchGuarded
+        linkTable = vmAlloc(LinkRecord.self, Self.linkCapacity)
         stripes = .allocate(capacity: Self.stripeCount)
         stripes.initialize(repeating: Stripe(), count: Self.stripeCount)
         pthread_mutex_init(lock, nil)
@@ -100,6 +117,7 @@ final class Scanner: @unchecked Sendable {
     }
 
     deinit {
+        freeLinks()
         stripes.deinitialize(count: Self.stripeCount)
         stripes.deallocate()
         pthread_mutex_destroy(lock)
@@ -135,8 +153,8 @@ final class Scanner: @unchecked Sendable {
         node.ruleState = ruleState
         if flags & NodeFlag.directory != 0 && path != nil { node.flags |= NodeFlag.unread }
         if let path {
-            var copy = path
-            copy.withUTF8 { p in
+            // A path can come from a system call as a string with no bytes of its own yet. An array always has them.
+            Array(path.utf8).withUnsafeBufferPointer { p in
                 let offset = nextName.add(UInt64(p.count), ordering: .relaxed).oldValue
                 (tree.names + Int(offset)).update(from: p.baseAddress!, count: p.count)
                 node.nameOffset = UInt32(offset)
@@ -161,7 +179,6 @@ final class Scanner: @unchecked Sendable {
     /// Blocks until the whole volume has been read.
     func run(threads: Int) {
         workerCount = max(1, threads)
-        workerLinks = Array(repeating: [], count: workerCount)
         pthread_mutex_lock(lock)
         for id in seeds { push(Job(key: key(tree.nodes[Int(id)], urgent: false), id: id)) }
         seeds = []
@@ -179,8 +196,25 @@ final class Scanner: @unchecked Sendable {
         }
         group.wait()
         tree.count = nodesSoFar
-        tree.links = workerLinks.flatMap { $0 }
-        workerLinks = []
+        // What the scan needed only while it was reading goes as soon as it's done.
+        queue = []
+        for index in 0..<Self.stripeCount { stripes[index].seen = [] }
+    }
+
+    /// The links that were found, all together. The stretches the workers didn't finish are closed up.
+    func collectedLinks() -> UnsafeMutableBufferPointer<LinkRecord> {
+        guard let table = linkTable else { return UnsafeMutableBufferPointer(start: nil, count: 0) }
+        var count = 0
+        for at in 0..<min(Int(nextLink.load(ordering: .relaxed)), Self.linkCapacity) where table[at].key != 0 {
+            if count != at { table[count] = table[at] }
+            count += 1
+        }
+        return UnsafeMutableBufferPointer(start: table, count: count)
+    }
+
+    func freeLinks() {
+        if let table = linkTable { vmFree(table, Self.linkCapacity) }
+        linkTable = nil
     }
 
     /// From here on, read at low priority with a few threads.
@@ -302,7 +336,8 @@ final class Scanner: @unchecked Sendable {
         local.reserveCapacity(4096)
         var batch: [Job] = []
         var found: [Job] = []
-        var links: [LinkRecord] = []
+        var linkCursor = 0
+        var linkEnd = 0
         var cursor: UInt64 = 0
         var cursorEnd: UInt64 = 0
         var speed = quiet ? QOS_CLASS_UTILITY : QOS_CLASS_USER_INITIATED
@@ -349,7 +384,7 @@ final class Scanner: @unchecked Sendable {
             found.removeAll(keepingCapacity: true)
             var read = 0
             while let job = batch.popLast() {
-                scan(job.id, buffer, bufferSize, pathBuffer, &local, &links, &cursor, &cursorEnd, &opened)
+                scan(job.id, buffer, bufferSize, pathBuffer, &local, &linkCursor, &linkEnd, &cursor, &cursorEnd, &opened)
                 read += 1
                 for child in local {
                     let next = Job(key: key(tree.nodes[Int(child)], urgent: job.isUrgent), id: child)
@@ -382,7 +417,6 @@ final class Scanner: @unchecked Sendable {
                 helpers -= 1
             }
         }
-        workerLinks[index] = links
         pthread_mutex_unlock(lock)
     }
 
@@ -412,7 +446,11 @@ final class Scanner: @unchecked Sendable {
         }
 
         mutating func closeAll() {
-            for i in 0..<Self.size where fds[i] >= 0 { close(fds[i]) }
+            for i in 0..<Self.size where fds[i] >= 0 {
+                close(fds[i])
+                fds[i] = -1
+                ids[i] = UInt32.max
+            }
         }
     }
 
@@ -458,16 +496,32 @@ final class Scanner: @unchecked Sendable {
             at = cut + 1
         }
         let fd = openHere(current, at)
+        let failure = errno
         if current != base { close(current) }
+        errno = failure
+        return fd
+    }
+
+    /// The same, but running out of open files isn't a locked door. This worker lets go of what it's keeping, waits for
+    /// the others to do the same, and tries again, so that the folder isn't written off as one it wasn't allowed to read.
+    private func openFolderPatiently(_ id: UInt32, _ out: UnsafeMutablePointer<UInt8>, _ open: inout OpenFolders) -> Int32 {
+        var fd = openFolder(id, out, &open)
+        var tries = 0
+        while fd < 0, errno == EMFILE || errno == ENFILE, tries < 400 {
+            open.closeAll()
+            usleep(5_000)
+            fd = openFolder(id, out, &open)
+            tries += 1
+        }
         return fd
     }
 
     private func scan(_ id: UInt32, _ buffer: UnsafeMutableRawPointer, _ bufferSize: Int, _ pathBuffer: UnsafeMutablePointer<UInt8>,
-                      _ local: inout [UInt32], _ links: inout [LinkRecord], _ cursor: inout UInt64, _ cursorEnd: inout UInt64,
+                      _ local: inout [UInt32], _ linkCursor: inout Int, _ linkEnd: inout Int, _ cursor: inout UInt64, _ cursorEnd: inout UInt64,
                       _ opened: inout OpenFolders) {
         if cancelled.load(ordering: .relaxed) { return }
         let nodes = tree.nodes
-        let fd = openFolder(id, pathBuffer, &opened)
+        let fd = openFolderPatiently(id, pathBuffer, &opened)
         if fd < 0 {
             nodes[Int(id)].flags = (nodes[Int(id)].flags | NodeFlag.denied) & ~NodeFlag.unread
             nodes[Int(id)].fileCount = 0
@@ -497,9 +551,9 @@ final class Scanner: @unchecked Sendable {
         var newest: UInt32 = 0
         var firstChild = parent.firstChild
         var kindBytes = (UInt64(0), UInt64(0), UInt64(0), UInt64(0), UInt64(0), UInt64(0), UInt64(0), UInt64(0), UInt64(0), UInt64(0), UInt64(0))
-        var recent1: UInt64 = 0, recent7: UInt64 = 0, recent30: UInt64 = 0
+        var recent1: UInt64 = 0, recent7: UInt64 = 0, recent14: UInt64 = 0, recent30: UInt64 = 0
         let day: UInt32 = 86_400
-        let cut1 = now &- day, cut7 = now &- 7 * day, cut30 = now &- 30 * day
+        let cut1 = now &- day, cut7 = now &- 7 * day, cut14 = now &- 14 * day, cut30 = now &- 30 * day
 
         while true {
             let count = getattrlistbulk(fd, &list, buffer, bufferSize, optionNoFollow | optionExtended)
@@ -676,13 +730,14 @@ final class Scanner: @unchecked Sendable {
                 }
 
                 if linkKey != 0 {
-                    links.append(LinkRecord(key: linkKey, bytes: alloc, dir: id, file: fileNode, when: mod, kind: kind, counted: counted))
+                    addLink(LinkRecord(key: linkKey, bytes: alloc, dir: id, file: fileNode, when: mod, kind: kind, counted: counted), &linkCursor, &linkEnd)
                 }
 
                 if share != 0 {
                     withUnsafeMutableBytes(of: &kindBytes) { $0.assumingMemoryBound(to: UInt64.self)[Int(kind)] &+= share }
                     if mod >= cut30 {
                         recent30 &+= share
+                        if mod >= cut14 { recent14 &+= share }
                         if mod >= cut7 {
                             recent7 &+= share
                             if mod >= cut1 { recent1 &+= share }
@@ -703,6 +758,7 @@ final class Scanner: @unchecked Sendable {
         s[DiskTree.statRecent1] = Self.units(recent1)
         s[DiskTree.statRecent7] = Self.units(recent7)
         s[DiskTree.statRecent30] = Self.units(recent30)
+        s[DiskTree.statRecent14] = Self.units(recent14)
 
         nodes[Int(id)].fileCount = fileCount
         if newest > nodes[Int(id)].modTime || nodes[Int(id)].modTime == 0 { nodes[Int(id)].modTime = newest }
@@ -734,6 +790,19 @@ final class Scanner: @unchecked Sendable {
         node.nameOffset = UInt32(cursor)
         node.nameLength = UInt16(length)
         cursor &+= UInt64(length)
+    }
+
+    @inline(__always)
+    private func addLink(_ record: LinkRecord, _ cursor: inout Int, _ end: inout Int) {
+        if cursor == end {
+            let stretch = 4096
+            cursor = Int(nextLink.add(UInt64(stretch), ordering: .relaxed).oldValue)
+            end = cursor + stretch
+            // More than the table holds. The file is still counted, but what you'd get back may be a little off.
+            if end > Self.linkCapacity { cursor = 0; end = 0; return }
+        }
+        linkTable?[cursor] = record
+        cursor += 1
     }
 
     @inline(__always)

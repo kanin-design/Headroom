@@ -9,6 +9,7 @@ struct SegmentGPU {
     var colorFrom: SIMD4<Float>
     var colorTo: SIMD4<Float>
     var params: SIMD4<Float>
+    var plan: SIMD4<Float> = .zero      // planned at the start of the transition, planned at the end
 }
 
 struct UniformsGPU {
@@ -26,6 +27,12 @@ struct UniformsGPU {
     var hideScale: Float = 0
     var restSaturation: Float = 1
     var glowAtRest: Float = 1
+    var previewShare: Float = 0     // what the thing you're pointing at would add to that
+    var ghostCount: Float = 0       // how many colours it has
+    var previewColor: SIMD4<Float> = .zero
+    // Each colour's RGB, and in w where it ends, as a share of the whole. As long as `MapEngine.ghostSliceLimit`.
+    var ghostSlices: (SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>)
+        = (.zero, .zero, .zero, .zero, .zero, .zero, .zero, .zero, .zero, .zero, .zero, .zero)
 }
 
 /// Draws the ring. Pieces are one instanced quad each, shaped in the fragment shader, so the cost barely depends on
@@ -44,7 +51,6 @@ final class MapRenderer {
     private var instanceBuffer: MTLBuffer
     private var emphasisBuffer: MTLBuffer
     private(set) var instanceCount = 0
-    private var capacity = 16384
     private var emphasisSlot = 0
     private var emphasisOffset = 0
 
@@ -52,6 +58,7 @@ final class MapRenderer {
     private var glowTexture: MTLTexture?
     private var levels: [MTLTexture] = []
     private var renderSize: (Int, Int) = (0, 0)
+    private var isResting = false
 
     init?(device: MTLDevice? = nil, shaders url: URL? = nil) {
         guard let device = device ?? MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else { return nil }
@@ -93,8 +100,9 @@ final class MapRenderer {
               let down = pipeline("quad_vertex", "blur_down", format: Self.hdrFormat, blended: false),
               let up = pipeline("quad_vertex", "blur_up", format: Self.hdrFormat, blended: false),
               let comp = pipeline("quad_vertex", "composite", format: Self.outputFormat, blended: false),
-              let instances = device.makeBuffer(length: capacity * MemoryLayout<SegmentGPU>.stride, options: .storageModeShared),
-              let emphasis = device.makeBuffer(length: capacity * MemoryLayout<Float>.stride, options: .storageModeShared)
+              // Both are replaced by ones of the right size as soon as there's something to draw.
+              let instances = device.makeBuffer(length: MemoryLayout<SegmentGPU>.stride, options: .storageModeShared),
+              let emphasis = device.makeBuffer(length: 3 * MemoryLayout<Float>.stride, options: .storageModeShared)
         else { return nil }
         segmentPipeline = seg
         downPipeline = down
@@ -144,6 +152,27 @@ final class MapRenderer {
         levels = (1...6).map { texture(width >> $0, height >> $0) }
     }
 
+    /// The ring only redraws while something moves, and every frame starts these from nothing. So while it's still, the
+    /// system may have their memory back. Call this only once the last frame has finished drawing.
+    func rest() {
+        guard !isResting else { return }
+        isResting = true
+        for texture in [piecesTexture, glowTexture].compactMap({ $0 }) + levels { texture.setPurgeableState(.volatile) }
+    }
+
+    func loseTargets() {
+        for texture in [piecesTexture, glowTexture].compactMap({ $0 }) + levels { texture.setPurgeableState(.empty) }
+    }
+
+    private func wake() {
+        guard isResting else { return }
+        isResting = false
+        var lost = false
+        for texture in [piecesTexture, glowTexture].compactMap({ $0 }) + levels where texture.setPurgeableState(.nonVolatile) == .empty { lost = true }
+        // Their memory was taken, so they're made again. That only happens when the Mac is short of it.
+        if lost { piecesTexture = nil }
+    }
+
     private func pass(_ commands: MTLCommandBuffer, target: MTLTexture, also second: MTLTexture? = nil, clear: Bool = false, _ body: (MTLRenderCommandEncoder) -> Void) {
         let d = MTLRenderPassDescriptor()
         for (index, texture) in [target, second].compactMap({ $0 }).enumerated() {
@@ -159,6 +188,7 @@ final class MapRenderer {
 
     func encode(into commands: MTLCommandBuffer, target: MTLTexture, uniforms: UniformsGPU) {
         let width = target.width, height = target.height
+        wake()
         prepareTargets(width: width, height: height)
         guard let pieces = piecesTexture, let glow = glowTexture else { return }
         var u = uniforms

@@ -10,10 +10,16 @@ struct SidePanel: View {
             if model.searchActive && !model.searchText.isEmpty {
                 SearchPanel(model: model)
             } else {
-                switch model.lens {
-                case .map: MapPanel(model: model)
-                case .changes: ChangesPanel(model: model)
-                case .freeUp: FreeUpPanel(model: model)
+                VStack(spacing: 0) {
+                    Group {
+                        switch model.lens {
+                        case .map: MapPanel(model: model)
+                        case .changes: ChangesPanel(model: model)
+                        case .freeUp: FreeUpPanel(model: model)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    NextStepBar(model: model)
                 }
             }
         }
@@ -25,7 +31,7 @@ struct SidePanel: View {
 
 // MARK: Shared pieces
 
-private struct PanelTitle: View {
+struct PanelTitle: View {
     let title: String
     var subtitle: String? = nil
 
@@ -47,7 +53,7 @@ private struct PanelTitle: View {
     }
 }
 
-private struct SectionHeading: View {
+struct SectionHeading: View {
     let text: String
     var trailing: String? = nil
 
@@ -67,7 +73,7 @@ private struct SectionHeading: View {
 }
 
 /// A row in any list: name, where it is, how big, and a hairline showing its share.
-private struct NodeRow: View {
+struct NodeRow: View {
     let title: String
     let subtitle: String?
     let value: String
@@ -139,6 +145,7 @@ struct MapPanel: View {
                     header(tree, subject)
                     if subject == 0 { summary(tree) }
                     description(tree, subject)
+                    if model.selected == nil { WorthDoing(model: model) }
                     kinds(tree, subject)
                     if model.selected == nil { contents(tree) }
                     actions(tree, subject)
@@ -160,7 +167,7 @@ struct MapPanel: View {
         let free = tree.totals[Int(tree.free)]
         let fullness = 1 - Double(free) / Double(max(tree.capacityBytes, 1))
         let biggest = flatTop(tree).first
-        let canGo = model.wins.filter { $0.tier <= .rebuilds }.reduce(UInt64(0)) { $0 &+ $1.bytes }
+        let canGo = model.suggestions.everything.filter { $0.isQuick }.reduce(UInt64(0)) { $0 &+ $1.bytes }
         return VStack(alignment: .leading, spacing: 10) {
             if let biggest {
                 Text("Your disk is \(Int(fullness * 100))% full. \(model.displayName(biggest)) is the biggest thing \(tree.isPartial ? "found so far" : "on it"), at \(formatBytes(tree.totals[Int(biggest)])).")
@@ -174,7 +181,7 @@ struct MapPanel: View {
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "sparkles")
-                        Text(tree.isPartial ? "\(formatBytes(canGo)) so far can go without losing anything" : "About \(formatBytes(canGo)) can go without losing anything")
+                        Text(tree.isPartial ? "\(formatBytes(canGo)) so far you wouldn't miss" : "About \(formatBytes(canGo)) you wouldn't miss")
                     }
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Color(red: 0.5, green: 0.98, blue: 0.7))
@@ -220,7 +227,7 @@ struct MapPanel: View {
                 if story.sharedOut >= enough {
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(alignment: .firstTextBaseline, spacing: 4) {
-                            Text("You'd get back")
+                            Text("Removing this frees")
                                 .font(.system(size: 12, weight: .medium))
                                 .foregroundStyle(.white.opacity(0.65))
                             Text(formatBytes(story.reclaim))
@@ -316,7 +323,7 @@ struct MapPanel: View {
                             share: Double(tree.totals[Int(node)]) / biggest,
                             color: color(tree, node),
                             onHover: { inside in model.highlight(node: inside ? node : nil) },
-                            onTap: { open(tree, node) })
+                            onTap: { open(node) })
                 }
                 let own = tree.nodes[Int(focus)]
                 if model.focus != 0, own.bytes > 0 {
@@ -348,7 +355,9 @@ struct MapPanel: View {
         return Palette.color(Kind(rawValue: n.kind) ?? .other).swiftUI
     }
 
-    private func open(_ tree: DiskTree, _ node: UInt32) {
+    // Asked for when it's clicked. A row that held on to the tree it was drawn from would keep all of that tree in memory.
+    private func open(_ node: UInt32) {
+        guard let tree = model.tree else { return }
         let n = tree.nodes[Int(node)]
         if n.has(NodeFlag.directory) && n.firstChild != 0 {
             model.zoom(into: RingLayout.chainTail(tree: tree, node))
@@ -367,8 +376,8 @@ struct MapPanel: View {
                     Label("Reveal in Finder", systemImage: "folder")
                 }
                 .buttonStyle(.glass)
-                if !tree.isPartial, Safety.canTrash(path) {
-                    TrashButton(model: model, node: subject)
+                if Safety.canTrash(path) {
+                    PlanButton(model: model, node: subject)
                 }
             }
             .controlSize(.regular)
@@ -376,26 +385,20 @@ struct MapPanel: View {
     }
 }
 
-private struct TrashButton: View {
+private struct PlanButton: View {
     let model: AppModel
     let node: UInt32
-    @State private var asking = false
 
     var body: some View {
+        // Depends on the list, so it follows any change to it.
+        let _ = model.plan.items.count
+        let planned = model.isPlanned(node)
         Button {
-            asking = true
+            withAnimation(.snappy(duration: 0.2)) { model.togglePiece(node) }
         } label: {
-            Label("Move to Trash", systemImage: "trash")
+            Label(planned ? "Selected" : "Select it", systemImage: planned ? "checkmark.circle.fill" : "plus.circle")
         }
         .buttonStyle(.glass)
-        .confirmationDialog("Move \(model.displayName(node)) to the Trash?", isPresented: $asking) {
-            Button("Move to Trash", role: .destructive) { model.moveToTrash(node: node) }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            if let tree = model.tree {
-                Text("\(tree.friendlyPath(node))\n\(formatBytes(tree.totals[Int(node)])). You can put it back from the Trash until you empty it.")
-            }
-        }
     }
 }
 
@@ -492,7 +495,7 @@ struct ChangesPanel: View {
 
     @ViewBuilder
     private var rows: some View {
-        if let tree = model.tree {
+        if model.tree != nil {
             let biggest = Double(max(model.changeRows.first?.delta ?? 1, 1))
             VStack(spacing: 0) {
                 ForEach(model.changeRows) { row in
@@ -500,7 +503,7 @@ struct ChangesPanel: View {
                             color: Palette.heat(0.3 + 0.6 * Float(Double(row.delta) / biggest)).swiftUI,
                             valueColor: Palette.heat(0.68).swiftUI,
                             onHover: { inside in model.highlight(node: inside ? row.node : nil) },
-                            onTap: { open(tree, row.node) })
+                            onTap: { open(row.node) })
                 }
             }
             .padding(.horizontal, -8)
@@ -512,7 +515,8 @@ struct ChangesPanel: View {
         }
     }
 
-    private func open(_ tree: DiskTree, _ node: UInt32) {
+    private func open(_ node: UInt32) {
+        guard let tree = model.tree else { return }
         let n = tree.nodes[Int(node)]
         if n.has(NodeFlag.directory) && n.firstChild != 0 {
             model.zoom(into: RingLayout.chainTail(tree: tree, node))
@@ -523,268 +527,17 @@ struct ChangesPanel: View {
     }
 }
 
-// MARK: Free Up
-
-struct FreeUpPanel: View {
-    let model: AppModel
-    @State private var asking = false
-
-    private var tiers: [Tier] { [.noLoss, .rebuilds, .redownload, .yourCall] }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    header
-                    ForEach(tiers, id: \.self) { tier in
-                        let rows = model.wins.filter { $0.tier == tier }
-                        if !rows.isEmpty { section(tier, rows) }
-                    }
-                }
-                .padding(16)
-            }
-            .scrollEdgeEffectStyle(.soft, for: .all)
-            .scrollIndicators(.never)
-            if !model.ticked.isEmpty { footer }
-        }
-    }
-
-    private var header: some View {
-        let safe = model.wins.filter { $0.tier <= .rebuilds }.reduce(UInt64(0)) { $0 &+ $1.bytes }
-        let all = model.wins.reduce(UInt64(0)) { $0 &+ $1.bytes }
-        return VStack(alignment: .leading, spacing: 4) {
-            PanelTitle(title: "What can go")
-            HStack(alignment: .firstTextBaseline, spacing: 5) {
-                Text(formatBytes(safe))
-                    .font(.system(size: 26, weight: .semibold, design: .rounded).monospacedDigit())
-                    .foregroundStyle(Palette.reclaim(.rebuilds).swiftUI)
-                Text("without losing anything")
-                    .font(.system(size: 12.5, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.6))
-            }
-            Text(model.tree?.isPartial == true ? "Still reading, so this will grow." : "\(formatBytes(all)) if you count everything below.")
-                .font(.system(size: 11.5))
-                .foregroundStyle(.white.opacity(0.5))
-        }
-    }
-
-    private func section(_ tier: Tier, _ rows: [WinRow]) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 6) {
-                    Circle().fill(Palette.reclaim(tier).swiftUI).frame(width: 7, height: 7)
-                    Text(tier.title)
-                        .font(.system(size: 12.5, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.92))
-                    Spacer()
-                    Text(formatBytes(rows.reduce(UInt64(0)) { $0 &+ $1.bytes }))
-                        .font(.system(size: 11.5, weight: .semibold).monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.55))
-                }
-                Text(tier.promise)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.45))
-                    .padding(.leading, 13)
-            }
-            .padding(.horizontal, 8)
-            VStack(spacing: 0) {
-                ForEach(rows) { row in
-                    WinRowView(model: model, row: row)
-                }
-            }
-            .padding(.horizontal, -2)
-        }
-    }
-
-    private var footer: some View {
-        let rows = model.wins.filter { model.ticked.contains($0.id) }
-        let running = model.runningApps(for: rows)
-        return VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("You'd get back")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.65))
-                Spacer()
-                Text(formatBytes(model.tickedReclaim))
-                    .font(.system(size: 20, weight: .semibold, design: .rounded).monospacedDigit())
-                    .foregroundStyle(Palette.reclaim(.rebuilds).swiftUI)
-                    .contentTransition(.numericText(value: Double(model.tickedReclaim)))
-                    .animation(.snappy(duration: 0.25), value: model.tickedReclaim)
-            }
-            Button {
-                asking = true
-            } label: {
-                Label(model.isTrashing ? model.trashProgress : (model.tree?.isPartial == true ? "Finishing the scan first" : "Move \(rows.count == 1 ? "1 item" : "\(rows.count) items") to Trash"), systemImage: "trash")
-                    .frame(maxWidth: .infinity)
-            }
-            .disabled(model.isTrashing || model.tree?.isPartial == true)
-            .buttonStyle(.glassProminent)
-            .tint(Color(red: 0.14, green: 0.62, blue: 0.40))
-            .controlSize(.large)
-            .confirmationDialog("Move \(rows.count == 1 ? "this" : "these \(rows.count) items") to the Trash?", isPresented: $asking) {
-                if running.isEmpty {
-                    Button("Move to Trash", role: .destructive) { model.moveTickedToTrash() }
-                } else {
-                    Button("Quit \(running.compactMap(\.localizedName).joined(separator: ", ")) and Move to Trash", role: .destructive) {
-                        running.forEach { $0.terminate() }
-                        Task {
-                            // Give them a moment to close before touching their files.
-                            for _ in 0..<40 where running.contains(where: { !$0.isTerminated }) {
-                                try? await Task.sleep(for: .milliseconds(150))
-                            }
-                            model.moveTickedToTrash()
-                        }
-                    }
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                let folders = rows.reduce(0) { $0 + $1.nodes.count }
-                Text(rows.prefix(6).map(\.title).joined(separator: ", ") + (rows.count > 6 ? ", and \(rows.count - 6) more" : "")
-                     + (folders > rows.count ? " (\(folders.formatted()) folders)" : "")
-                     + ". You can put them back from the Trash until you empty it.")
-            }
-        }
-        .padding(16)
-        .background(.white.opacity(0.03))
-    }
-}
-
-private struct WinRowView: View {
-    let model: AppModel
-    let row: WinRow
-    @State private var isHovered = false
-
-    var body: some View {
-        let isTicked = model.ticked.contains(row.id)
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(alignment: .top, spacing: 9) {
-                leading(isTicked)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(row.title)
-                        .font(.system(size: 12.5, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.92))
-                        .lineLimit(2)
-                        .truncationMode(.middle)
-                    if !row.subtitle.isEmpty {
-                        Text(row.subtitle)
-                            .font(.system(size: 10.5))
-                            .foregroundStyle(.white.opacity(0.45))
-                            .lineLimit(2)
-                            .truncationMode(.middle)
-                    }
-                }
-                Spacer(minLength: 4)
-                VStack(alignment: .trailing, spacing: 0) {
-                    Text(formatBytes(row.bytes))
-                        .font(.system(size: 12, weight: .medium).monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.85))
-                    if row.paperBytes > row.bytes, Double(row.bytes) < Double(row.paperBytes) * 0.9 {
-                        Text("looks like \(formatBytes(row.paperBytes))")
-                            .font(.system(size: 9.5).monospacedDigit())
-                            .foregroundStyle(Color(red: 1, green: 0.74, blue: 0.42).opacity(0.85))
-                    }
-                }
-            }
-            if isHovered {
-                Text(row.detail)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.62))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.leading, 27)
-                    .transition(.opacity)
-            }
-            extra
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(.white.opacity(isTicked ? 0.09 : (isHovered ? 0.06 : 0))))
-        .contentShape(Rectangle())
-        .onHover { inside in
-            withAnimation(.easeOut(duration: 0.14)) { isHovered = inside }
-            if inside { model.highlight(nodes: row.nodes) } else { model.highlight(nodes: []) }
-        }
-        .onTapGesture {
-            if row.action == .trash {
-                withAnimation(.snappy(duration: 0.2)) { model.toggle(row) }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func leading(_ isTicked: Bool) -> some View {
-        switch row.action {
-        case .trash:
-            ZStack {
-                Circle()
-                    .strokeBorder(.white.opacity(isTicked ? 0 : 0.32), lineWidth: 1.2)
-                    .background(Circle().fill(isTicked ? Palette.reclaim(.rebuilds).swiftUI : .clear))
-                if isTicked {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 9.5, weight: .heavy))
-                        .foregroundStyle(.black.opacity(0.8))
-                }
-            }
-            .frame(width: 18, height: 18)
-        case .restart: symbol("arrow.clockwise.circle")
-        case .softwareUpdate: symbol("arrow.down.circle")
-        case .openTrash: symbol("trash.circle")
-        case .command: symbol("terminal")
-        case .info: symbol("info.circle")
-        }
-    }
-
-    private func symbol(_ name: String) -> some View {
-        Image(systemName: name)
-            .font(.system(size: 15, weight: .medium))
-            .foregroundStyle(.white.opacity(0.65))
-            .frame(width: 18, height: 18)
-    }
-
-    @ViewBuilder
-    private var extra: some View {
-        switch row.action {
-        case .softwareUpdate:
-            Button("Open Software Update") { model.openSoftwareUpdate() }
-                .buttonStyle(.glass)
-                .controlSize(.small)
-                .padding(.leading, 27)
-        case .openTrash:
-            Button("Open Trash") { model.openTrash() }
-                .buttonStyle(.glass)
-                .controlSize(.small)
-                .padding(.leading, 27)
-        case .command:
-            if let command = row.command {
-                Button {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(command, forType: .string)
-                    model.message = nil
-                } label: {
-                    HStack(spacing: 5) {
-                        Text(command)
-                            .font(.system(size: 10.5, design: .monospaced))
-                        Image(systemName: "doc.on.doc")
-                            .font(.system(size: 9.5))
-                    }
-                    .foregroundStyle(.white.opacity(0.75))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(.white.opacity(0.07)))
-                }
-                .buttonStyle(.plain)
-                .padding(.leading, 27)
-                .help("Copy this command")
-            }
-        default:
-            EmptyView()
-        }
-    }
-}
-
 // MARK: Search
 
 struct SearchPanel: View {
     let model: AppModel
+
+    private func open(_ node: UInt32) {
+        guard let tree = model.tree else { return }
+        let n = tree.nodes[Int(node)]
+        if n.has(NodeFlag.directory) && n.firstChild != 0 { model.zoom(into: RingLayout.chainTail(tree: tree, node)) }
+        else { model.zoom(into: n.parent); model.selected = node }
+    }
 
     var body: some View {
         if let tree = model.tree {
@@ -800,10 +553,7 @@ struct SearchPanel: View {
                                     share: Double(tree.totals[Int(node)]) / biggest,
                                     color: Palette.color(tree.dominantKind(node)).swiftUI,
                                     onHover: { inside in if inside { model.highlight(node: node) } else { model.highlight(nodes: Array(model.searchResults.prefix(400))) } },
-                                    onTap: {
-                                        if n.has(NodeFlag.directory) && n.firstChild != 0 { model.zoom(into: RingLayout.chainTail(tree: tree, node)) }
-                                        else { model.zoom(into: n.parent); model.selected = node }
-                                    })
+                                    onTap: { open(node) })
                         }
                     }
                     .padding(.horizontal, -8)

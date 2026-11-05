@@ -22,7 +22,9 @@ They also get the numbers wrong in ways that matter:
 |---|---|---|
 | "How full am I, and what's biggest?" | One glance | The ring is already there when the window opens, with free space in the middle and the biggest things named around it |
 | "I had 41 GB yesterday. What happened?" | What changed | **Changes** lights up what grew and dims the rest, with a ranked list and a free-space history |
-| "I need 20 GB now, without breaking anything" | Safe wins, ranked by risk | **Free Up** lights up what can go. Tick things and the free arc grows as a preview before anything happens |
+| "I need 20 GB now, without breaking anything" | Safe wins, ranked by risk | **Free Up** is a short stack of boxes, with what you'd miss least on top. One click selects a whole box, and the ring shows it before anything happens |
+| "Which of these do I still need?" | Evidence, not a guess | Each suggestion says what's known: last opened, watched in Plex, last commit, no sign of use for 7 months |
+| "Wait, I want to keep that" | To change my mind | Nothing happens until you press Clean. One click unticks anything, and Keep stops suggesting it. After that it's in the Trash, and Undo puts it back |
 | "What is this folder? Can I delete it?" | A plain answer | Hover: name, size, what it is, what you'd really get back |
 | "Why doesn't it add up?" | The whole disk | The ring always sums to the real disk: macOS, swap, updates, hidden data, free |
 | "What's inside here?" | To go deeper | Click to zoom, click the middle to go back. Reveal in Finder, Quick Look |
@@ -32,15 +34,15 @@ They also get the numbers wrong in ways that matter:
 1. **The map is the interface.** It fills the window. Everything else floats on top in glass, and the
    window should still look complete with the panel closed.
 2. **Colour means something.** In **Map**, it shows what belongs together. In **Changes**, it's heat. In
-   **Free Up**, it's what can go. One geometry, three questions: changing the question recolours the
+   **Free Up**, each box in the list has a colour and its files wear it, so the list is the legend. One geometry, three questions: changing the question recolours the
    same picture, so you never lose your place.
 3. **Name things directly.** Big things are labelled on the map, so you don't need a legend or a hover
    to read it.
 4. **Sizes are true.** Hard links and clones count once. Every size on screen is space on the disk.
 5. **Free space is a real shape.** It's a visible part of the ring, and it's what grows when you clean
    up. That's the reward.
-6. **Never delete.** Everything goes to the Trash. The Trash stays visible on the map until you empty
-   it, because space isn't back until then.
+6. **Nothing happens until you say so.** Ticks only select. Clean moves what's selected to the Trash, which stays visible on the map until you empty it, because space
+   isn't back until then. Emptying is always its own click.
 7. **No waiting.** The window opens with a picture you can use. With a saved scan that's the whole map,
    refreshed quietly behind it. Without one, it's what the disk itself reports, and the big things arrive
    within about a second. Hover answers within the frame.
@@ -73,15 +75,106 @@ sunburst in the reference:
 - **Changes:** what grew. Uses scan history when there is any, and file dates on the first run, so it's
   useful on day one. Keeps a free-space history, including system volumes, which is how a downloaded
   update gets caught.
-- **Free Up:** grouped by what it costs you:
-  - **No loss:** restart for swap and temp files, install a waiting update, empty the Trash.
-  - **Rebuilds itself:** caches, `node_modules`, build folders.
-  - **Download again:** AI models, games, simulators.
-  - **Your call:** big, old files nobody has touched.
+- **Free Up:** a short stack of boxes, each one kind of thing, with what you'd miss least on top: the Trash, caches and
+  build output, AI models, project leftovers, installers, episodes you've watched, apps you don't seem to use, and so on
+  down to series you haven't watched. Biggest doesn't mean first: the order is what you'd miss least, then biggest.
 
-  Groups span folders, so "`node_modules` in 14 projects" lights up all 14 places at once. Those name-based rules
-  only apply inside your own project folders. The same name inside an app, Homebrew or a tool's install is part of
-  something that would stop working without it.
+  Boxes span folders, so `node_modules` in 14 projects lights up all 14 places at once. Name-based rules only apply inside
+  your own folders. The same name inside an app, Homebrew or a tool's install is part of something that would stop
+  working without it.
+
+## Easy, with full control
+
+Someone opening a disk tool is asking "what can I get rid of that I won't miss?" So Headroom estimates regret, not
+just size. It asks four things about anything on the disk: what is it, can it come back, are you done with it, and what
+would you really get back? The sentence on screen comes from the answers, and it states facts: "6 episodes, 8.9 GB each,
+nearly 5x your other series. Opened Nov 1. Not watched in Plex."
+
+**One set of data, shown two ways.** A section is a list of files and folders. The panel shows its name, size and what
+it's made of, and the ring shows where those files are. Pointing or ticking in one shows in the other, because there's
+only one list. Point at a box and its files light up, the names around the ring change to them, and a dashed wedge shows
+how much free space it would add. Point at the ring and the box lights up. What's too small to draw, or is drawn as part
+of something bigger, lights the piece that holds it, so pointing at something always shows.
+
+**One tick, or as much control as you want.**
+
+1. **A box.** One click selects the whole section. What you set up by hand, such as a model you put in `~/LLM`, or what
+   you'd be sorry to lose, stays out of that click unless it's all there is.
+2. **A piece of its bar.** Each piece is one thing, to scale. Point at it to see what it is, and click to take just that.
+3. **Inside a box.** Open it to see each thing, with its evidence, Keep and Move. Open a thing to tick single files.
+4. **The ring.** A click on any piece selects it, and a double-click opens it, as in the Finder. What isn't part of any
+   box appears at the top as Picked by hand, so it can be seen and taken back.
+
+**The ring shows what's selected.** Solid stays, striped goes, with a thin bright edge. What's too thin to see gets a tick
+outside the ring, so 25 slivers of `node_modules` still show where they are. The Free wedge grows in the colours of what's
+making room, in the order of the list, and the middle number rolls to the "after" figure. Hold Option and the ring
+animates to how the disk will actually look.
+
+**The list follows the zoom.** There's no scope control: the boxes are always for the picture on screen. On the whole disk,
+Project leftovers is one box. Inside a video folder, it opens up into old versions, scene renders and review stills. In a
+folder that's all one kind of thing, such as `~/LLM`, each thing is its own box. Ticks carry across, so what you tick
+inside a folder shows as partly ticked from the whole disk.
+
+**One button, in one place.** It does what the ticks say: clean, then empty. A safe cleanup is the same spot pressed twice,
+with the ring showing what each press did.
+
+**Checks run as you tick.** Each selected thing is looked at as soon as the ticking stops, and again just before anything
+moves. Is it still there? Is something running from it, or holding a file open in it? Has it changed since you selected it?
+Is the other disk plugged in, with room? Whatever needs a look shows at the top of the panel with a reason and a fix (Quit
+Chrome, Check again, Clean it anyway). Whatever isn't ready stays ticked, and everything else goes ahead.
+
+**You can see it go.** Pieces leave as they're moved, and the Trash piece grows, labelled and striped. Free space
+doesn't change yet, and the panel says so. Emptying moves the Trash piece into the Free wedge, and the panel then reports
+what the disk really gave back.
+
+**Undo is real.** Everything keeps its place in the Trash on record, even across a restart, so Undo puts it all back
+and brings the list back too, ready to fix and run again.
+
+### How it knows
+
+The cheapest thing that can answer the question wins. Nothing leaves the Mac, and it's all read-only.
+
+| Source | What it tells | |
+|---|---|---|
+| The scan | `S05E04` in a name, `.app`, `.git`, numbered frames, how big and how recently changed | Instant |
+| An app's own files | Signs of use: settings, caches, saved state, data folders | Far better coverage than Spotlight alone |
+| Spotlight | Last opened, with a real use count | A new file gets a date just from being indexed, and few files have one |
+| Other apps' records | Plex's watched state and library folders, Transmission's torrents, Steam's last played, git's state | Only if they're there |
+| Saved scans of other disks | "All 6 are also on your backup drive", even with it unplugged | By name and size |
+
+A file's last-read date is no help: macOS only updates it on the first read after the file changes, so it can't say whether
+a model is still in use. A model says when it arrived, and nothing claims it's old.
+
+Everything that decides what's in the boxes reads names, sizes and kinds that are already in memory. A whole disk takes
+milliseconds, so it can run on every change. Apple's on-device model was tried for this and left out: it took up to 25
+seconds a folder, and it rated a folder of finished films as the likeliest thing to delete.
+
+"Big" means big for you: compared with the rest of your own library, because a remux is big on purpose.
+
+### Rules it keeps
+
+- Never macOS, or anything running. An entry in Applications that's a link into the system is part of macOS.
+- Never the only copy of your own work: a project goes on the list only with no uncommitted work, every branch pushed,
+  and nothing in a stash.
+- Recent use keeps something out of the automatic picks, and it can still be suggested with that fact shown. Hiding it
+  would be a guess.
+- If any sign says an app was used lately, it isn't suggested. The mistake this can make is staying quiet.
+- A file with another path gives nothing back until that path goes too, and the row says so. A torrent's copy goes with it,
+  unless it finished in the last 7 days and may still be sharing. Then it has its own tick, and the box offers to include
+  them all. Any other copy is only ever yours to tick.
+- Leftovers go by name and contents. "test", "work" or "old" only count inside a project, in a folder that's mostly
+  pictures, video or sound, so a folder of code called `test` stays. Anything named saved, keep, master, gold or best stays,
+  and so do other copies of a project in `.claude/worktrees`, because only git can say what's in those.
+- What only its own app can manage safely, such as a Photos library or Mail, gets an explanation and a button to that
+  app, never a tick.
+- Moving to another disk copies, reads the copy back and compares every byte, and only then sends the original to the
+  Trash. It never replaces a file that's already there. If it stops halfway, the original hasn't been touched.
+- Caches and build output only holds what really comes back by itself: build output with its recipe next to it, caches of apps
+  that are closed, and tools it knows. macOS's own caches are never offered, and a model cache only model by model,
+  because it also holds your login.
+- An app goes to the Trash through the Finder, because macOS keeps apps to itself and only the Finder can move all of them.
+  macOS asks once whether Headroom may ask the Finder, and the Finder asks for your password when an app isn't yours to
+  move. The panel says so first. Whatever doesn't go stays on the list with the reason and a Try again button.
 
 ## Truthful accounting
 
@@ -131,6 +224,16 @@ Underneath:
   folders and big files, not every file.
 - Metal draws each piece from a single analytic shape, so the frame cost doesn't depend on how complex the map is.
   Nothing is drawn when nothing moves, so it uses no power at rest.
+- While the ring is still, its drawing memory is marked as free to take: the glow textures, and every surface but the
+  one on screen (or all of them when the window can't be seen). Nothing is released or made again, so the next frame
+  costs the same as any other, and if the Mac does take it, the ring simply draws again.
+- A file with several paths costs one record per path, 512,000 of them here. Files in the same folders say the same
+  thing, so those are merged into 67,000, with their bytes added up. Every question asked of them gets the same answer,
+  with a seventh as many records to read.
+- While a scan runs, a picture is a copy of the whole tree, so there's never a second one waiting behind one nobody has
+  looked at yet. Whatever only the scan needs goes as soon as it ends.
+- At launch, other apps' records are read once. The second pass, after the scan, only reads what a saved map couldn't
+  have known.
 
 Measured on this Mac, an M5 MacBook Air with 2.1 million files and a 494 GB disk, without Full Disk Access:
 
@@ -143,8 +246,13 @@ Measured on this Mac, an M5 MacBook Air with 2.1 million files and a 494 GB disk
 | With a saved scan: the map on screen | The saved scan loads in under 10 ms |
 | With a saved scan: the refresh | 14.5 s at low priority, on about 1.2 cores |
 | ⌘R, at full power | 6.9 s, against 40 s for `du` on the same data, and the scan also collects kinds, dates, links and clones |
-| At rest | 0.0% CPU, 170–220 MB of memory |
-| During a scan | About 260 MB of memory at peak |
+| At rest, window on screen | 0.0% CPU, 170–190 MB of memory |
+| At rest, window hidden or covered | 0.0% CPU, 120–160 MB of memory |
+| While the ring moves | About 220–260 MB more for drawing, which goes back about a quarter of a second after it stops |
+| A refresh, while it reads | Under 150 MB of memory, about 400 MB at the very end if the ring moves |
+| First launch, at the peak | About 480–520 MB of memory, with a copy of the tree for each new picture |
+| The saved scan on disk | 6 MB, and at most about 4 MB of snapshots |
+| The app | 3.5 MB |
 | Building the ring | Under 1 ms |
 
 The scan's limit is APFS itself: about 15 µs per file in the kernel, whichever attributes are requested. Folders

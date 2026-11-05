@@ -26,14 +26,18 @@ struct RingGeometry: Equatable {
     var windowHeight: CGFloat
 
     static let panelWidth: CGFloat = 348
+    /// Free Up holds more: evidence, ticks and the plan.
+    static let wideWidth: CGFloat = 420
 
-    static func make(size: CGSize, panelOpen: Bool) -> RingGeometry {
-        let panel = panelOpen ? panelWidth + 28 : 0
+    static func panelWidth(for lens: Lens) -> CGFloat { lens == .freeUp ? wideWidth : panelWidth }
+
+    static func make(size: CGSize, panelOpen: Bool, lens: Lens = .map) -> RingGeometry {
+        let panel = panelOpen ? panelWidth(for: lens) + 28 : 0
         let usable = max(size.width - panel, 320)
         let top: CGFloat = 60, bottom: CGFloat = 46
         let height = max(size.height - top - bottom, 240)
         // Room at the sides for names around the ring.
-        let side: CGFloat = usable > 1040 ? 168 : (usable > 820 ? 132 : 40)
+        let side: CGFloat = usable > 1040 ? 168 : (usable > 900 ? 150 : (usable > 820 ? 132 : 40))
         let radius = max(min(height / 2 - 12, (usable - 2 * side) / 2), 120)
         return RingGeometry(center: CGPoint(x: usable / 2, y: top + height / 2), radius: radius, mapWidth: usable, windowHeight: size.height)
     }
@@ -69,9 +73,9 @@ final class AppModel {
     var accessCardDismissed = false
 
     // Where you are
-    var focus: UInt32 = 0
+    var focus: UInt32 = 0 { didSet { if oldValue != focus { refreshShownRows() } } }
     /// Where you've been, so Back returns to the picture you came from.
-    @ObservationIgnored private var trail: [UInt32] = []
+    @ObservationIgnored var trail: [UInt32] = []
     var lens: Lens = .map
     var panelOpen = true
     var hover: HoverInfo?
@@ -79,15 +83,81 @@ final class AppModel {
     var ring = RingGeometry(center: .zero, radius: 0, mapWidth: 0, windowHeight: 0)
 
     // Free Up
-    var wins: [WinRow] = []
-    var ticked: Set<String> = []
-    var tickedReclaim: UInt64 = 0
-    var trashBytesAdded: UInt64 = 0
+    /// Everything that could go, sorted by what it is. The panel and the ring are both drawn from this.
+    var suggestions = Suggestions()
+    /// The same, for the picture on screen.
+    var boxes: [Box] = []
+    /// Every suggestion in those boxes, and what can't be ticked.
+    var shownRows: [WinRow] = []
+    var openBoxes: Set<String> = []
+    /// What you're pointing at in the panel, so the ring and its middle can say so too.
+    var pointing: Pointing?
+    /// What's under the pointer on the ring, so the panel can say so too.
+    var hotBox: String?
+    var hotRow: String?
     var message: String?
-    var isTrashing = false
-    var trashProgress = ""
     /// The link story behind whatever the panel is showing.
     var story: LinkStory?
+
+    // Planned actions
+    var plan = PlanList()
+    /// What you'd really get back.
+    var planBytes: UInt64 = 0
+    var planBytesByItem: [String: UInt64] = [:]
+    var rowStates: [String: TickState] = [:]
+    var checks: [String: ItemCheck] = [:]
+    var isChecking = false
+    var cleanProgress: CleanProgress?
+    var afterClean: AfterClean?
+    /// A few words beside the ring, for when a click can't do what you asked.
+    var tip: String?
+    var expandedRow: String?
+    var previewingAfter = false
+
+    @ObservationIgnored var planNodes: [String: [UInt32]] = [:]
+    @ObservationIgnored var planExcluded: [UInt32] = []
+    @ObservationIgnored var planSet: NodeSet?
+    @ObservationIgnored var planBack: NodeSet?
+    @ObservationIgnored var nodeOfPath: [String: UInt32] = [:]
+    /// You unticked these, so they don't tick themselves again.
+    @ObservationIgnored var refusedRows: Set<String> = []
+    /// Each thing's colour on the ring for the picture on screen, and the same by the map's numbering.
+    @ObservationIgnored var rowColours: [String: Lab] = [:]
+    @ObservationIgnored var mapColours: [SIMD3<Float>?] = []
+    /// Which box in the panel a thing is in.
+    @ObservationIgnored var boxOfRow: [String: String] = [:]
+    @ObservationIgnored var checkTask: Task<Void, Never>?
+    @ObservationIgnored var pointingTask: Task<Void, Never>?
+    /// Every suggestion on screen with its parts spelled out, and which one a node belongs to.
+    @ObservationIgnored var flatRows: [WinRow] = []
+    /// Which scan's node numbers the suggestions use.
+    @ObservationIgnored var winsScanID: UUID?
+    @ObservationIgnored var quitAfterClean = false
+    @ObservationIgnored var scanWasStopped = false
+
+    @ObservationIgnored var rowOfNode: [UInt32: Int] = [:]
+    @ObservationIgnored var checkGeneration = 0
+    @ObservationIgnored var effectGeneration = 0
+    @ObservationIgnored var tipTask: Task<Void, Never>?
+    @ObservationIgnored var focusBeforeExpanding: UInt32?
+    @ObservationIgnored var cleanStop = LockedFlag()
+    @ObservationIgnored var takenOut: [(node: UInt32, bytes: UInt64, tree: DiskTree, heldBy: UInt32?, heldBytes: UInt64)] = []
+    @ObservationIgnored var clearedItems: [PlanItem] = []
+    @ObservationIgnored var rescanWhenBack = false
+    @ObservationIgnored var cachedAfterPlan: AfterPlan?
+    @ObservationIgnored var facts: Facts = .none
+    @ObservationIgnored var factsRunning = false
+    @ObservationIgnored var factsWanted = false
+    @ObservationIgnored var factsOfSavedMap = false
+    @ObservationIgnored var isReadingOtherDisk = false
+    @ObservationIgnored var lastPlanItems: [PlanItem] = []
+    @ObservationIgnored var pendingCleaned: [CleanedThing] = []
+    /// Why things didn't go in the last clean, by planned thing. It shows on the list until you say try again.
+    @ObservationIgnored var cleanFailures: [String: CheckProblem] = [:]
+    @ObservationIgnored var lastCleanFrame = Date.distantPast
+    @ObservationIgnored var lastCleanSave = Date.distantPast
+    var otherCopies: [String: OtherCopy] = [:]
+    var cursorRow: String?
 
     // Changes
     var changeWindow: ChangeWindow = .days(7)
@@ -107,12 +177,12 @@ final class AppModel {
 
     @ObservationIgnored let engine = MapEngine()
     @ObservationIgnored let rules = RuleBook(homePath: NSHomeDirectory())
-    @ObservationIgnored private var activeScan: DiskScan?
+    @ObservationIgnored var activeScan: DiskScan?
     @ObservationIgnored private var labelTask: Task<Void, Never>?
     @ObservationIgnored private var reclaimTask: Task<Void, Never>?
-    @ObservationIgnored private var reclaim: ReclaimMap?
+    @ObservationIgnored var reclaim: ReclaimMap?
     @ObservationIgnored private var changes: ChangeMap?
-    @ObservationIgnored private var scanGeneration = 0
+    @ObservationIgnored var scanGeneration = 0
     @ObservationIgnored private var didStart = false
     /// A tree on its way to the screen, so a scan starting now knows the ring won't be empty.
     @ObservationIgnored private var treeOnItsWay = false
@@ -125,8 +195,8 @@ final class AppModel {
     @ObservationIgnored private let colourMemory = ColourMemory()
     @ObservationIgnored var forceTouchGuarded = false
     @ObservationIgnored var cacheLoadMilliseconds = 0.0
-    @ObservationIgnored private var lastHoverIndex: Int?
-    @ObservationIgnored private var lastPointer: (angle: Float, radius: Float)?
+    @ObservationIgnored var lastHoverIndex: Int?
+    @ObservationIgnored var lastPointer: (angle: Float, radius: Float)?
     @ObservationIgnored var nameCache: [UInt32: String] = [:]
     @ObservationIgnored weak var mapView: MapHostView?
 
@@ -135,6 +205,9 @@ final class AppModel {
     func start() {
         guard !didStart else { return }
         didStart = true
+        // A scripted run has to know this before its first scan, whichever gets going first.
+        if ScriptRunner.path != nil { forceTouchGuarded = !CommandLine.arguments.contains("--locked") }
+        loadPlan()
         hasFullAccess = DiskScan.hasFullDiskAccess()
         volumes = VolumeFacts.available()
         volume = volumes.first
@@ -146,6 +219,7 @@ final class AppModel {
             cacheLoadMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - launch.uptimeNanoseconds) / 1e6
         }
         scan()
+        readOtherDisksQuietly()
     }
 
     /// Reads the disk. With no map on screen, you get a picture from the first frame that fills in as the scan goes, and it
@@ -159,6 +233,8 @@ final class AppModel {
             }
             return
         }
+        // Nothing replaces the map while things are leaving it. The disk is read again when that's done.
+        if cleanProgress != nil || afterClean?.isEmptying == true { return }
         guard let volume else { return }
         guard let facts = VolumeFacts.read(path: volume.mountPath) else { return }
         self.volume = facts
@@ -178,10 +254,14 @@ final class AppModel {
 
         Thread.detachNewThread { [weak self] in
             Thread.current.qualityOfService = .userInitiated
+            // A picture is a copy of the whole tree, so there's never a second one waiting behind one nobody has looked at yet.
+            let pictureWaiting = LockedFlag()
             scan.run(mode: mode, tick: {
                 let files = Int(scan.scanner.filesSoFar)
-                let picture = showPictures ? scan.picture() : nil
+                let picture = showPictures && !pictureWaiting.value ? scan.picture() : nil
+                if picture != nil { pictureWaiting.value = true }
                 DispatchQueue.main.async {
+                    if picture != nil { pictureWaiting.value = false }
                     guard let self, self.scanGeneration == generation else { return }
                     self.scanFiles = files
                     if let picture { self.show(picture) }
@@ -192,7 +272,10 @@ final class AppModel {
             // would show the wrong map on the next launch and spoil the next comparison.
             let complete = !scan.scanner.wasCancelled && VolumeFacts.read(path: facts.mountPath) != nil
             let snapshot = complete ? History.record(tree: tree, facts: facts) : []
-            if complete { TreeCache.save(tree, for: facts) }
+            if complete {
+                TreeCache.save(tree, for: facts)
+                DiskIndex.save(tree)
+            }
             DispatchQueue.main.async {
                 guard let self, self.scanGeneration == generation else { return }
                 guard complete else {
@@ -222,6 +305,7 @@ final class AppModel {
             tree = picture
             nameCache = [:]
             treeVersion += 1
+            resolvePlanSynchronously(in: picture)
             relayout(.appear)
             workOutInsights(from: picture)
             return
@@ -243,14 +327,22 @@ final class AppModel {
             return
         }
         if current.scanID != picture.scanID {
-            // The scan started over, so its folders have new numbers.
+            // The scan started over, so its folders have new numbers, and nothing that holds the old ones can stay.
             focus = 0
             trail = []
             selected = nil
             nameCache = [:]
+            suggestions = Suggestions()
+            boxes = []
+            winsScanID = nil
+            flatRows = []
+            rowOfNode = [:]
+            shownRows = []
+            otherCopies = [:]
         }
         tree = picture
         treeVersion += 1
+        if !plan.isEmpty { resolvePlanSynchronously(in: picture) }
         refreshLive()
         workOutInsights(from: picture)
     }
@@ -278,9 +370,11 @@ final class AppModel {
         insightsRunning = true
         let rules = self.rules
         let window = changeWindow
+        let running = runningBundleIDs()
+        let facts = self.facts
+        let kept = plan.kept
         Task.detached(priority: .utility) {
-            let map = ReclaimMap(tree: picture, rules: rules)
-            let wins = Wins.build(tree: picture, rules: rules)
+            let (wins, map) = Self.suggest(tree: picture, rules: rules, running: running, facts: facts, kept: kept)
             let change = ChangeMap(tree: picture, window: window)
             let rows = change.rows(tree: picture, rules: rules)
             await MainActor.run {
@@ -305,7 +399,7 @@ final class AppModel {
     }
 
     /// Stops a running scan and starts again.
-    private func restartScan(hurry: Bool = false) {
+    func restartScan(hurry: Bool = false) {
         activeScan?.scanner.cancel()
         isScanning = false
         activeScan = nil
@@ -318,10 +412,12 @@ final class AppModel {
         if HiddenNames.isOn { HiddenNames.apply(to: newTree) }
         let rules = self.rules
         let window = changeWindow
+        let running = runningBundleIDs()
+        let facts = self.facts
+        let kept = plan.kept
         treeOnItsWay = true
         Task.detached(priority: .userInitiated) {
-            let map = ReclaimMap(tree: newTree, rules: rules)
-            let wins = Wins.build(tree: newTree, rules: rules)
+            let (wins, map) = Self.suggest(tree: newTree, rules: rules, running: running, facts: facts, kept: kept)
             let change = ChangeMap(tree: newTree, window: window)
             let rows = change.rows(tree: newTree, rules: rules)
             await MainActor.run {
@@ -341,7 +437,12 @@ final class AppModel {
                 self.tree = newTree
                 self.nameCache = [:]
                 self.treeVersion += 1
+                self.resolvePlanSynchronously(in: newTree)
                 self.adopt(map, wins, change, rows)
+                // A saved map leaves out the smallest folders, so a finished scan is worth a second look.
+                var isFresh = true
+                if case .appear = transition { isFresh = false }
+                self.gatherFacts(for: newTree, afresh: isFresh)
                 if sameScan {
                     self.refreshLive()
                     self.refreshStory()
@@ -352,15 +453,38 @@ final class AppModel {
         }
     }
 
-    private func adopt(_ map: ReclaimMap, _ newWins: [WinRow], _ change: ChangeMap, _ rows: [ChangeRow]) {
+    private func adopt(_ map: ReclaimMap, _ new: Suggestions, _ change: ChangeMap, _ rows: [ChangeRow]) {
         reclaim = map
-        wins = newWins
-        ticked = ticked.intersection(Set(newWins.map(\.id)))
+        suggestions = new
+        winsScanID = tree?.scanID
         changes = change
         changeRows = rows
         changeTotal = change.usesHistory ? change.total : rows.reduce(0) { $0 + $1.delta }
         changeCaption = change.caption
-        updateTickedReclaim()
+        refreshShownRows()
+        tickTheTrash()
+        refreshPlanNumbers()
+    }
+
+    /// What could go in this tree, and which suggestion each folder belongs to. One piece of work, so the two always match.
+    nonisolated static func suggest(tree: DiskTree, rules: RuleBook, running: Set<String>, facts: Facts, kept: [PlanList.KeptThing]) -> (Suggestions, ReclaimMap) {
+        let wins = Wins.build(tree: tree, rules: rules, running: running, facts: facts)
+        let built = Sections.build(from: wins, tree: tree, facts: facts)
+        return (built, reclaimMap(tree: tree, built, kept: kept))
+    }
+
+    nonisolated static func reclaimMap(tree: DiskTree, _ suggestions: Suggestions, kept: [PlanList.KeptThing]) -> ReclaimMap {
+        let ids = Set(kept.map(\.id))
+        return ReclaimMap(tree: tree, rows: suggestions.rows.filter { !ids.contains($0.id) })
+    }
+
+    func runningBundleIDs() -> Set<String> {
+        var running = Set<String>()
+        for app in NSWorkspace.shared.runningApplications {
+            if let id = app.bundleIdentifier { running.insert(id) }
+            if let name = app.localizedName { running.insert(Wins.runningKey(name: name)) }
+        }
+        return running
     }
 
     func switchVolume(_ facts: VolumeFacts) {
@@ -369,11 +493,25 @@ final class AppModel {
         isScanning = false
         volume = facts
         tree = nil
+        // The plan's node numbers belong to the disk that was on screen, and so does everything worked out from them.
+        planNodes = [:]
+        planExcluded = []
+        planSet = nil
+        planBack = nil
+        nodeOfPath = [:]
+        cachedAfterPlan = nil
+        flatRows = []
+        rowOfNode = [:]
+        winsScanID = nil
+        otherCopies = [:]
+        takenOut = []
+        expandedRow = nil
         focus = 0
         trail = []
         selected = nil
-        wins = []
-        ticked = []
+        suggestions = Suggestions()
+        boxes = []
+        shownRows = []
         changeRows = []
         labels = []
         engine.apply(RingLayout(), .settle)
@@ -385,6 +523,7 @@ final class AppModel {
     /// A disk was plugged in or removed. If it was the one on screen, go back to the startup disk.
     func volumesChanged() {
         volumes = VolumeFacts.available()
+        readOtherDisksQuietly()
         guard let volume, !volumes.contains(where: { $0.mountPath == volume.mountPath }), let boot = volumes.first else { return }
         switchVolume(boot)
     }
@@ -401,23 +540,26 @@ final class AppModel {
         }
         guard !isScanning else { return }
         let age = Date().timeIntervalSince(tree.finishedAt)
-        if age > 900 || trashBytesAdded > 0 {
-            trashBytesAdded = 0
+        if age > 900 || rescanWhenBack {
+            rescanWhenBack = false
             scan()
         }
+        if lens == .freeUp, !plan.isEmpty { runChecks() }
     }
 
     // MARK: Insights, worked out off the main thread
 
     /// Numbers changed within the same tree, after moving something to the Trash.
-    private func rebuildInsights() {
+    func rebuildInsights() {
         guard let tree else { return }
         let rules = self.rules
         let version = treeVersion
         let window = changeWindow
+        let running = runningBundleIDs()
+        let facts = self.facts
+        let kept = plan.kept
         Task.detached(priority: .userInitiated) {
-            let map = ReclaimMap(tree: tree, rules: rules)
-            let wins = Wins.build(tree: tree, rules: rules)
+            let (wins, map) = Self.suggest(tree: tree, rules: rules, running: running, facts: facts, kept: kept)
             let change = ChangeMap(tree: tree, window: window)
             let rows = change.rows(tree: tree, rules: rules)
             await MainActor.run {
@@ -453,9 +595,11 @@ final class AppModel {
     }
 
     /// The picture for the folder in view.
-    private func drawing(_ tree: DiskTree) -> RingLayout {
-        var layout = RingLayout.build(tree: tree, focus: focus, colorer: colorer(tree))
+    func drawing(_ tree: DiskTree, after: AfterPlan? = nil) -> RingLayout {
+        let planned = plannedTest()
+        var layout = RingLayout.build(tree: tree, focus: focus, colorer: colorer(tree), planned: after == nil ? planned : nil, after: after)
         if lens == .map { layout.calmTinyPieces(viewBytes: tree.totals[Int(focus)]) }
+        if after == nil { layout.addMarks(ringMarks(), tree: tree) }
         return layout
     }
 
@@ -470,8 +614,7 @@ final class AppModel {
             return Lenses.changeColorer(tree: tree, changes: changes)
         case .freeUp:
             guard let reclaim else { return Lenses.kindColorer(tree: tree) }
-            let chosen = wins.filter { ticked.contains($0.id) }.flatMap(\.nodes)
-            return Lenses.reclaimColorer(tree: tree, map: reclaim, rules: rules, ticked: chosen)
+            return Lenses.reclaimColorer(map: reclaim, colours: mapColours, planned: plannedTest())
         }
     }
 
@@ -485,7 +628,7 @@ final class AppModel {
         if moved { placeLabels(after: 0.12) }
     }
 
-    private func placeLabels(after delay: Double) {
+    func placeLabels(after delay: Double) {
         labelTask?.cancel()
         withAnimation(.easeOut(duration: 0.1)) { labelsVisible = false }
         labelTask = Task { [weak self] in
@@ -496,7 +639,7 @@ final class AppModel {
         }
     }
 
-    private func makeLabels() -> [MapLabel] {
+    func makeLabels() -> [MapLabel] {
         guard let tree else { return [] }
         return LabelPlacer.place(layout: engine.layout, ring: ring, lens: lens, tree: tree, model: self)
     }
@@ -574,10 +717,20 @@ final class AppModel {
         guard let index, let tree, index < engine.layout.pieces.count else {
             engine.setEmphasis(primary: nil, related: [])
             hover = nil
+            hotBox = nil
+            hotRow = nil
             return
         }
         let layout = engine.layout
         let p = layout.pieces[index]
+        // The list says so too: one set of data, shown two ways.
+        if lens == .freeUp, let at = reclaim?.rowIndex(of: p.node), let id = reclaim?.rowIDs[at] {
+            hotRow = id
+            hotBox = boxOfRow[id]
+        } else {
+            hotRow = nil
+            hotBox = nil
+        }
         var chain: [Int] = []
         var a = p.parent
         while a >= 0 {
@@ -613,7 +766,9 @@ final class AppModel {
             else if tree.isStillGrowing(p.node) { share = "so far" }
         }
         var note = ""
-        if lens == .changes, let changes {
+        if lens == .freeUp, !p.isSmaller, !p.isMark, !n.has(NodeFlag.free), tree.path(p.node) != nil {
+            note = isPlanned(p.node) ? "Selected. Click to take it out." : "Click to select it. Double-click to open."
+        } else if lens == .changes, let changes {
             let delta = changes.value(of: p.node)
             if delta > 0 { note = "+\(formatBytes(UInt64(delta))) \(changes.shortCaption)" }
             else if delta < 0 { note = "−\(formatBytes(UInt64(-delta))) \(changes.shortCaption)" }
@@ -641,25 +796,15 @@ final class AppModel {
         setHover(nil)
     }
 
-    /// Lights up many things at once: every node_modules on the disk, or everything of one kind.
+    /// Lights up many things at once: every node_modules on the disk. Whatever is too small to draw lights what holds it.
     func highlight(nodes: [UInt32]) {
         guard let tree, !nodes.isEmpty else { setHover(nil); engine.setEmphasis(primary: nil, related: []); return }
         lastHoverIndex = nil
         hover = nil
-        let layout = engine.layout
-        let set = NodeSet(nodes, in: tree)
-        var ranges: [Range<Int>] = []
-        var i = 0
-        while i < layout.pieces.count {
-            let p = layout.pieces[i]
-            if !p.isSmaller, set.contains(p.node) {
-                ranges.append(i..<Int(p.end))
-                i = Int(p.end)
-            } else {
-                i += 1
-            }
-        }
-        engine.setEmphasis(primary: nil, related: ranges)
+        hotBox = nil
+        hotRow = nil
+        let lit = engine.layout.lit(by: nodes, tree: tree)
+        engine.setEmphasis(primary: nil, related: lit.full, ancestors: lit.holding)
     }
 
     func highlight(kind: Kind?) {
@@ -673,7 +818,7 @@ final class AppModel {
         engine.setEmphasis(primary: nil, related: ranges)
     }
 
-    func click(at polar: (angle: Float, radius: Float)?) {
+    func click(at polar: (angle: Float, radius: Float)?, count: Int = 1) {
         guard let polar else { return }
         if polar.radius < RingLayout.hole {
             goUp()
@@ -683,13 +828,18 @@ final class AppModel {
             selected = nil
             return
         }
-        click(piece: index)
+        click(piece: index, count: count)
     }
 
-    func click(piece index: Int) {
+    func click(piece index: Int, count: Int = 1) {
         guard let tree, index < engine.layout.pieces.count else { return }
         let p = engine.layout.pieces[index]
         let n = tree.nodes[Int(p.node)]
+        // In Free Up a click means "this too", and a double-click opens it, as in the Finder.
+        if lens == .freeUp, !n.has(NodeFlag.free), !p.isSmaller {
+            if count == 1 || count == 2 { togglePiece(p.node) }
+            if count < 2 { return }
+        }
         if n.has(NodeFlag.free) {
             setLens(.freeUp)
             return
@@ -769,164 +919,66 @@ final class AppModel {
         lens = new
         selected = nil
         panelOpen = true
-        engine.setCalm(new == .map)
+        pointing = nil
+        hotBox = nil
+        hotRow = nil
+        engine.setCalm(new == .map ? 1 : (new == .freeUp ? 0.55 : 0))
+        engine.setPreview(0, color: .zero)
+        refreshGhost()
+        if new == .freeUp, !plan.isEmpty { runChecks() }
         relayout(.recolor, labelDelay: 0.2)
         // Free Up and Changes want the whole picture, so now you're waiting on the scan.
         if tree?.isPartial == true, !scanIsHurrying { activeScan?.scanner.setHurry(new != .map) }
     }
 
-    // MARK: Free Up
+    // MARK: Taking things out of the picture
 
-    func toggle(_ row: WinRow) {
-        if ticked.contains(row.id) { ticked.remove(row.id) } else { ticked.insert(row.id) }
-        updateTickedReclaim()
-        if lens == .freeUp, let tree {
-            let layout = drawing(tree)
-            engine.apply(layout, .recolor)
-            lastHoverIndex = nil
-        }
-    }
-
-    private func updateTickedReclaim() {
-        guard let tree else { return }
-        let chosen = wins.filter { ticked.contains($0.id) }
-        let nodes = chosen.flatMap(\.nodes)
-        let simple = chosen.reduce(UInt64(0)) { $0 &+ $1.bytes }
-        tickedReclaim = simple
-        engine.setGhost(Float(simple) / Float(max(tree.capacityBytes, 1)))
-        guard !nodes.isEmpty else { return }
-        // Removing several things together can free more than the sum: files that only link to each other.
-        Task.detached(priority: .userInitiated) {
-            let exact = Accounting.reclaimable(nodes, in: tree)
-            await MainActor.run {
-                guard self.wins.filter({ self.ticked.contains($0.id) }).flatMap(\.nodes) == nodes else { return }
-                self.tickedReclaim = exact
-                self.engine.setGhost(Float(exact) / Float(max(tree.capacityBytes, 1)))
-            }
-        }
-    }
-
-    /// Apps that should be closed before their files are touched.
-    func runningApps(for rows: [WinRow]) -> [NSRunningApplication] {
-        var out: [NSRunningApplication] = []
-        for row in rows {
-            guard let id = row.bundleID else { continue }
-            out += NSRunningApplication.runningApplications(withBundleIdentifier: id)
-        }
-        return out
-    }
-
-    /// Moves what's ticked to the Trash, off the main thread: thousands of folders take a moment, and the app stays
-    /// usable. Nothing is deleted, and it can all be put back from there.
-    func moveTickedToTrash() {
-        guard let tree, !isTrashing else { return }
-        let rows = wins.filter { ticked.contains($0.id) && $0.action == .trash }
-        var items: [(UInt32, String?)] = []
-        var skipped = 0
-        for row in rows {
-            for node in row.nodes {
-                // A group of small caches can't ask each app to quit, so it leaves the ones in use alone.
-                if row.id == Wins.smallerCachesID, !NSRunningApplication.runningApplications(withBundleIdentifier: tree.name(node)).isEmpty {
-                    skipped += 1
-                    continue
-                }
-                items.append((node, tree.path(node)))
-            }
-        }
-        isTrashing = true
-        trashProgress = "Moving to the Trash"
-        Task.detached(priority: .userInitiated) {
-            var moved: [UInt32] = []
-            var failed = 0
-            for (at, item) in items.enumerated() {
-                guard let path = item.1, Safety.canTrash(path) else { failed += 1; continue }
-                do {
-                    var result: NSURL?
-                    try FileManager.default.trashItem(at: URL(fileURLWithPath: path), resultingItemURL: &result)
-                    moved.append(item.0)
-                } catch {
-                    failed += 1
-                }
-                if at % 25 == 0 {
-                    let text = "Moving \(at + 1) of \(items.count) to the Trash"
-                    await MainActor.run { self.trashProgress = text }
-                }
-            }
-            let done = moved
-            let failures = failed
-            await MainActor.run { self.finishTrash(moved: done, failed: failures, skipped: skipped, in: tree) }
-        }
-    }
-
-    private func finishTrash(moved: [UInt32], failed: Int, skipped: Int, in movedFrom: DiskTree) {
-        isTrashing = false
-        ticked = []
-        tickedReclaim = 0
-        engine.setGhost(0)
-        // A scan may have finished while this ran. Its numbers are for another tree, so read the disk again instead.
-        guard tree === movedFrom else {
-            message = moved.isEmpty ? nil : "That's in the Trash now. Empty it to get the space back."
-            restartScan()
-            return
-        }
-        var bytes: UInt64 = 0
-        for node in moved { bytes &+= takeOut(node, from: movedFrom) }
-        trashBytesAdded &+= bytes
-        var text = moved.isEmpty ? "" : "\(formatBytes(bytes)) is in the Trash. Empty it to get the space back."
-        if failed > 0 { text += (text.isEmpty ? "" : " ") + "\(failed) couldn't be moved." }
-        if skipped > 0 { text += (text.isEmpty ? "" : " ") + "\(skipped) left alone, because their apps are open." }
-        message = text.isEmpty ? nil : text
-        treeVersion += 1
-        rebuildInsights()
-        relayout(.settle)
-        // A scan that's running may already have read those files, and would bring them back.
-        if isScanning, !moved.isEmpty { restartScan() }
-    }
-
-    /// Takes something out of the picture. If you were looking inside it, you step back to the folder that held it.
-    private func takeOut(_ node: UInt32, from tree: DiskTree) -> UInt64 {
+    /// Takes something out of the picture, and into the Trash piece. If you were looking inside it, you step back to the
+    /// folder that held it. What another copy still holds stays on the disk, and shows up there.
+    func takeOut(_ node: UInt32, from tree: DiskTree, trueBytes: UInt64? = nil) -> UInt64 {
         let bytes = tree.totals[Int(node)]
+        let real = min(trueBytes ?? bytes, bytes)
         if focus != 0, tree.isInside(focus, node) {
             focus = tree.nodes[Int(node)].parent
             trail = []
         }
         if let chosen = selected, tree.isInside(chosen, node) { selected = nil }
+        var stillHeld: UInt32?
+        if real &+ 1_000_000 < bytes { stillHeld = Accounting.otherCopies(of: [node], in: tree).folders.first }
         tree.remove(node)
-        if let trash = trashNode(in: tree) { tree.add(bytes, to: trash) }
+        if let trash = trashNode(in: tree) { tree.add(real, to: trash) }
+        let heldBy = stillHeld ?? tree.hidden
+        tree.add(bytes &- real, to: heldBy)
+        takenOut.append((node, real, tree, heldBy, bytes &- real))
         // Nothing left to show here.
         while focus != 0, tree.totals[Int(focus)] == 0 { focus = tree.nodes[Int(focus)].parent }
-        return bytes
+        return real
     }
 
-    private func trashNode(in tree: DiskTree) -> UInt32? {
-        guard tree.home != 0 else { return nil }
-        var c = tree.nodes[Int(tree.home)].firstChild
-        while c != 0 {
-            if tree.nodes[Int(c)].nameLength == 6, tree.name(c) == ".Trash" { return c }
-            c = tree.nodes[Int(c)].nextSibling
+    func trashNode(in tree: DiskTree) -> UInt32? {
+        func child(of parent: UInt32, named name: String) -> UInt32? {
+            var c = tree.nodes[Int(parent)].firstChild
+            while c != 0 {
+                if tree.name(c) == name { return c }
+                c = tree.nodes[Int(c)].nextSibling
+            }
+            return nil
+        }
+        if tree.home != 0 { return child(of: tree.home, named: ".Trash") }
+        // On any other disk it's a folder at the top of the disk.
+        for top in tree.children(0) where tree.nodes[Int(top)].has(NodeFlag.anchor) {
+            if let trashes = child(of: top, named: ".Trashes") { return trashes }
         }
         return nil
     }
 
-    func moveToTrash(node: UInt32) {
-        guard let tree, let path = tree.path(node), Safety.canTrash(path) else { return }
-        do {
-            var result: NSURL?
-            try FileManager.default.trashItem(at: URL(fileURLWithPath: path), resultingItemURL: &result)
-            let bytes = takeOut(node, from: tree)
-            trashBytesAdded &+= bytes
-            message = "\(formatBytes(bytes)) is in the Trash. Empty it to get the space back."
-            treeVersion += 1
-            rebuildInsights()
-            relayout(.settle)
-            if isScanning { restartScan() }
-        } catch {
-            message = "That couldn't be moved to the Trash."
-        }
-    }
-
     func openTrash() {
         NSWorkspace.shared.open(URL(fileURLWithPath: NSHomeDirectory() + "/.Trash"))
+    }
+
+    func openApp(bundleID: String) {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { return }
+        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
     }
 
     func openSoftwareUpdate() {
@@ -985,15 +1037,16 @@ final class AppModel {
             if let path = tree.path(p.node) { QuickLook.shared.show(URL(fileURLWithPath: Self.visiblePath(path))) }
         }
         add("Copy Path", "doc.on.doc") { self.copyPath(p.node) }
-        if !tree.isPartial, let path = tree.path(p.node), Safety.canTrash(path) {
+        if let path = tree.path(p.node), Safety.canTrash(path) {
             menu.addItem(.separator())
-            add("Move to Trash…", "trash") {
-                let alert = NSAlert()
-                alert.messageText = "Move \(self.displayName(p.node)) to the Trash?"
-                alert.informativeText = "\(tree.friendlyPath(p.node))\n\(formatBytes(tree.totals[Int(p.node)])). You can put it back from the Trash until you empty it."
-                alert.addButton(withTitle: "Move to Trash")
-                alert.addButton(withTitle: "Cancel")
-                if alert.runModal() == .alertFirstButtonReturn { self.moveToTrash(node: p.node) }
+            // The map can change while a menu is open, and these numbers only mean something in this one.
+            if isPlanned(p.node) {
+                add("Unselect it", "minus.circle") { if self.tree === tree { self.togglePiece(p.node) } }
+            } else {
+                add("Select it", "plus.circle") { if self.tree === tree { self.togglePiece(p.node) } }
+            }
+            for disk in otherDisks(for: path) {
+                add("Move to \(disk.name)", "externaldrive") { if self.tree === tree { self.planMove(node: p.node, to: disk) } }
             }
         }
         return menu
@@ -1054,6 +1107,14 @@ final class QuickLook: NSObject, QLPreviewPanelDataSource {
 
 /// The last check before anything moves. Only your own files, never the folders that hold everything together.
 enum Safety {
+    /// An app's own settings live in a folder nothing else is allowed to touch.
+    static func canUninstall(_ path: String) -> Bool {
+        if canTrash(path) { return true }
+        if HiddenNames.isOn { return false }
+        let visible = path.hasPrefix("/System/Volumes/Data/") ? String(path.dropFirst("/System/Volumes/Data".count)) : path
+        return visible.hasPrefix(NSHomeDirectory() + "/Library/Preferences/") && visible.hasSuffix(".plist")
+    }
+
     static func canTrash(_ path: String) -> Bool {
         if HiddenNames.isOn { return false }
         let visible = path.hasPrefix("/System/Volumes/Data/") ? String(path.dropFirst("/System/Volumes/Data".count)) : path
@@ -1065,8 +1126,18 @@ enum Safety {
             home + "/Library/Containers", home + "/Library/Group Containers", home + "/.config", home + "/.ssh", home + "/dev",
         ]
         if protected.contains(visible) { return false }
-        for keep in ["/.Trash/", "/.ssh/", "/.gnupg/", "/Library/Keychains", "/Library/Preferences/", "/Library/Mail/", "/Library/Messages/"]
-        where visible.hasPrefix(home + keep) { return false }
+        for keep in ["/.Trash", "/.ssh", "/.gnupg", "/Library/Keychains", "/Library/Preferences", "/Library/Mail", "/Library/Messages", "/Library/Safari",
+                     "/Library/Mobile Documents", "/Library/CloudStorage", "/Library/Calendars", "/Library/Reminders", "/Library/Accounts", "/Library/Cookies",
+                     "/Music/Music"]
+        where PathMath.isInside(visible, home + keep) { return false }
+        // A package is one thing to the Finder. What's inside isn't yours to pick apart, and a library of photos is only
+        // safe in the hands of its own app.
+        let parts = visible.split(separator: "/")
+        for (at, part) in parts.enumerated() {
+            if part.hasSuffix(".photoslibrary") || part.hasSuffix(".musiclibrary") || part.hasSuffix(".tvlibrary") || part.hasSuffix(".imovielibrary") { return false }
+            if at < parts.count - 1, part.hasSuffix(".app") || part.hasSuffix(".framework") || part.hasSuffix(".fcpbundle") || part.hasSuffix(".logicx")
+                || part.hasSuffix(".sparsebundle") || part.hasSuffix(".xcarchive") || part.hasSuffix(".band") { return false }
+        }
         if visible.hasPrefix(home + "/") { return true }
         if visible.hasPrefix("/Applications/") { return true }
         if visible.hasPrefix("/Volumes/") { return visible.split(separator: "/").count > 2 }

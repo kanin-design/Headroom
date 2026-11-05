@@ -17,6 +17,7 @@ enum NodeFlag {
     static let unread: UInt16 = 1 << 12      // waiting to be read
     static let incomplete: UInt16 = 1 << 13  // something inside it hasn't been read yet
     static let shyLinks: UInt16 = 1 << 14    // a link found here doesn't claim the file's bytes
+    static let gone: UInt16 = 1 << 15        // moved to the Trash since this was read
 }
 
 /// One folder, or one file big enough to be worth naming. Small files are summed into their folder.
@@ -45,7 +46,7 @@ final class DiskTree: @unchecked Sendable {
     static let namesCapacity = 3_000_000_000
     /// Fields per node in `stats`: bytes per Kind, then recency, all in units of 16 KiB.
     static let statStride = 16
-    static let statRecent1 = Kind.count, statRecent7 = Kind.count + 1, statRecent30 = Kind.count + 2
+    static let statRecent1 = Kind.count, statRecent7 = Kind.count + 1, statRecent30 = Kind.count + 2, statRecent14 = Kind.count + 3
 
     let nodes: UnsafeMutablePointer<Node>
     let stats: UnsafeMutablePointer<UInt32>
@@ -144,6 +145,7 @@ final class DiskTree: @unchecked Sendable {
     func remove(_ id: UInt32) {
         let bytes = totals[Int(id)], files = totalFiles[Int(id)]
         let parent = nodes[Int(id)].parent
+        markSubtree(id, gone: true)
         var c = nodes[Int(parent)].firstChild
         if c == id {
             nodes[Int(parent)].firstChild = nodes[Int(id)].nextSibling
@@ -172,6 +174,53 @@ final class DiskTree: @unchecked Sendable {
         var i = id
         while true {
             totals[Int(i)] &+= bytes
+            if i == 0 { break }
+            i = nodes[Int(i)].parent
+        }
+    }
+
+    /// Whatever walks the whole table has to know this is no longer on the disk.
+    private func markSubtree(_ id: UInt32, gone: Bool) {
+        if gone { nodes[Int(id)].flags |= NodeFlag.gone } else { nodes[Int(id)].flags &= ~NodeFlag.gone }
+        var c = nodes[Int(id)].firstChild
+        while c != 0 {
+            markSubtree(c, gone: gone)
+            c = nodes[Int(c)].nextSibling
+        }
+    }
+
+    /// Takes bytes out of a node's own, and out of everything above it.
+    func subtract(_ bytes: UInt64, from id: UInt32) {
+        let amount = min(bytes, nodes[Int(id)].bytes)
+        nodes[Int(id)].bytes &-= amount
+        var i = id
+        while true {
+            totals[Int(i)] &-= min(totals[Int(i)], amount)
+            if i == 0 { break }
+            i = nodes[Int(i)].parent
+        }
+    }
+
+    /// Puts back something taken out with `remove`: it never stopped knowing what it held.
+    func restore(_ id: UInt32) {
+        markSubtree(id, gone: false)
+        let parent = nodes[Int(id)].parent
+        let bytes = totals[Int(id)], files = totalFiles[Int(id)]
+        var before: UInt32 = 0
+        var c = nodes[Int(parent)].firstChild
+        while c != 0, totals[Int(c)] >= bytes {
+            before = c
+            c = nodes[Int(c)].nextSibling
+        }
+        nodes[Int(id)].nextSibling = c
+        if before == 0 { nodes[Int(parent)].firstChild = id } else { nodes[Int(before)].nextSibling = id }
+        let back = stats + Int(id) * Self.statStride
+        var i = parent
+        while true {
+            totals[Int(i)] &+= bytes
+            totalFiles[Int(i)] &+= files
+            let s = stats + Int(i) * Self.statStride
+            for f in 0..<Self.statStride { s[f] &+= back[f] }
             if i == 0 { break }
             i = nodes[Int(i)].parent
         }
@@ -360,7 +409,7 @@ final class DiskTree: @unchecked Sendable {
 /// A set of folders, asked "is this inside one of them?" many times over. A group row can hold thousands of folders and
 /// the disk hundreds of thousands of links, so this is a binary search over subtree positions, not a list to walk.
 struct NodeSet {
-    private let tree: DiskTree
+    let tree: DiskTree
     private(set) var tops: [UInt32] = []
 
     init(_ ids: [UInt32], in tree: DiskTree) {

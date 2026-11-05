@@ -66,8 +66,17 @@ enum LabelPlacer {
         0.2289 * c.x + 0.6917 * c.y + 0.0793 * c.z > 0.40
     }
 
+    /// A piece to name, with what to call it.
+    struct Pick {
+        var index: Int
+        var title: String
+        var value: String
+        var score: Double
+    }
+
+    /// `only` names just these at the sides: what you're pointing at in the panel.
     @MainActor
-    static func place(layout: RingLayout, ring: RingGeometry, lens: Lens, tree: DiskTree, model: AppModel) -> [MapLabel] {
+    static func place(layout: RingLayout, ring: RingGeometry, lens: Lens, tree: DiskTree, model: AppModel, only: [Pick]? = nil) -> [MapLabel] {
         let R = ring.radius
         guard R > 0, !layout.pieces.isEmpty else { return [] }
         var out: [MapLabel] = []
@@ -83,7 +92,7 @@ enum LabelPlacer {
         if lens == .map || lens == .freeUp {
             for i in order.prefix(160) {
                 let p = layout.pieces[i]
-                if p.isSmaller || p.ring > 3 { continue }
+                if p.isSmaller || p.isMark || p.ring > 3 { continue }
                 if lens == .freeUp && p.style != 1 { continue }
                 let isFree = p.style == 1
                 let isHidden = p.style == 2
@@ -104,14 +113,15 @@ enum LabelPlacer {
         }
 
         // Out at the sides: what's big but can't hold its own name.
-        struct Candidate { var index: Int; var title: String; var value: String; var score: Double }
-        var candidates: [Candidate] = []
+        typealias Candidate = Pick
+        var candidates: [Candidate] = only ?? []
+        if only == nil {
         switch lens {
         case .map:
             let total = Double(max(tree.totals[Int(layout.focus)], 1))
             for i in order.prefix(260) where !labelled.contains(i) {
                 let p = layout.pieces[i]
-                if p.isSmaller || p.style == 1 || p.ring > 4 { continue }
+                if p.isSmaller || p.isMark || p.style == 1 || p.ring > 4 { continue }
                 let share = Double(p.bytes) / total
                 if share < 0.015 { continue }
                 if p.ring == 0 && layout.focus == 0 { continue }
@@ -135,12 +145,20 @@ enum LabelPlacer {
         case .freeUp:
             // Things spread over many places are lit up from the panel. A line to just one of them would mislead.
             let bar = Double(max(tree.capacityBytes, 1)) * 0.002
-            for row in model.wins.prefix(40) where row.action != .restart && row.action != .softwareUpdate && row.nodes.count <= 3 && Double(row.bytes) >= bar {
+            // What's in use lately is folded away in the list, so it doesn't take up a name here unless it's planned.
+            for row in model.shownRows.sorted(by: { $0.gain > $1.gain }).prefix(40) where row.action != .restart && row.action != .softwareUpdate && row.nodes.count <= 3 && Double(row.gain) >= bar
+                && !(row.inUse != nil && row.tier <= .rebuilds && model.rowStates[row.id] == TickState.none) {
                 let biggest = row.nodes.max { tree.totals[Int($0)] < tree.totals[Int($1)] }
                 if let biggest, let i = visiblePiece(for: biggest, layout: layout, tree: tree), !candidates.contains(where: { $0.index == i }) {
-                    candidates.append(Candidate(index: i, title: row.title, value: formatBytes(row.bytes), score: Double(row.bytes)))
+                    candidates.append(Candidate(index: i, title: row.title, value: formatBytes(row.gain), score: Double(row.gain)))
                 }
             }
+            // What's been moved is on its way out through here.
+            if let after = model.afterClean, after.state == .waiting, let trash = model.trashNode(in: tree), let i = visiblePiece(for: trash, layout: layout, tree: tree) {
+                candidates.removeAll { $0.index == i }
+                candidates.insert(Candidate(index: i, title: "In the Trash", value: tree.sizeText(trash), score: .greatestFiniteMagnitude), at: 0)
+            }
+        }
         }
         candidates.sort { $0.score > $1.score }
         // A name just outside a piece that's already named would say nearly the same thing.
@@ -238,7 +256,7 @@ enum LabelPlacer {
     private static func visiblePiece(for node: UInt32, layout: RingLayout, tree: DiskTree) -> Int? {
         var target = node
         while true {
-            if let i = layout.pieces.firstIndex(where: { !$0.isSmaller && $0.node == target }) { return i }
+            if let i = layout.pieces.firstIndex(where: { !$0.isSmaller && !$0.isMark && $0.node == target }) { return i }
             if target == 0 || target == layout.focus { return nil }
             target = tree.nodes[Int(target)].parent
         }
@@ -400,15 +418,18 @@ struct CenterReadout: View {
         // Nothing until the disk is known, so the first frame doesn't roll up from zero.
         if let free = model.tree.map({ $0.totals[Int($0.free)] }) ?? model.volume?.free {
             let capacity = model.tree?.capacityBytes ?? model.volume?.capacity ?? 0
-            let preview = free &+ model.tickedReclaim
+            let planning = model.planBytes >= 1_000_000 && model.lens == .freeUp
+            let preview = free &+ model.planBytes
             let usedShare = 1 - Double(free) / Double(max(capacity, 1))
             VStack(spacing: size * 0.012) {
-                bigNumber(model.lens == .freeUp ? preview : free, size: size, color: model.tickedReclaim > 0 && model.lens == .freeUp ? Color(red: 0.45, green: 1, blue: 0.68) : .white)
-                Text(model.tickedReclaim > 0 && model.lens == .freeUp ? "free after this" : "free of \(formatBytes(capacity))")
+                bigNumber(planning ? preview : free, size: size, color: planning ? Color(red: 0.45, green: 1, blue: 0.68) : .white)
+                Text(planning ? "free after this" : "free of \(formatBytes(capacity))")
                     .font(.system(size: size * 0.058, weight: .medium))
                     .foregroundStyle(.white.opacity(0.55))
-                if model.tickedReclaim > 0 && model.lens == .freeUp {
-                    Text("+\(formatBytes(model.tickedReclaim))")
+                if let pointing = model.pointing, model.lens == .freeUp {
+                    pointingLine(pointing, size: size)
+                } else if planning {
+                    Text("+\(formatBytes(model.planBytes))")
                         .font(.system(size: size * 0.05, weight: .semibold).monospacedDigit())
                         .foregroundStyle(Color(red: 0.45, green: 1, blue: 0.68).opacity(0.8))
                 } else if let delta = sinceLast(free) {
@@ -420,6 +441,15 @@ struct CenterReadout: View {
                 }
             }
         }
+    }
+
+    /// What you're pointing at in the panel, in its own colour.
+    private func pointingLine(_ pointing: Pointing, size: CGFloat) -> some View {
+        Text("\(pointing.title): \(formatBytes(pointing.bytes))")
+            .font(.system(size: size * 0.05, weight: .semibold).monospacedDigit())
+            .foregroundStyle(pointing.color.swiftUI)
+            .lineLimit(1)
+            .truncationMode(.middle)
     }
 
     /// How much free space has changed since a day or so ago, once there's a history to compare with.
@@ -481,7 +511,7 @@ struct CenterReadout: View {
                 .truncationMode(.middle)
             bigNumber(hover.bytes, size: size)
             if let reclaim = hover.reclaim, Double(reclaim) < Double(hover.bytes) * 0.9 {
-                Text("You'd get back \(formatBytes(reclaim))")
+                Text("Removing it frees \(formatBytes(reclaim))")
                     .font(.system(size: size * 0.052, weight: .semibold))
                     .foregroundStyle(Color(red: 1, green: 0.74, blue: 0.42))
             } else if !hover.note.isEmpty {

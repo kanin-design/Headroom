@@ -26,7 +26,7 @@ enum Tier: UInt8, Comparable {
         switch self {
         case .none: ""
         case .noLoss: "Nothing is lost."
-        case .rebuilds: "The tool makes it again when it needs to."
+        case .rebuilds: "It's made again when it's needed."
         case .redownload: "It comes back, but you wait for the download."
         case .yourCall: "Only you know if these still matter."
         case .handsOff: "macOS looks after this."
@@ -41,6 +41,8 @@ struct Rule {
     var kind: Kind? = nil
     /// A command that does this better than moving files to the Trash.
     var command: String? = nil
+    /// Moving the folder would break something, so its own command is the only way.
+    var commandOnly = false
     /// List every match as one row ("node_modules in 14 projects") instead of one row each.
     var groups = false
     /// The folder's own name is a bundle ID: the row is named after the app, and warns while it's running.
@@ -55,6 +57,14 @@ struct Rule {
     var usesFolderName = false
     /// A file that must be inside for this to be what its name suggests. "venv" is also a folder inside Python itself.
     var marker: String? = nil
+    /// What it's rebuilt from: any of these next to it, with `*` for any ending. Without one, nothing says what to put back.
+    var recipe: [String]? = nil
+    /// For a folder of many tools' caches: the ones known to come back with no help. Anything else may be more than a cache.
+    var knownNames: Set<String>? = nil
+    /// Never one suggestion as a whole, because it holds more than its name says: the things in it are suggested one by one.
+    var thingByThing = false
+    /// Can come back, but nothing proves it, so the slider leaves it to you.
+    var askFirst = false
 }
 
 /// A fixed set of names the scanner can ask about from any thread, with no String and no reference counting.
@@ -181,6 +191,16 @@ final class RuleBook: @unchecked Sendable {
 
     func rule(_ id: UInt16) -> Rule { rules[Int(id)] }
 
+    /// The rule that applies anywhere a folder has this name.
+    func ruleID(titled title: String) -> UInt16? {
+        rules.firstIndex { $0.title == title }.map(UInt16.init)
+    }
+
+    func ruleID(forName name: String) -> UInt16 {
+        let bytes = Array(name.utf8)
+        return bytes.withUnsafeBufferPointer { ruleForName($0.baseAddress!, $0.count) }
+    }
+
     private func add(_ rule: Rule) -> UInt16 {
         let key = rule.title + "\u{1}" + rule.detail
         if let id = ruleIDs[key] { return id }
@@ -233,8 +253,8 @@ final class RuleBook: @unchecked Sendable {
     private static func key(state: Int, hash: UInt64) -> UInt64 { (hash << 8 | UInt64(state)) | 1 << 63 }
 
     static func hash(_ s: String) -> UInt64 {
-        var copy = s
-        return copy.withUTF8 { hash($0.baseAddress!, $0.count) }
+        let bytes = Array(s.utf8)
+        return bytes.withUnsafeBufferPointer { $0.isEmpty ? 1 : hash($0.baseAddress!, $0.count) }
     }
 
     @inline(__always) static func hash(_ p: UnsafePointer<UInt8>, _ n: Int) -> UInt64 {
@@ -263,10 +283,10 @@ final class RuleBook: @unchecked Sendable {
     var isRootStep = false
 
     func stepFromRoot(_ name: String) -> (state: UInt8, rule: UInt16) {
-        var copy = name
+        let bytes = Array(name.utf8)
         isRootStep = true
         defer { isRootStep = false }
-        return copy.withUTF8 { step(state: 0, name: $0.baseAddress!, length: $0.count) }
+        return bytes.withUnsafeBufferPointer { step(state: 0, name: $0.baseAddress!, length: $0.count) }
     }
 
     @inline(__always) func ruleForName(_ p: UnsafePointer<UInt8>, _ n: Int) -> UInt16 {
@@ -303,11 +323,34 @@ final class RuleBook: @unchecked Sendable {
     private static func build(_ title: String, _ detail: String, command: String? = nil) -> Rule {
         Rule(title: title, detail: detail, tier: .rebuilds, kind: .cache, command: command, groups: true)
     }
+    private static func only(_ rule: Rule) -> Rule {
+        var copy = rule
+        copy.commandOnly = true
+        return copy
+    }
     private static func marked(_ rule: Rule, _ marker: String) -> Rule {
         var copy = rule
         copy.marker = marker
         return copy
     }
+    /// A model cache also holds your login, so it's only ever suggested model by model.
+    private static var huggingFace: Rule {
+        var rule = model("Hugging Face models", "AI model weights. Each one downloads again the next time it's used.")
+        rule.thingByThing = true
+        return rule
+    }
+    private static func rebuilt(from recipe: [String], _ rule: Rule) -> Rule {
+        var copy = rule
+        copy.recipe = recipe
+        return copy
+    }
+    private static let pythonRecipes = ["requirements*", "pyproject.toml", "setup.py", "setup.cfg", "Pipfile", "uv.lock", "poetry.lock", "environment.yml", "environment.yaml"]
+    /// In `~/.cache`, these are known to come back by themselves, with nothing lost.
+    private static let knownToolCaches: Set<String> = [
+        "pip", "pipx", "pypoetry", "pre-commit", "ruff", "mypy", "black", "pylint", "bazel", "ccache", "sccache", "clang", "clangd", "go-build",
+        "golangci-lint", "yarn", "pnpm", "npm", "node-gyp", "electron", "electron-builder", "puppeteer", "playwright", "ms-playwright", "selenium",
+        "matplotlib", "fontconfig", "thumbnails", "mesa_shader_cache", "Homebrew", "gstreamer-1.0", "typescript", "starship", "gh", "yt-dlp", "cycles",
+    ]
     private static func model(_ title: String, _ detail: String) -> Rule {
         Rule(title: title, detail: detail, tier: .redownload, kind: .model)
     }
@@ -346,17 +389,17 @@ final class RuleBook: @unchecked Sendable {
         ("~/Library/Caches/pip", cache("pip downloads", "Python packages pip kept after installing.", command: "pip cache purge")),
         ("~/Library/Caches/Google", Rule(title: "Chrome's browser cache", detail: "Copies of web pages. Sites load a little slower at first. Your logins aren't stored here.", tier: .rebuilds, kind: .cache, appBundleID: "com.google.Chrome")),
         ("~/Library/Caches/ms-playwright", cache("Playwright browsers", "Browsers Playwright downloads for testing.", command: "npx playwright uninstall --all")),
-        ("~/.cache/*", named(cache("Tool cache", "A command-line tool's cache. It rebuilds the next time the tool runs."))),
-        ("~/.cache/uv", cache("uv cache", "Python packages kept by uv. Quit anything using them first, so it doesn't pull packages out from under a running tool.", command: "uv cache prune")),
-        ("~/.cache/huggingface", model("Hugging Face models", "AI model weights. Each one downloads again the next time it's used.")),
+        ("~/.cache/*", { var rule = named(cache("Tool cache", "A command-line tool's cache. It rebuilds the next time the tool runs.")); rule.knownNames = knownToolCaches; return rule }()),
+        ("~/.cache/uv", only(cache("uv cache", "Python packages kept by uv. Quit anything using them first, so it doesn't pull packages out from under a running tool.", command: "uv cache prune"))),
+        ("~/.cache/huggingface", huggingFace),
         ("~/.npm/_cacache", cache("npm cache", "Packages npm has downloaded before.", command: "npm cache clean --force")),
         ("~/.npm/_npx", cache("npx cache", "Tools npx has downloaded before.")),
         ("~/.gradle/caches", cache("Gradle cache", "Android and Java build dependencies. The next build downloads them again and takes longer.")),
         ("~/.gradle/wrapper/dists", cache("Gradle versions", "Copies of Gradle itself, downloaded by project builds.")),
         ("~/.cargo/registry", cache("Cargo packages", "Rust dependencies. The next build downloads them again.")),
-        ("~/go/pkg/mod", cache("Go modules", "Go dependencies. The next build downloads them again.", command: "go clean -modcache")),
-        ("~/Library/pnpm/store", cache("pnpm store", "Packages shared between your projects.", command: "pnpm store prune")),
-        ("~/.pnpm-store", cache("pnpm store", "Packages shared between your projects.", command: "pnpm store prune")),
+        ("~/go/pkg/mod", only(cache("Go modules", "Go dependencies. The next build downloads them again.", command: "go clean -modcache"))),
+        ("~/Library/pnpm/store", only(cache("pnpm store", "Packages shared between your projects.", command: "pnpm store prune"))),
+        ("~/.pnpm-store", only(cache("pnpm store", "Packages shared between your projects.", command: "pnpm store prune"))),
         ("~/.bun/install/cache", cache("Bun cache", "Packages Bun has downloaded before.", command: "bun pm cache rm")),
         ("~/Library/Developer/Xcode/DerivedData", cache("Xcode build output", "Xcode makes it again on the next build, which takes longer.")),
         ("~/Library/Developer/CoreSimulator/Caches", cache("Simulator caches", "They rebuild the next time a simulator starts.")),
@@ -366,11 +409,12 @@ final class RuleBook: @unchecked Sendable {
         ("~/Library/Application Support/Code/CachedData", owned(cache("VS Code compiled cache", "Compiled code cached by VS Code."), "com.microsoft.VSCode")),
 
         ("~/Library/Developer/Xcode/iOS DeviceSupport", Rule(title: "iPhone debug symbols", detail: "Xcode copies these from each iPhone or iOS version you've debugged. It copies them again when needed.", tier: .redownload, kind: .cache)),
-        ("~/Library/Developer/CoreSimulator/Devices", Rule(title: "Simulator devices", detail: "Simulated iPhones and their data. Apps and files inside them are lost.", tier: .redownload, kind: .app, command: "xcrun simctl delete unavailable")),
+        ("~/Library/Developer/CoreSimulator/Devices", Rule(title: "Simulator devices", detail: "Simulated iPhones and their data. Apps and files inside them are lost.", tier: .redownload, kind: .app, command: "xcrun simctl delete unavailable", commandOnly: true)),
         ("~/Library/Application Support/Steam/steamapps/common/*", named(Rule(title: "Steam game", detail: "Steam can download it again. Check first that your saves are in Steam Cloud.", tier: .redownload, kind: .app))),
         ("~/.ollama/models", model("Ollama models", "AI model weights. Pull them again with Ollama.")),
         ("~/.lmstudio/models", model("LM Studio models", "AI model weights. Download them again from LM Studio.")),
-        ("~/LLM/*", named(model("Local AI models", "AI model weights. They can be downloaded again from where they came from."))),
+        ("~/LLM/*", { var rule = named(model("Local AI models", "AI model weights. They can be downloaded again from where they came from, if you know where that was.")); rule.askFirst = true; return rule }()),
+        ("~/LLM/huggingface", huggingFace),
         ("~/Library/Android/sdk/system-images", Rule(title: "Android system images", detail: "Android versions for the emulator. Android Studio downloads them again, but emulators using them won't start until it does.", tier: .redownload, kind: .app)),
         ("~/Library/Android/sdk/ndk/*", named(Rule(title: "Android NDK", detail: "A version of the native build tools. A project that asks for it downloads it again.", tier: .redownload, kind: .app))),
         ("~/.rustup/toolchains", Rule(title: "Rust toolchains", detail: "Versions of the Rust compiler. rustup installs them again.", tier: .redownload, kind: .app)),
@@ -379,29 +423,29 @@ final class RuleBook: @unchecked Sendable {
         ("~/.android/avd/*", named(Rule(title: "Android emulator", detail: "A virtual Android device and everything on it. Removing it loses that data.", tier: .yourCall, kind: .app))),
         ("~/Library/Developer/Xcode/Archives", Rule(title: "Xcode archives", detail: "Past app builds. You only need them to look into crashes from those versions.", tier: .yourCall, kind: .app)),
         ("~/Library/Application Support/MobileSync/Backup", Rule(title: "iPhone backups", detail: "Local backups of your iPhone or iPad. They can't be recreated if the device is gone.", tier: .yourCall, kind: .archive)),
-        ("~/Library/Containers/com.docker.docker", Rule(title: "Docker", detail: "Docker's images and volumes. Prune inside Docker: moving this folder removes everything at once.", tier: .yourCall, kind: .app, command: "docker system prune", notTrashable: true)),
+        ("~/Library/Containers/com.docker.docker", Rule(title: "Docker", detail: "Docker's images and volumes. Prune inside Docker: moving this folder removes everything at once.", tier: .yourCall, kind: .app, command: "docker system prune", commandOnly: true, notTrashable: true)),
     ]
 
     static let nameRuleList: [(String, Rule)] = [
-        ("node_modules", build("node_modules", "JavaScript packages for a project. `npm install` brings them back.")),
-        (".venv", marked(build("Python environments", "A project's Python packages. Recreate them with its requirements or `uv sync`."), "pyvenv.cfg")),
-        ("venv", marked(build("Python environments", "A project's Python packages. Recreate them with its requirements or `uv sync`."), "pyvenv.cfg")),
+        ("node_modules", rebuilt(from: ["package.json"], build("node_modules", "JavaScript packages for a project. `npm install` brings them back."))),
+        (".venv", rebuilt(from: pythonRecipes, marked(build("Python environments", "A project's Python packages. Recreate them with its requirements or `uv sync`."), "pyvenv.cfg"))),
+        ("venv", rebuilt(from: pythonRecipes, marked(build("Python environments", "A project's Python packages. Recreate them with its requirements or `uv sync`."), "pyvenv.cfg"))),
         ("__pycache__", build("Python bytecode", "Compiled Python. It's made again the next time the code runs.")),
         (".pytest_cache", build("Python tool caches", "Caches from Python tools. They rebuild on the next run.")),
         (".mypy_cache", build("Python tool caches", "Caches from Python tools. They rebuild on the next run.")),
         (".ruff_cache", build("Python tool caches", "Caches from Python tools. They rebuild on the next run.")),
-        (".build", build("Swift build output", "SwiftPM makes it again on the next build.")),
+        (".build", rebuilt(from: ["Package.swift"], build("Swift build output", "SwiftPM makes it again on the next build."))),
         ("DerivedData", build("Xcode build output", "Xcode makes it again on the next build, which takes longer.")),
         (".gradle", build("Gradle project caches", "Gradle makes them again on the next build.")),
-        ("Pods", marked(build("CocoaPods packages", "`pod install` brings them back."), "Manifest.lock")),
-        (".next", build("Web build output", "The framework makes it again on the next build.")),
-        (".nuxt", build("Web build output", "The framework makes it again on the next build.")),
-        (".turbo", build("Web build output", "The framework makes it again on the next build.")),
-        (".parcel-cache", build("Web build output", "The framework makes it again on the next build.")),
-        (".dart_tool", build("Flutter build output", "`flutter pub get` and the next build make it again.")),
+        ("Pods", rebuilt(from: ["Podfile"], marked(build("CocoaPods packages", "`pod install` brings them back."), "Manifest.lock"))),
+        (".next", rebuilt(from: ["package.json"], build("Web build output", "The framework makes it again on the next build."))),
+        (".nuxt", rebuilt(from: ["package.json"], build("Web build output", "The framework makes it again on the next build."))),
+        (".turbo", rebuilt(from: ["package.json"], build("Web build output", "The framework makes it again on the next build."))),
+        (".parcel-cache", rebuilt(from: ["package.json"], build("Web build output", "The framework makes it again on the next build."))),
+        (".dart_tool", rebuilt(from: ["pubspec.yaml"], build("Flutter build output", "`flutter pub get` and the next build make it again."))),
         (".terraform", build("Terraform plugins", "`terraform init` brings them back.")),
-        (".tox", build("Python test environments", "tox makes them again on the next run.")),
-        ("huggingface", model("Hugging Face models", "AI model weights. Each one downloads again the next time it's used.")),
+        (".tox", rebuilt(from: ["tox.ini", "pyproject.toml", "setup.cfg"], build("Python test environments", "tox makes them again on the next run."))),
+        ("huggingface", huggingFace),
     ]
 
     /// Folders macOS guards. Touching one without permission brings up a prompt, so these wait for Full Disk Access.
