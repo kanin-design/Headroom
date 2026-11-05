@@ -45,6 +45,7 @@ import SwiftUI
 ///     review                   check what's selected
 ///     labelpoint 2             the pointer on a name around the ring, and what's lit while it moves there
 ///     labelleave 2, ringpoint  the pointer leaves that name, or moves onto the ring itself, and what's lit then
+///     panelhover 2             the pointer on that thing's row in the panel, moving a little, and what's lit
 ///     labelclick 2             what a click on that name does. `labelclick 2 2` is the second click of a double-click
 ///     ringclick 2              a click on this piece of the ring. `ringclick 2 2` is a double-click
 ///     button                   how much of what's selected is ready, and why the rest isn't
@@ -549,6 +550,19 @@ enum ScriptRunner {
             let p = NSPoint(x: 8, y: w.frame.height - 400)
             if let event = NSEvent.mouseEvent(with: .mouseMoved, location: p, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0) { model.mapView?.mouseMoved(with: event) }
             print("left: lit \(model.hover?.title ?? "nothing")")
+        case "panelhover":
+            // panelhover 2: the pointer on the row in the panel for that name, then moving about on the row a little.
+            guard let w = mainWindow, let at = labelPoint(argument, model) else { print("no such name: \(argument)"); return }
+            model.highlight(node: at.label.node)
+            print("on the row for \"\(at.label.title)\": lit \(model.hover?.title ?? "nothing")")
+            for nudge in [0.0, 3.0, 6.0] {
+                let p = NSPoint(x: w.frame.width - 200 + nudge, y: w.frame.height - 500)
+                if let event = NSEvent.mouseEvent(with: .mouseMoved, location: p, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0) { model.mapView?.mouseMoved(with: event) }
+                try? await Task.sleep(for: .milliseconds(60))
+                print("  after a move on the row: lit \(model.hover?.title ?? "nothing")")
+            }
+            model.highlight(node: nil)
+            print("off the row: lit \(model.hover?.title ?? "nothing")")
         case "ringpoint":
             // The pointer on the biggest piece of the ring itself.
             guard let w = mainWindow, let piece = model.engine.layout.pieces.filter({ !$0.isSmaller && !$0.isMark && $0.style == 0 }).max(by: { $0.bytes < $1.bytes }) else { return }

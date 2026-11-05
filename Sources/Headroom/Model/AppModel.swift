@@ -134,7 +134,9 @@ final class AppModel {
     var tipOffersUndo = false
     /// Send to Trash found something using this, and is asking whether it should go anyway.
     var busyToSend: BusyThing?
-    @ObservationIgnored var labelHasPointer = false
+    /// Whether the ring lit what's lit, or something drawn over it did: a name around the ring, a row in the panel or the
+    /// card. The ring only puts out what it lit itself, so the pointer moving over that row doesn't put the row's light out.
+    @ObservationIgnored private var ringLitIt = true
     /// The file the last click landed on, so that a second click can open that file and no other.
     @ObservationIgnored private var clickedFile: UInt32?
     var expandedRow: String?
@@ -736,20 +738,20 @@ final class AppModel {
     }
 
     func pointerMoved(to polar: (angle: Float, radius: Float)?) {
-        labelHasPointer = false
+        ringLitIt = true
         lastPointer = polar
         guard let polar else { setHover(nil); return }
         setHover(engine.layout.hit(angle: polar.angle, radius: polar.radius))
     }
 
-    /// The pointer is on something drawn over the ring. To the ring that's nothing, but a name around it lights what it names.
+    /// The pointer is on something drawn over the ring. To the ring that's nothing, but what's there may light something itself.
     func pointerOffRing() {
         lastPointer = nil
-        if !labelHasPointer { setHover(nil) }
+        if ringLitIt { setHover(nil) }
     }
 
     func enterLabel(piece index: Int) {
-        labelHasPointer = true
+        ringLitIt = false
         lastPointer = nil
         setHover(index)
     }
@@ -757,7 +759,6 @@ final class AppModel {
     /// Going straight from one name to the next, the next may have said so first, and then this one isn't lit any more.
     func leaveLabel(piece index: Int) {
         guard lastHoverIndex == index else { return }
-        labelHasPointer = false
         setHover(nil)
     }
 
@@ -845,6 +846,7 @@ final class AppModel {
 
     /// Lights up one thing from the panel or a label, as if the pointer were on it.
     func highlight(node: UInt32?) {
+        ringLitIt = false
         guard let node, let tree else { setHover(nil); return }
         let layout = engine.layout
         var target = node
@@ -861,6 +863,7 @@ final class AppModel {
 
     /// Lights up many things at once: every node_modules on the disk. Whatever is too small to draw lights what holds it.
     func highlight(nodes: [UInt32]) {
+        ringLitIt = false
         guard let tree, !nodes.isEmpty else { setHover(nil); engine.setEmphasis(primary: nil, related: []); return }
         lastHoverIndex = nil
         hover = nil
@@ -956,7 +959,6 @@ final class AppModel {
         let meaning = noteClick(on: p, in: tree, count: count)
         guard !meaning.ignore else { return }
         closeLook()
-        labelHasPointer = false
         setHover(nil)
         open(piece: index)
         if meaning.opensFile { open(NamedThing(p.node)) }
