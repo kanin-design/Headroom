@@ -1,154 +1,147 @@
-# Headroom
+<p align="center">
+  <img src="docs/banner.png" alt="Headroom" width="100%">
+</p>
 
-Shows where your disk space went and how to get it back. A native Mac app in Swift and Metal.
+<p align="center">
+  <b>See where your disk space went, and get it back. Fast.</b><br>
+  A native Mac app, written in Swift and Metal. Version 0.0.1, an early beta.
+</p>
 
-![Headroom's map of a disk: a glowing ring of folders on near-black, each group in its own colour, with free space as an open wedge and a panel listing the biggest folders](docs/screenshot.png)
+![Headroom's map of a whole disk: a glowing ring of folders, each group in its own colour, with free space as an open wedge and the biggest folders listed beside the ring](docs/map.jpg)
 
-*The folder names in this screenshot are made up, using `--hide-names`.*
+<sub>The names in these screenshots are made up, using `--hide-names`.</sub>
 
-The design thinking is in [DESIGN.md](DESIGN.md).
+## Fast, all the way through
 
-## Run Headroom
+Headroom reads folder listings in bulk, many entries per call, biggest things first. It adds small files into their
+folder instead of keeping each one, and draws the ring on the GPU. The picture is right almost at once, and stays quick
+on a disk with millions of files.
 
-Requires macOS 26 or later and Xcode's command line tools.
+Measured on an M5 MacBook Air with 2.1 million files on a 494 GB disk:
+
+| | |
+|---|---|
+| Opening Headroom again | The map is on screen in about 0.2 s, from the last scan |
+| A first launch | Half of the disk is placed in 0.4 s, and about three quarters within a second |
+| Reading the whole disk again (⌘R) | 6.9 s. `du` takes 40 s on the same disk, and collects less |
+| Searching every name on the map | 2 to 14 ms per keystroke, across about 324,000 folders and files |
+| Sizing up `~/Library`, 376,000 files | 1.7 s |
+| Checking 47 things before a clean | 0.35 s, then 9 ms each time you tick one more |
+| Sitting open | 0% CPU and 130–150 MB of memory |
+
+## Honest about space
+
+- **What you'd really get back.** Before anything goes, Headroom says how much space you'd really get back, which can be
+  far less than a folder's size.
+- **Hard links and clones count once.** A film that's both in your library and in a torrent folder is one file with two
+  names, not a duplicate. Removing one of the names frees nothing, and Headroom says so, then offers the other name too.
+- **The ring adds up to the whole disk.** Free space, macOS, memory swap and whatever can't be read are pieces of their
+  own, so nothing is left unexplained.
+
+## Safe by design
+
+- **Nothing is deleted straight away.** Everything goes to the Trash first, **Undo** puts it all back, and emptying the
+  Trash is always a click of its own.
+- **Checks before anything moves.** Headroom makes sure each thing is still there and isn't being used by a program,
+  and that anything which doesn't rebuild itself hasn't changed since you picked it. If a program is using it, Headroom
+  says which one and lets you decide.
+- **Protected places.** macOS's own folders, your home folder's standard folders such as Documents and Library, and
+  places like your keychains and mail can't be removed.
+- **Moves you can trust.** Moving something to another disk copies it, reads every byte back to compare, and only then
+  sends the original to the Trash.
+
+## Private
+
+Headroom never connects to the internet, so what it reads stays on your Mac. To say more about what's yours, it reads
+Plex's watched state, Transmission's torrents, Steam's last played dates and git, if you have them, and only ever reads.
+
+## What you can do
+
+### Map
+
+Every folder is a piece of the ring, sized by the space it takes and coloured by what it belongs to, so whatever belongs
+together stays together. Point at anything to see its name, its size and what you'd really get back. Click a folder to go
+into it, and click the middle to go back up.
+
+### Free Up
+
+![Free Up: a short stack of boxes, such as installers, caches and films, with the files of the box being pointed at lit up on the ring](docs/free-up.jpg)
+
+A short stack of boxes, with what you'd miss least on top: caches and build output, installers and archives, project
+leftovers, episodes you've watched, apps you don't use and more. Point at a box and its files light up on the ring. Tick a
+box to select everything in it, or open the box to pick one thing at a time. Nothing happens until you press **Clean**.
+
+### Changes
+
+![Changes: what grew in the last seven days, in heat colours on the ring, with a list of the folders responsible](docs/changes.jpg)
+
+What grew since the last scan, or in the last day, week or month, in heat colours, with a list of the folders responsible.
+
+### Search
+
+![Search: 70 matches for "mkv", each with its path and size, all of them lit up on the ring](docs/search.jpg)
+
+Press ⌘F and type. The matches are listed as you type, biggest first, each with its path and size, and they light up on
+the ring. Capitals and accents don't matter, in any alphabet.
+
+### A closer look
+
+![A card over the ring about one folder, listing what's inside it, biggest first](docs/card.jpg)
+
+Press Space on anything for a card: a folder's size and what's inside, with pictures when the folder is mostly photos or
+video, or a file's own preview. Double-click a file on the ring to open it. Right-click anything to copy its name or path,
+open it, reveal it in the Finder, open it in Terminal or send it to the Trash.
+
+## Get started
+
+Headroom needs macOS 26 or later, and has been built and tested on Apple silicon. There's no download yet, so clone this
+repository and build Headroom with Xcode's command line tools. In the repository's folder:
 
 ```bash
 ./build.sh
 open build/Headroom.app
 ```
 
-The first time, the ring shows a hatched "Hidden" piece, because macOS keeps Downloads, Desktop, Documents and a few
-others private. Click **Allow Full Disk Access** and switch Headroom on in the pane that opens. The app is signed with
-your development certificate if you have one, so the permission survives rebuilds.
+The first time, the ring shows a striped "Hidden" piece, because macOS keeps Downloads, Desktop, Documents and a few
+other folders private. Click **Allow Full Disk Access** and switch Headroom on in the pane that opens. If you have a
+development certificate, the build is signed with it, so the permission survives rebuilds.
 
-After that, the last scan appears as soon as the window opens, and a refresh runs quietly at low priority. To see what
-a first launch looks like, quit the app and start it without the saved scan:
+Headroom is a personal project and a showcase, in an early beta. Headroom moves real files, so read what it tells you
+before you press **Clean**.
 
-```bash
-open build/Headroom.app --args --no-cache
-```
-
-To take a screenshot without showing what's on your disk, start the app with `--hide-names`. That swaps folder and file names for
-made-up ones everywhere, paths and disk names included, and turns off moving anything to the Trash.
-
-## How to use Headroom
-
-- **Map** shows what's on the disk. Colour shows what belongs together: each big thing has its own colour, and
-  everything inside it stays close to that colour. Point at anything to see its name, its size and what you'd really
-  get back. Click to zoom in, and click the middle (or press Esc) to go back.
-- **Changes** shows what has grown. It lights up in heat colours and lists the folders responsible. It reads file dates
-  on the first day, then compares scans as history builds up.
-- **Free Up** is a short stack of boxes, with what you'd miss least on top. Each box is one kind of thing, such as caches,
-  AI models or project leftovers, and its bar shows how big it is and what it's made of. The list and the ring are the same
-  data shown two ways: each box's files wear its colour, pointing at a box lights them up, and pointing at the ring lights
-  the box. Tick a box to select everything in it, click a piece of its bar to select one thing, or open it for full
-  control. Inside a folder, the boxes are for what's in that folder. Striped pieces are selected, and nothing happens until
-  you press **Clean**. Whatever needs a look shows at the top with a way to fix it. Everything selected goes to the Trash,
-  and **Undo** puts everything back. The space comes back when you empty the Trash, which is always its own click. Apps go through the Finder, so the
-  first uninstall brings up one macOS question, and some apps ask for your password.
-
-Things that help Headroom say more, if you have them: Plex's watched state, Transmission's torrents, Steam's last played, and git.
-They're only ever read, and nothing leaves your Mac.
-
-| Keys | |
-|---|---|
-| ⌘1, ⌘2, ⌘3 | Map, Changes, Free Up |
-| ⌘[, ⌘] | Back and forward through where you've been. The arrows at the top of the panel do the same. The View menu shows which keys these are on your keyboard |
-| Esc | Up a level |
-| Space or ⌘Y | Open a card about what you're pointing at. Space closes the card again |
-| ⌘C, ⌥⌘C | Copy the name, or the path. Selected text comes first, as anywhere |
-| ⇧⌘C | Copy the list in the panel, with sizes |
-| ⌘O, ⌥⌘R | Open, or reveal in Finder |
-| ⌘⌫ | Select or unselect in Free Up. Nothing goes until you clean |
-| ⌘Z | Undo the last Send to Trash or clean |
-| ⌘F | Find a file or folder |
-| ⌘R | Scan again, at full power |
-| ⌘-click | Copy the name of anything on the ring or in a list. In the middle of the ring, the folder you're in |
-| Click the name or path at the top of the panel, or the last name under the ring | Copy that name or path |
-| Right-click | Copy, open, reveal, Quick Look, open in Terminal, find others with this name, go to the other path of a hard link, delete, move to another disk. The same menu wherever there's a name |
-| Drag any empty background, or the top | Move the window |
-| Double-click the top | Fill the screen, or whatever System Settings says a title bar does |
-| Pinch | Zoom in and out |
-
-Shortcuts apply to what you're pointing at, otherwise what's selected, otherwise the folder you're in.
-
-**Delete** is in the right-click menu, the side panel and the File menu. **Send to Trash**, inside that menu, happens at once:
-the one thing that doesn't wait for a clean. The menu says first what you'd really get back. An Undo button shows under the
-ring straight away, and stays at the bottom of the panel until the Trash is emptied.
-
-**Space** opens a card over the ring, on the side away from what the card is about. For a folder, the size is there at once,
-with what's inside, biggest first, and pictures if the folder is mostly photos or video. For a file, the card shows macOS's own
-preview, which has nothing to show for types macOS can't read, such as .mkv.
-
-| In the card | |
-|---|---|
-| Click a row | Step in. The back button or Delete steps out again |
-| Double-click a row or a preview | Open the file in its app, or go into the folder on the ring |
-| Right-click | The same menu as everywhere |
-| ← → | The previous or next thing at this level, with the ring following |
-| ↑ ↓, Return | Move through the rows. Return steps in, or opens what the card is showing |
-| Click a piece on the ring | Show that piece in the card. A double-click goes there |
-| Space or Esc | Close the card |
-
-In Free Up:
+## Keys
 
 | | |
 |---|---|
-| Click, double-click a piece | Select or unselect. Open |
-| ↑ ↓ | Step through the boxes, with the ring following |
-| Delete | Tick or untick the current box |
-| K | Keep: take this out and stop suggesting this, on a box that's one thing |
-| M | Move to another disk, on a box that's one thing |
-| Space | Open the card about the current box |
-| Return | Clean |
-| Hold Option | See the disk as it will be afterwards |
+| ⌘1, ⌘2, ⌘3 | Map, Changes, Free Up |
+| ⌘F | Find a file or folder |
+| Space | A closer look at what you're pointing at |
+| Esc | Up a level |
+| ⌘[, ⌘] | Back and forward through where you've been |
+| ⌘C, ⌥⌘C | Copy the name, or the path |
+| ⌘O, ⌥⌘R | Open, or reveal in the Finder |
+| ⌘Z | Undo the last Send to Trash or clean |
+| ⌘R | Read the disk again, at full power |
+| Hold ⌥ in Free Up | See the disk as it will be afterwards |
 
-## What the numbers mean
+Keys apply to what you're pointing at, otherwise to what's selected, otherwise to the folder you're in.
 
-- Sizes are space on disk. Hard links and identical APFS clones count once, in the place you'd think of as home.
-  Symlinks take no space and aren't followed, so what they point at counts once too, where it really is.
-- **"You'd get back"** can be far less than a folder's size. If a folder's files are also linked from somewhere else,
-  removing that folder alone frees nothing. Point at it and the middle of the ring says so: `Hard links to ~/Downloads`.
-  The panel says how much you'd really get back.
-- The ring always adds up to the whole disk. Whatever can't be read is the hatched Hidden piece.
-- Partly changed clones are counted in full, so a folder of them can look slightly bigger than it is.
-- During a first scan, a size with dots (`64 GB…`) may still grow, and the hatched piece says "Still reading". Zooming
-  into a folder reads it first.
+## For developers
 
-## How Headroom is built
+How Headroom is designed, with every measurement, is in [DESIGN.md](DESIGN.md).
 
 | Where | What |
 |---|---|
 | `Model/Scanner.swift` | The scan: `getattrlistbulk` on a thread pool, big things first, then the rest at low priority |
-| `Model/Volume.swift` | The disk's own numbers, the top of the tree, the scan's two speeds, and hard-link and clone accounting |
-| `Model/Rules.swift` | What Headroom knows about particular folders, and how safe each is to remove |
-| `Model/Insights.swift` | Suggestions from the folder rules, Changes rows, and the colours for each view |
-| `Model/AppModel+Plan.swift` | What's selected: choosing, pointing, checking, cleaning, undo and emptying |
-| `Advice/Sections.swift` | The boxes: every suggestion sorted by what it is, leftovers found by name and contents, and what's in the picture on screen |
-| `Advice/Plan.swift` | The list of what's selected and what it does to the numbers. No file is touched here |
-| `Advice/Cleaner.swift` | Everything that touches files, behind one check, and the checks before a clean |
-| `Advice/Walker.swift` | Looking closely at one folder: its size, newest change, largest file and files with more than one path |
-| `Advice/Advisors.swift` | Suggestions about whole things: a series, an app, a project |
-| `Advice/Facts.swift` | Spotlight and other apps' records, read in the background |
-| `Model/History.swift` | The saved last scan, snapshots for comparison, free-space history |
-| `Render/Layout.swift` | Turns part of the tree into pieces of a ring |
-| `Render/RingColours.swift` | The Map view's colours, and remembering which folder has which |
-| `Render/MapEngine.swift` | Transitions: where each piece starts and ends, and one spring that carries them |
-| `Render/Shaders.metal` | Each piece's shape and light, the glow and the scale. macOS compiles this at launch |
-| `UI/` | Labels, the centre readout, and the glass panels |
+| `Advice/Walker.swift` | Looking closely at one folder: its size, newest change, largest file and files with more than one name |
+| `Advice/Cleaner.swift` | Everything that touches files, behind one set of checks |
+| `Advice/Sections.swift` | The Free Up boxes |
+| `Render/Shaders.metal` | Each piece's shape and light, the glow and the scale |
 
-To check the whole interface without touching the mouse, run the app with a script. The steps are listed at the top of
-`App/ScriptRunner.swift`. A scripted run keeps its data apart from yours, and its clean, empty and undo steps can only
-ever act on a throwaway disk image named `HeadroomTest`.
-
-```bash
-build/Headroom.app/Contents/MacOS/Headroom --script steps.txt
-```
-
-The logic behind the suggestions and the plan has automated tests, on made-up disks:
-
-```bash
-swift test
-```
-
-The app icon is an Icon Composer document, `Resources/AppIcon.icon`. After changing it, run `Resources/make-icon.sh`.
+- `swift test` runs the tests, on made-up disks.
+- `build/Headroom.app/Contents/MacOS/Headroom --script steps.txt` drives the whole app from a script, without touching
+  the mouse. The steps are listed at the top of `App/ScriptRunner.swift`, and a scripted run can only ever clean a
+  throwaway disk image named `HeadroomTest`.
+- `--hide-names` swaps every folder and file name for a made-up one, for screenshots. With `--script`, put it last.
+- `--no-cache` starts without the saved scan, to see what a first launch looks like.
+- The app icon is an Icon Composer document, `Resources/AppIcon.icon`. After changing it, run `Resources/make-icon.sh`.
