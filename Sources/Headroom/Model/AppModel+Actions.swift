@@ -91,8 +91,8 @@ extension AppModel {
     }
 
     func realName(of node: UInt32) -> String {
-        if node == 0 { return volume?.name ?? "Disk" }
-        guard let path = tree?.path(node) else { return displayName(node) }
+        if node == 0 { return volume?.shownName ?? "Disk" }
+        guard !HiddenNames.isOn, let path = tree?.path(node) else { return displayName(node) }
         return ThingText.name(ofPath: ThingText.visible(path))
     }
 
@@ -244,7 +244,7 @@ extension AppModel {
     }
 
     func copyPath(of thing: NamedThing) {
-        let paths = thing.nodes.compactMap(realPath(of:))
+        let paths = thing.nodes.compactMap(realPath(of:)).map { HiddenNames.isOn ? DiskTree.friendly($0) : $0 }
         guard let first = paths.first else {
             showTip("\(thing.title ?? thing.single.map(displayName) ?? "This") isn't a place on the disk.")
             return
@@ -446,7 +446,7 @@ extension AppModel {
 
     // MARK: The menu bar
 
-    private var firstResponder: NSResponder? { mapView?.window?.firstResponder }
+    private var firstResponder: NSResponder? { (NSApp.keyWindow ?? mapView?.window)?.firstResponder }
 
     /// Selected text comes first, as it does in every other app. This asks what the Edit menu would ask.
     private var textToCopy: NSResponder? {

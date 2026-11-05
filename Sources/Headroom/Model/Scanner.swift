@@ -3,27 +3,27 @@ import Foundation
 import Synchronization
 
 // Attribute bits from <sys/attr.h>. Entries come back in this order, and only the ones the file system supplied.
-private let attrReturned: UInt32 = 0x8000_0000
-private let attrError: UInt32 = 0x2000_0000
-private let attrName: UInt32 = 0x0000_0001
-private let attrObjType: UInt32 = 0x0000_0008
-private let attrModTime: UInt32 = 0x0000_0400
+let attrReturned: UInt32 = 0x8000_0000
+let attrError: UInt32 = 0x2000_0000
+let attrName: UInt32 = 0x0000_0001
+let attrObjType: UInt32 = 0x0000_0008
+let attrModTime: UInt32 = 0x0000_0400
 private let attrFlags: UInt32 = 0x0004_0000
 private let attrFileID: UInt32 = 0x0200_0000
 private let attrAddedTime: UInt32 = 0x1000_0000
 private let attrDirEntryCount: UInt32 = 0x0000_0002
 private let attrDirMountStatus: UInt32 = 0x0000_0004
-private let attrFileLinkCount: UInt32 = 0x0000_0001
-private let attrFileAllocSize: UInt32 = 0x0000_0004
+let attrFileLinkCount: UInt32 = 0x0000_0001
+let attrFileAllocSize: UInt32 = 0x0000_0004
 private let attrExtCloneID: UInt32 = 0x0000_0100
 private let attrExtFlags: UInt32 = 0x0000_0200
 
 // A mount point, or a trigger that would mount something (such as a network share) just by being opened.
 private let mountStatusMounts: UInt32 = 0x0000_0003
 private let extMaySharedBlocks: UInt64 = 0x1
-private let objTypeRegular: UInt32 = 1
-private let objTypeDirectory: UInt32 = 2
-private let optionNoFollow: UInt64 = 0x1
+let objTypeRegular: UInt32 = 1
+let objTypeDirectory: UInt32 = 2
+let optionNoFollow: UInt64 = 0x1
 private let optionExtended: UInt64 = 0x20
 
 /// Reads a volume in the order that gets the picture right soonest. On a typical disk, under 1% of the files hold 90% of

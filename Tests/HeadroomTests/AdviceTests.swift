@@ -77,6 +77,17 @@ final class AccountingTests: XCTestCase {
         XCTAssertEqual(found.folders, [disk.node("/Volumes/Fake/Pile/Show.S01")])
     }
 
+    func testTheBiggestOtherCopyComesFirst() {
+        let disk = FakeDisk()
+        disk.linked("/Volumes/Fake/TV/Show/e1.mkv", "/Volumes/Fake/Pile/Small/e1.mkv", 1_000_000_000)
+        disk.linked("/Volumes/Fake/TV/Show/e2.mkv", "/Volumes/Fake/Pile/Big/e2.mkv", 9_000_000_000)
+        disk.linked("/Volumes/Fake/TV/Show/e3.mkv", "/Volumes/Fake/Pile/Middle/e3.mkv", 5_000_000_000)
+        disk.file("/Volumes/Fake/Pile/Other/thing.zip", 30_000_000_000)
+        disk.finish()
+        let found = Accounting.otherCopies(of: [disk.node("/Volumes/Fake/TV/Show")], in: disk.tree)
+        XCTAssertEqual(found.folders, ["Big", "Middle", "Small"].map { disk.node("/Volumes/Fake/Pile/" + $0) })
+    }
+
     func testAPlannedFileWithAnotherPathFreesNothing() {
         let disk = FakeDisk()
         disk.linked("/Volumes/Fake/Movies/Film.mkv", "/Volumes/Fake/Pile/Film.mkv", 5_000_000_000)
@@ -872,6 +883,62 @@ final class CleanerTests: XCTestCase {
         item.acceptedChange = Date().addingTimeInterval(10)
         result = PlanChecks.run(items: [item], trueBytes: [:], otherCopy: [:], runningApps: [])
         XCTAssertEqual(result["a"]?.problems.contains { if case .changed = $0 { return true } else { return false } }, false)
+    }
+
+    func testSomethingRunningFromAFolderIsYoursToOverrule() throws {
+        // A real program, running from inside the folder, as a tool that brings its own runtime does.
+        try FileManager.default.createDirectory(atPath: root + "/tool/bin", withIntermediateDirectories: true)
+        try FileManager.default.copyItem(atPath: "/bin/sleep", toPath: root + "/tool/bin/helper")
+        let running = Process()
+        running.executableURL = URL(fileURLWithPath: root + "/tool/bin/helper")
+        running.arguments = ["30"]
+        try running.run()
+        defer { running.terminate() }
+
+        guard let real = realpath(root + "/tool", nil) else { return XCTFail("no path") }
+        defer { free(real) }
+        var item = PlanItem(id: "a", title: "a", note: "", tierRaw: Tier.yourCall.rawValue, paths: [String(cString: real)])
+        var check = PlanChecks.run(items: [item], trueBytes: [:], otherCopy: [:], runningApps: [])["a"]
+        XCTAssertEqual(check?.canGo, false)
+        XCTAssertEqual(check?.problems.first { if case .inUse = $0 { return true } else { return false } }?.text, "helper is running from here, and may stop working if this goes.")
+        XCTAssertEqual(check?.heldPaths, [String(cString: real)])
+
+        // You saw that, and still want it gone.
+        item.acceptedInUseAt = Date()
+        check = PlanChecks.run(items: [item], trueBytes: [:], otherCopy: [:], runningApps: [])["a"]
+        XCTAssertEqual(check?.problems.contains { if case .inUse = $0 { return true } else { return false } }, false)
+        XCTAssertEqual(check?.heldPaths, [])
+
+        // Saying so a while ago doesn't count for whatever is using it now.
+        item.acceptedInUseAt = Date().addingTimeInterval(-PlanItem.acceptingInUseLasts - 1)
+        check = PlanChecks.run(items: [item], trueBytes: [:], otherCopy: [:], runningApps: [])["a"]
+        XCTAssertEqual(check?.canGo, false)
+    }
+
+    func testADotNameShowsInTheTrash() throws {
+        // Standing in for the Trash, which macOS has moved these into.
+        try write(root + "/Trash/.tool/file")
+        XCTAssertEqual(Cleaner.visibleInTrash(root + "/Trash/.tool"), root + "/Trash/tool")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root + "/Trash/tool/file"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root + "/Trash/.tool"))
+        // Something else with that name is already there, and it stays as it is.
+        try write(root + "/Trash/.tool/other")
+        XCTAssertEqual(Cleaner.visibleInTrash(root + "/Trash/.tool"), root + "/Trash/tool 2")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root + "/Trash/tool/file"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root + "/Trash/tool 2/other"))
+        // A file keeps its extension when it needs a number.
+        try write(root + "/Trash/notes.txt")
+        try write(root + "/Trash/.notes.txt")
+        XCTAssertEqual(Cleaner.visibleInTrash(root + "/Trash/.notes.txt"), root + "/Trash/notes 2.txt")
+        // Nothing to do for a name you can already see.
+        try write(root + "/Trash/plain")
+        XCTAssertEqual(Cleaner.visibleInTrash(root + "/Trash/plain"), root + "/Trash/plain")
+    }
+
+    func testSeveralProgramsUsingAFolderAreCounted() {
+        XCTAssertEqual(CheckProblem.inUse(process: "node", pid: 1, others: 43, runFromHere: true).text, "node and 43 more are running from here, and may stop working if this goes.")
+        XCTAssertEqual(CheckProblem.inUse(process: "Preview", pid: 1).text, "Preview has a file open in here, and may stop working if this goes.")
+        XCTAssertEqual(CheckProblem.inUse(process: "Preview", pid: 1, others: 1).text, "Preview and 1 more have files open in here, and may stop working if this goes.")
     }
 
     func testAMissingDiskKeepsItPlanned() throws {

@@ -959,8 +959,9 @@ private struct LookRow: View {
         switch problem {
         case .appOpen(let name, let id):
             action("Quit \(name)") { model.quit(bundleID: id) }
-        case .inUse:
-            action("Check again") { model.runChecks() }
+        case .inUse, .someInUse:
+            // If you go and close what's using it, it's looked at again when you come back.
+            action("Clean anyway") { model.acceptInUse(for: item.id) }
         case .changed:
             action("Clean anyway") { model.acceptChange(for: item.id) }
         case .noGain:
@@ -1091,7 +1092,7 @@ struct NextStepBar: View {
         let partial = model.tree?.isPartial == true
         let onlyTrash = model.plan.items.allSatisfy(\.isEmptyTrash)
         let label = partial ? "Finishing the scan first"
-            : ready.isEmpty ? "Nothing is ready yet"
+            : ready.isEmpty ? "Needs a look first"
             : onlyTrash ? "Empty the Trash: \(formatBytes(cleanBytes(ready)))"
             : ready.count == count ? "Clean \(formatBytes(model.planBytes))"
             : "Clean \(ready.count) of \(count): \(formatBytes(cleanBytes(ready)))"

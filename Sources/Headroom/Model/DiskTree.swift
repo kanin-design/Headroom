@@ -281,8 +281,12 @@ final class DiskTree: @unchecked Sendable {
 
     func name(_ id: UInt32) -> String {
         if let display = displayNames[id] { return display }
+        return rawName(id)
+    }
+
+    /// The name on disk, even when another one is being shown.
+    func rawName(_ id: UInt32) -> String {
         let n = nodes[Int(id)]
-        guard n.nameLength > 0 else { return "" }
         return String(decoding: UnsafeBufferPointer(start: names + Int(n.nameOffset), count: Int(n.nameLength)), as: UTF8.self)
     }
 
@@ -308,7 +312,7 @@ final class DiskTree: @unchecked Sendable {
     }
 
     static func friendly(_ path: String) -> String {
-        var p = path
+        var p = HiddenNames.isOn ? HiddenNames.madeUp(path: path) : path
         let home = NSHomeDirectory()
         let dataHome = "/System/Volumes/Data" + home
         if p.hasPrefix(dataHome) { p = "~" + p.dropFirst(dataHome.count) }

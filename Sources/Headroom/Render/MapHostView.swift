@@ -242,6 +242,11 @@ final class MapHostView: NSView {
 
     override func mouseMoved(with event: NSEvent) {
         guard let model else { return }
+        // These moves come whatever is over the ring. What's there says for itself what it lights.
+        guard window?.contentView?.superview?.hitTest(event.locationInWindow) === self else {
+            model.pointerOffRing()
+            return
+        }
         let p = convert(event.locationInWindow, from: nil)
         // The card covers part of the ring. What's under it can't be pointed at.
         let onCard = model.look != nil && model.lookCardFrame.contains(p)

@@ -196,7 +196,7 @@ struct MapPanel: View {
     }
 
     private func header(_ tree: DiskTree, _ subject: UInt32) -> some View {
-        let name = subject == 0 ? (model.volume?.name ?? "Disk") : model.displayName(subject)
+        let name = subject == 0 ? (model.volume?.shownName ?? "Disk") : model.displayName(subject)
         let path = subject == 0 || HiddenNames.isOn ? nil : tree.path(subject).map(DiskTree.friendly)
         let thing = NamedThing(subject)
         return VStack(alignment: .leading, spacing: 5) {

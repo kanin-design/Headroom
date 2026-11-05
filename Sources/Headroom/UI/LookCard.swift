@@ -242,11 +242,17 @@ private struct LookPictures: View {
         }
         .task(id: files) {
             pictures = [:]
-            for file in files {
-                guard !Task.isCancelled, let path = model.realPath(of: file) else { return }
-                let request = QLThumbnailGenerator.Request(fileAt: URL(fileURLWithPath: path), size: CGSize(width: 240, height: 160), scale: 2, representationTypes: .thumbnail)
-                if let drawn = try? await QLThumbnailGenerator.shared.generateBestRepresentation(for: request), !Task.isCancelled {
-                    withAnimation(.easeOut(duration: 0.16)) { pictures[file] = drawn.nsImage }
+            let paths = files.compactMap { file in model.realPath(of: file).map { (file, $0) } }
+            // All at once, and each shows as soon as it's ready.
+            await withTaskGroup(of: (UInt32, NSImage?).self) { group in
+                for (file, path) in paths {
+                    group.addTask {
+                        let request = QLThumbnailGenerator.Request(fileAt: URL(fileURLWithPath: path), size: CGSize(width: 240, height: 160), scale: 2, representationTypes: .thumbnail)
+                        return (file, try? await QLThumbnailGenerator.shared.generateBestRepresentation(for: request).nsImage)
+                    }
+                }
+                for await (file, picture) in group where !Task.isCancelled {
+                    if let picture { withAnimation(.easeOut(duration: 0.16)) { pictures[file] = picture } }
                 }
             }
         }

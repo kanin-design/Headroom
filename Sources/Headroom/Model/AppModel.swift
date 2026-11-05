@@ -2,6 +2,13 @@ import AppKit
 import Observation
 import SwiftUI
 
+/// Something you asked to send to the Trash, and what's using it.
+struct BusyThing {
+    var path: String
+    var title: String
+    var why: String
+}
+
 /// The three questions the map can answer. The geometry stays put, so changing the question never loses your place.
 enum Lens: String, CaseIterable, Identifiable {
     case map = "Map"
@@ -78,6 +85,7 @@ final class AppModel {
     var look: Look?
     var lookCursor: Int?
     @ObservationIgnored var lookWatch: Any?
+    @ObservationIgnored var checkRun: Task<Void, Never>?
     @ObservationIgnored var lookCardFrame = CGRect.zero
     @ObservationIgnored var lookContentFrame = CGRect.zero
     @ObservationIgnored var factsCache: [UInt32: String] = [:]
@@ -124,6 +132,11 @@ final class AppModel {
     /// A few words beside the ring, for when a click can't do what you asked.
     var tip: String?
     var tipOffersUndo = false
+    /// Send to Trash found something using this, and is asking whether it should go anyway.
+    var busyToSend: BusyThing?
+    @ObservationIgnored var labelHasPointer = false
+    /// The file the last click landed on, so that a second click can open that file and no other.
+    @ObservationIgnored private var clickedFile: UInt32?
     var expandedRow: String?
     var previewingAfter = false
 
@@ -572,7 +585,7 @@ final class AppModel {
             rescanWhenBack = false
             scan()
         }
-        if lens == .freeUp, !plan.isEmpty { runChecks() }
+        if lens == .freeUp, !plan.isEmpty { runChecks(fresh: true) }
     }
 
     // MARK: Insights, worked out off the main thread
@@ -723,9 +736,29 @@ final class AppModel {
     }
 
     func pointerMoved(to polar: (angle: Float, radius: Float)?) {
+        labelHasPointer = false
         lastPointer = polar
         guard let polar else { setHover(nil); return }
         setHover(engine.layout.hit(angle: polar.angle, radius: polar.radius))
+    }
+
+    /// The pointer is on something drawn over the ring. To the ring that's nothing, but a name around it lights what it names.
+    func pointerOffRing() {
+        lastPointer = nil
+        if !labelHasPointer { setHover(nil) }
+    }
+
+    func enterLabel(piece index: Int) {
+        labelHasPointer = true
+        lastPointer = nil
+        setHover(index)
+    }
+
+    /// Going straight from one name to the next, the next may have said so first, and then this one isn't lit any more.
+    func leaveLabel(piece index: Int) {
+        guard lastHoverIndex == index else { return }
+        labelHasPointer = false
+        setHover(nil)
     }
 
     /// The picture changed under a pointer that hasn't moved, so it may be over something new.
@@ -869,10 +902,23 @@ final class AppModel {
         click(piece: index, count: count)
     }
 
+    /// Works out what this click means for a double-click. The first click on a folder has already gone in, so what's under the
+    /// pointer at the second isn't what you meant: `ignore`. The second click on the same file opens it, as in the Finder.
+    private func noteClick(on p: Piece, in tree: DiskTree, count: Int) -> (ignore: Bool, opensFile: Bool) {
+        if count >= 2, Date().timeIntervalSince(zoomedAt) < NSEvent.doubleClickInterval { return (true, false) }
+        let n = tree.nodes[Int(p.node)]
+        let isFile = !p.isSmaller && !n.has(NodeFlag.free) && (!n.has(NodeFlag.directory) || n.firstChild == 0) && tree.path(p.node) != nil
+        let opens = count == 2 && isFile && clickedFile == p.node
+        clickedFile = isFile ? p.node : nil
+        return (false, opens)
+    }
+
     func click(piece index: Int, count: Int = 1) {
         guard let tree, index < engine.layout.pieces.count else { return }
         let p = engine.layout.pieces[index]
         let n = tree.nodes[Int(p.node)]
+        let meaning = noteClick(on: p, in: tree, count: count)
+        guard !meaning.ignore else { return }
         // With the card open, a click shows that piece in the card, and a double-click goes there.
         if look != nil {
             guard !p.isSmaller, tree.path(p.node) != nil else {
@@ -889,6 +935,7 @@ final class AppModel {
             } else {
                 selected = p.node
                 panelOpen = true
+                if meaning.opensFile { open(NamedThing(p.node)) }
             }
             return
         }
@@ -897,6 +944,28 @@ final class AppModel {
             if count == 1 || count == 2 { togglePiece(p.node) }
             if count < 2 { return }
         }
+        open(piece: index)
+        if meaning.opensFile { open(NamedThing(p.node)) }
+    }
+
+    /// A name around the ring opens what it names, in every view. Selecting is for the ring itself, so that reading a name
+    /// can't select anything for the Trash.
+    func openLabel(piece index: Int, count: Int = 1) {
+        guard let tree, index < engine.layout.pieces.count else { return }
+        let p = engine.layout.pieces[index]
+        let meaning = noteClick(on: p, in: tree, count: count)
+        guard !meaning.ignore else { return }
+        closeLook()
+        labelHasPointer = false
+        setHover(nil)
+        open(piece: index)
+        if meaning.opensFile { open(NamedThing(p.node)) }
+    }
+
+    private func open(piece index: Int) {
+        guard let tree, index < engine.layout.pieces.count else { return }
+        let p = engine.layout.pieces[index]
+        let n = tree.nodes[Int(p.node)]
         if n.has(NodeFlag.free) {
             setLens(.freeUp)
             return

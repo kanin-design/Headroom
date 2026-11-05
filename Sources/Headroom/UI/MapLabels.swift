@@ -299,9 +299,9 @@ struct LabelsLayer: View {
                     let room = max(right ? model.ring.mapWidth - label.position.x - 6 : label.position.x - 12, 60)
                     OuterLabel(label: label, isOn: model.hover?.node == label.node)
                         .onHover { inside in
-                            if inside { model.setHover(label.pieceIndex) } else { model.setHover(nil) }
+                            if inside { model.enterLabel(piece: label.pieceIndex) } else { model.leaveLabel(piece: label.pieceIndex) }
                         }
-                        .onTapGesture { model.click(piece: label.pieceIndex) }
+                        .onTapGesture { model.openLabel(piece: label.pieceIndex, count: NSApp.currentEvent?.clickCount ?? 1) }
                         .named(NamedThing(label.node), in: model)
                         .frame(width: room, alignment: right ? .leading : .trailing)
                         .position(x: right ? label.position.x + room / 2 : label.position.x - room / 2, y: label.position.y)

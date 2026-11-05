@@ -29,6 +29,11 @@ struct PlanItem: Codable, Identifiable, Equatable {
     var lastKnownBytes: UInt64 = 0
     /// You saw that it changed after it was planned, and still want it gone.
     var acceptedChange: Date? = nil
+    /// When you saw that something was using it, and still wanted it gone. That holds for a short while: by the next time, it
+    /// may be something else using it, and you'd want to know.
+    var acceptedInUseAt: Date? = nil
+    static let acceptingInUseLasts: TimeInterval = 10 * 60
+    var acceptsInUse: Bool { acceptedInUseAt.map { Date().timeIntervalSince($0) < Self.acceptingInUseLasts } ?? false }
     /// Which disk this was on, so that a different disk with the same name can't be mistaken for it.
     var diskID: String? = nil
 
@@ -322,10 +327,16 @@ extension Accounting {
         }
         guard !inFolder.isEmpty else { return ([], 0) }
         func holds(_ folder: UInt32) -> UInt64 { tree.totals[Int(folder)] &+ tree.aliasTotals[Int(folder)] }
+        var nameable: [UInt32: Bool] = [:]
         func mayName(_ folder: UInt32) -> Bool {
-            guard folder != 0, folder != tree.home, !set.contains(folder), !tree.nodes[Int(folder)].has(NodeFlag.anchor),
-                  !Titles.isGeneralFolder(tree.name(folder)), let path = tree.path(folder) else { return false }
-            return Safety.canTrash(path)
+            if let known = nameable[folder] { return known }
+            var answer = false
+            if folder != 0, folder != tree.home, !set.contains(folder), !tree.nodes[Int(folder)].has(NodeFlag.anchor),
+               !Titles.isGeneralFolder(tree.name(folder)), let path = tree.path(folder) {
+                answer = Safety.canTrash(path)
+            }
+            nameable[folder] = answer
+            return answer
         }
         // Where each copy starts: its folder if the folder is nothing else, otherwise each file.
         var tops = Set<UInt32>()
@@ -338,29 +349,57 @@ extension Accounting {
                 for file in filesInFolder[folder] ?? [] { tops.insert(file) }
             }
         }
-        // Up from each folder, for as long as the one above holds little else. Season folders become their show's folder.
-        var changed = true
-        while changed {
-            changed = false
-            for top in Array(tops) where covered[top] != nil {
-                let up = tree.nodes[Int(top)].parent
-                guard mayName(up) else { continue }
-                var together: UInt64 = 0
-                var siblings: [UInt32] = []
-                for other in tops where tree.nodes[Int(other)].parent == up && covered[other] != nil {
-                    together &+= covered[other] ?? 0
-                    siblings.append(other)
-                }
-                if Double(together) >= Double(holds(up)) * 0.95 {
-                    for s in siblings { tops.remove(s) }
-                    tops.insert(up)
-                    covered[up] = together
-                    changed = true
+        climb(&tops, covered: &covered, parent: { tree.nodes[Int($0)].parent }, mayName: mayName, holds: holds)
+        // The biggest first, because the first is the one that gets named.
+        let biggestFirst = tops.sorted { holds($0) != holds($1) ? holds($0) > holds($1) : $0 < $1 }
+        return (biggestFirst, bytes)
+    }
+
+    /// Up from each folder, for as long as the one above holds little else. Season folders become their show's folder. The deepest
+    /// go first, so each folder is looked at once, holding all it ever will. Thousands of copies cost little more than a few, and
+    /// the answer doesn't depend on the order they were found in. What's inside a named folder isn't named as well.
+    static func climb(_ tops: inout Set<UInt32>, covered: inout [UInt32: UInt64], parent: (UInt32) -> UInt32, mayName: (UInt32) -> Bool, holds: (UInt32) -> UInt64) {
+        func depth(of node: UInt32) -> Int {
+            var steps = 0, at = node
+            while at != 0 {
+                at = parent(at)
+                steps += 1
+            }
+            return steps
+        }
+        var inside: [UInt32: Set<UInt32>] = [:]
+        for top in tops where covered[top] != nil { inside[parent(top), default: []].insert(top) }
+        var byDepth: [[UInt32]] = []
+        for folder in inside.keys {
+            let level = depth(of: folder)
+            while byDepth.count <= level { byDepth.append([]) }
+            byDepth[level].append(folder)
+        }
+        var level = byDepth.count - 1
+        while level > 0 {
+            for up in byDepth[level] where mayName(up) {
+                let members = inside[up] ?? []
+                let together = members.reduce(UInt64(0)) { $0 &+ (covered[$1] ?? 0) }
+                guard Double(together) >= Double(holds(up)) * 0.95 else { continue }
+                tops.subtract(members)
+                tops.insert(up)
+                covered[up] = together
+                let next = parent(up)
+                if inside[next] == nil { byDepth[level - 1].append(next) }
+                inside[next, default: []].insert(up)
+            }
+            level -= 1
+        }
+        for top in Array(tops) {
+            var at = top
+            while at != 0 {
+                at = parent(at)
+                if tops.contains(at) {
+                    tops.remove(top)
                     break
                 }
             }
         }
-        return (Array(tops), bytes)
     }
 }
 

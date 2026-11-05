@@ -15,6 +15,8 @@ struct VolumeFacts {
     var vm: UInt64 = 0
     var data: UInt64 = 0
 
+    /// What to call this disk on screen. `name` is what it's filed under.
+    var shownName: String { HiddenNames.name(ofDisk: name, isBoot: isBoot) }
     var used: UInt64 { capacity > free ? capacity - free : 0 }
     /// APFS volumes we can't mount, such as Recovery: whatever the container uses beyond the ones we can read.
     var recovery: UInt64 {
@@ -97,7 +99,7 @@ final class DiskScan: @unchecked Sendable {
 
     private func planBootDisk() {
         let f = NodeFlag.self
-        _ = scanner.addNode(parent: 0, display: facts.name, flags: f.synthetic | f.directory)
+        _ = scanner.addNode(parent: 0, display: facts.shownName, flags: f.synthetic | f.directory)
         let dataRoot = "/System/Volumes/Data"
         let home = NSHomeDirectory()
         let homeInData = dataRoot + home
@@ -146,7 +148,7 @@ final class DiskScan: @unchecked Sendable {
 
     private func planExternalDisk() {
         let f = NodeFlag.self
-        _ = scanner.addNode(parent: 0, display: facts.name, flags: f.synthetic | f.directory)
+        _ = scanner.addNode(parent: 0, display: facts.shownName, flags: f.synthetic | f.directory)
         _ = scanner.addNode(parent: 0, display: "Files", flags: f.anchor | f.directory | f.projects, path: facts.mountPath)
         tree.hidden = scanner.addNode(parent: 0, display: "Hidden", flags: f.synthetic | f.hidden, rule: rules.hiddenRule, kind: .system)
         tree.free = scanner.addNode(parent: 0, display: "Free", flags: f.synthetic | f.free, bytes: facts.free)

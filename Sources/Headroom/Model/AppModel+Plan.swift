@@ -52,6 +52,8 @@ extension AppModel {
     // MARK: Keeping the plan
 
     func loadPlan() {
+        // What you've selected is written down under its real names, and it's still yours when you start the app normally.
+        guard !HiddenNames.isOn else { return }
         let file = PlanStore.load()
         plan = file.list
         lastPlanItems = file.lastItems
@@ -64,6 +66,7 @@ extension AppModel {
     }
 
     func savePlan() {
+        guard !HiddenNames.isOn else { return }
         var file = PlanFile(list: plan, lastItems: lastPlanItems)
         if let afterClean, afterClean.state == .waiting {
             file.cleaned = afterClean.things
@@ -623,6 +626,13 @@ extension AppModel {
         runChecks()
     }
 
+    func acceptInUse(for id: String) {
+        guard let at = plan.items.firstIndex(where: { $0.id == id }) else { return }
+        plan.items[at].acceptedInUseAt = Date()
+        savePlan()
+        runChecks()
+    }
+
     func quit(bundleID: String) {
         let apps = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
         apps.forEach { $0.terminate() }
@@ -650,6 +660,7 @@ extension AppModel {
 
     /// The disks something could move to: any but the one it's on.
     func otherDisks(for path: String) -> [DiskChoice] {
+        guard !HiddenNames.isOn else { return [] }
         let here = PathMath.mount(of: PathMath.visible(path))
         var out = volumes.filter { $0.mountPath != here && $0.mountPath != "/" }.map { DiskChoice(name: $0.name, mountPath: $0.mountPath, isPluggedIn: true) }
         for name in facts.knownDisks where "/Volumes/" + name != here && !out.contains(where: { $0.name == name }) && !volumes.contains(where: { $0.name == name }) {
@@ -759,9 +770,11 @@ extension AppModel {
 
     // MARK: Checks
 
-    /// Looks at everything planned as it is now. Nothing changes.
-    func runChecks() {
+    /// Looks at everything planned as it is now. Nothing changes. `fresh` is for when you asked, or came back: while you're
+    /// ticking things, what was seen a moment ago will do.
+    func runChecks(fresh: Bool = false) {
         guard let tree else { return }
+        checkRun?.cancel()
         checkGeneration += 1
         let generation = checkGeneration
         isChecking = true
@@ -773,9 +786,10 @@ extension AppModel {
         }
         let byItem = planNodes
         let fullAccess = hasFullAccess
-        Task.detached(priority: .userInitiated) {
+        checkRun = Task.detached(priority: .userInitiated) {
             var others: [String: OtherCopy] = [:]
             for item in items {
+                if Task.isCancelled { return }
                 guard let nodes = byItem[item.id], !nodes.isEmpty, !item.isEmptyTrash, !tree.links.isEmpty else { continue }
                 let found = Accounting.otherCopies(of: nodes, in: tree)
                 if let first = found.folders.first, found.bytes > 1_000_000 {
@@ -783,7 +797,8 @@ extension AppModel {
                 }
             }
             let othersNow = others
-            let result = PlanChecks.run(items: items, trueBytes: bytes, otherCopy: othersNow.mapValues { (title: $0.title, bytes: $0.bytes) }, runningApps: apps, fullAccess: fullAccess)
+            let result = PlanChecks.run(items: items, trueBytes: bytes, otherCopy: othersNow.mapValues { (title: $0.title, bytes: $0.bytes) }, runningApps: apps, fullAccess: fullAccess, fresh: fresh)
+            guard !Task.isCancelled else { return }
             await MainActor.run {
                 guard self.checkGeneration == generation, self.tree === tree else { return }
                 self.checks = Self.adding(self.cleanFailures, to: result)
@@ -806,7 +821,7 @@ extension AppModel {
     func tryAgain(_ item: PlanItem) {
         cleanFailures[item.id] = nil
         message = nil
-        runChecks()
+        runChecks(fresh: true)
     }
 
     func openAutomationSettings() {
@@ -935,7 +950,7 @@ extension AppModel {
 
     /// One thing, right away, without going through the list. It has the same checks and the same way back as a clean. What
     /// you'd get back was said in the menu, so a hard link is no reason to stop here.
-    func sendToTrash(_ thing: NamedThing) {
+    func sendToTrash(_ thing: NamedThing, anyway: Bool = false) {
         guard let node = thing.single, node != 0, let tree, canEditPlan else { return }
         guard !tree.isPartial else {
             showTip("Just a moment, the disk is still being read.")
@@ -949,7 +964,7 @@ extension AppModel {
         factsOfSavedMap = false
         message = nil
         let item = PlanItem(id: "sent:" + path, title: title, note: tree.friendlyPath(node), tierRaw: Tier.noLoss.rawValue, paths: [path],
-                            lastKnownBytes: tree.totals[Int(node)], diskID: Cleaner.diskID(of: path))
+                            lastKnownBytes: tree.totals[Int(node)], acceptedInUseAt: anyway ? Date() : nil, diskID: Cleaner.diskID(of: path))
         let apps = NSWorkspace.shared.runningApplications.compactMap { app -> PlanChecks.RunningApp? in
             guard let id = app.bundleIdentifier else { return nil }
             return PlanChecks.RunningApp(bundleID: id, name: app.localizedName ?? id)
@@ -980,8 +995,21 @@ extension AppModel {
             }
             let inTrash = moved
             let why = reason
-            await MainActor.run { self.finishSending(node, item, path: path, moved: inTrash, why: why, share: share, tree: tree) }
+            await MainActor.run {
+                // Something using it is yours to overrule, so you're asked, instead of it quietly staying where it is.
+                if case .inUse? = why, let raw = tree.path(node) { self.busyToSend = BusyThing(path: raw, title: title, why: why?.text ?? "") }
+                self.finishSending(node, item, path: path, moved: inTrash, why: why, share: share, tree: tree)
+            }
         }
+    }
+
+    /// You were told what's using it, and it goes anyway. The map may have been read again while you were deciding.
+    func sendAnyway(_ busy: BusyThing) {
+        guard let tree, let node = tree.find(path: busy.path) else {
+            showTip("\(busy.title) isn't on the map any more.")
+            return
+        }
+        sendToTrash(NamedThing(node), anyway: true)
     }
 
     private func finishSending(_ node: UInt32, _ item: PlanItem, path: String, moved: (place: String, identity: String?)?, why: CheckProblem?, share: [UInt32: UInt64], tree: DiskTree) {
@@ -1014,7 +1042,8 @@ extension AppModel {
                 rebuildInsights()
                 relayout(.settle)
             }
-            showTip("Moved to Trash: \(item.title)", for: 8, offeringUndo: true)
+            let there = (moved.place as NSString).lastPathComponent
+            showTip("Moved to Trash: \(item.title)" + (there == (path as NSString).lastPathComponent ? "" : ", shown there as \(there)"), for: 8, offeringUndo: true)
             if let looking {
                 if let next {
                     if look == nil { openLook(next, onLeft: looking.onLeft) } else { showInLook(next, steppingIn: false) }
@@ -1022,7 +1051,7 @@ extension AppModel {
                     closeLook()
                 }
             }
-        } else {
+        } else if busyToSend == nil {
             showTip("\(item.title) stayed where it is. \(why?.text ?? "")", for: 6)
         }
         if !plan.isEmpty { runChecks() }

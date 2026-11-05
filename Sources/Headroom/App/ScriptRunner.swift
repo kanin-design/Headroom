@@ -14,6 +14,9 @@ import SwiftUI
 ///     lens map|changes|freeUp
 ///     focus ~/some/folder      zoom straight to a folder
 ///     up
+///     bench                    what everything costs on this disk, in milliseconds
+///     meter start, meter name  how busy the main thread was between the two, and its longest stall
+///     sweep ring 5             the pointer travelling over the ring or the panel, without your real one moving
 ///     back, forward            the arrows at the top of the panel
 ///     select ~/some/file       as if it had been clicked: the panel shows it
 ///     hover ~/some/folder
@@ -40,6 +43,15 @@ import SwiftUI
 ///     memory, footprint        how much memory it uses, and what that's made of
 ///     open models              open a box
 ///     review                   check what's selected
+///     labelpoint 2             the pointer on a name around the ring, and what's lit while it moves there
+///     labelleave 2, ringpoint  the pointer leaves that name, or moves onto the ring itself, and what's lit then
+///     labelclick 2             what a click on that name does. `labelclick 2 2` is the second click of a double-click
+///     ringclick 2              a click on this piece of the ring. `ringclick 2 2` is a double-click
+///     button                   how much of what's selected is ready, and why the rest isn't
+///     busy anyway              what Send to Trash asks when something is using the folder, and the answer: anyway or cancel
+///     cleananyway /some/path   the Clean anyway button, for something selected that's in use
+///     leaks                    with --hide-names, look for real names in everything the app has ready to show
+///     about picture.png        open About Headroom from the app menu, and take its picture
 ///     clean, empty, undo       only ever act inside the throwaway test disk
 ///     keep Title               keep a suggestion
 ///     after on|off             show the disk as it will be after the clean
@@ -60,7 +72,42 @@ import SwiftUI
 ///     film 3 0.1 name          keep photographing in the background without holding anything up: 3 s, every 0.1 s
 ///     memory label             say how much memory is in use, and the most so far
 ///     quit
+/// How busy the main thread is, and the longest it has been away: what you'd feel as a hitch.
+final class MainThreadMeter {
+    private var observer: CFRunLoopObserver?
+    private var wokeAt = 0.0
+    private(set) var busy = 0.0, longest = 0.0, over16 = 0, over50 = 0
+    private let began = CFAbsoluteTimeGetCurrent()
+    private let cpuAtStart = clock_gettime_nsec_np(CLOCK_PROCESS_CPUTIME_ID)
+
+    init() {
+        observer = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.afterWaiting.rawValue | CFRunLoopActivity.beforeWaiting.rawValue, true, 0) { [weak self] _, activity in
+            guard let self else { return }
+            let now = CFAbsoluteTimeGetCurrent()
+            if activity == .afterWaiting {
+                self.wokeAt = now
+            } else if self.wokeAt > 0 {
+                let ms = (now - self.wokeAt) * 1000
+                self.busy += ms
+                self.longest = max(self.longest, ms)
+                if ms > 16 { self.over16 += 1 }
+                if ms > 50 { self.over50 += 1 }
+            }
+        }
+        CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
+    }
+
+    func report(_ label: String) {
+        CFRunLoopRemoveObserver(CFRunLoopGetMain(), observer, .commonModes)
+        let total = (CFAbsoluteTimeGetCurrent() - began) * 1000
+        let cpu = Double(clock_gettime_nsec_np(CLOCK_PROCESS_CPUTIME_ID) - cpuAtStart) / 1e6
+        print(String(format: "meter %-30@ cpu %5.1f%%, main %4.1f%%, longest %5.1f ms, over 16 ms %3d, over 50 ms %3d", label as NSString, cpu / total * 100, busy / total * 100, longest, over16, over50))
+    }
+}
+
 enum ScriptRunner {
+    @MainActor private static var meter: MainThreadMeter?
+
     static var path: String? {
         let args = CommandLine.arguments
         guard let i = args.firstIndex(of: "--script"), i + 1 < args.count else { return nil }
@@ -70,12 +117,15 @@ enum ScriptRunner {
     @MainActor
     static func startIfAsked() {
         guard let path, let text = try? String(contentsOfFile: path, encoding: .utf8) else { return }
+        // Each line as it's written, so a run that gets stuck still says how far it got.
+        setvbuf(stdout, nil, _IOLBF, 0)
         let model = AppModel.shared
         model.forceTouchGuarded = !CommandLine.arguments.contains("--locked")
         Task { @MainActor in
             for raw in text.split(separator: "\n") {
                 let line = raw.trimmingCharacters(in: .whitespaces)
                 if line.isEmpty || line.hasPrefix("#") { continue }
+                print("step \(line)")
                 let parts = line.split(separator: " ", maxSplits: 1).map(String.init)
                 let argument = parts.count > 1 ? parts[1] : ""
                 await run(parts[0], argument, model)
@@ -307,6 +357,121 @@ enum ScriptRunner {
             let sections = measure(3) { _ = Sections.build(from: all, tree: tree, facts: facts) }
             let left = measure(3) { _ = Leftovers.find(in: tree) }
             print(String(format: "suggestions %.1f ms, sorting them into sections %.1f ms, of which leftovers %.1f ms", wins, sections, left))
+        case "meter":
+            // meter start, then meter what it was
+            if argument == "start" {
+                meter = MainThreadMeter()
+            } else {
+                meter?.report(argument)
+                meter = nil
+            }
+        case "benchcopy":
+            // benchcopy /from -> /into: the real copy and check, timed. Only ever inside the throwaway test disk.
+            let parts = argument.components(separatedBy: " -> ")
+            guard parts.count == 2 else { return }
+            let started = DispatchTime.now()
+            do {
+                try Cleaner.copyAndVerify(parts[0], into: parts[1], stop: LockedFlag()) { _ in }
+                print(String(format: "benchcopy: %.0f ms", Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1e6))
+            } catch {
+                print("benchcopy failed: \(error)")
+            }
+        case "touch":
+            // So that something outside can tell how far this has got.
+            FileManager.default.createFile(atPath: argument, contents: nil)
+        case "sweep":
+            // sweep ring 5, sweep panel 5: the pointer travelling over it for that many seconds, without your real one moving.
+            guard let w = mainWindow else { return }
+            let parts = argument.split(separator: " ").map(String.init)
+            let seconds = Double(parts.last ?? "") ?? 3
+            let start = Date()
+            var step = 0.0
+            var moves = 0
+            var busy = 0.0
+            while Date().timeIntervalSince(start) < seconds {
+                step += 1
+                let at: NSPoint
+                if parts.first == "panel" {
+                    at = NSPoint(x: w.frame.width - 180, y: w.frame.height - (300 + (step.truncatingRemainder(dividingBy: 40)) * 12))
+                } else {
+                    let angle = step * 0.19, radius = model.ring.radius * (0.45 + 0.45 * abs(sin(step * 0.03)))
+                    at = NSPoint(x: model.ring.center.x + sin(angle) * radius, y: w.frame.height - (model.ring.center.y - cos(angle) * radius))
+                }
+                guard let event = NSEvent.mouseEvent(with: .mouseMoved, location: at, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0) else { continue }
+                let began = DispatchTime.now()
+                if parts.first == "panel" { w.contentView?.mouseMoved(with: event) } else { model.mapView?.mouseMoved(with: event) }
+                busy += Double(DispatchTime.now().uptimeNanoseconds - began.uptimeNanoseconds) / 1e6
+                moves += 1
+                try? await Task.sleep(for: .milliseconds(12))
+            }
+            print(String(format: "sweep %@: %d moves, %.2f ms each in the call itself", argument, moves, busy / Double(max(moves, 1))))
+        case "bench":
+            // What everything costs on this disk, in milliseconds. Nothing here changes anything on disk.
+            guard let tree = model.tree else { return }
+            func time(_ label: String, rounds: Int = 5, _ body: () -> Void) {
+                let start = DispatchTime.now()
+                for _ in 0..<rounds { body() }
+                let ms = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1e6 / Double(rounds)
+                print(String(format: "bench %-34@ %9.2f ms", label as NSString, ms))
+            }
+            let home = NSHomeDirectory()
+            let facts = model.facts
+            let biggest = model.flatTop(tree).first ?? 0
+            let library = tree.find(path: "/System/Volumes/Data" + home + "/Library") ?? biggest
+            time("reclaimable, biggest") { _ = Accounting.reclaimable([biggest], in: tree) }
+            time("story, biggest") { _ = Accounting.story(biggest, in: tree) }
+            time("hover line, biggest") { _ = Accounting.hoverLine(biggest, bytes: tree.totals[Int(biggest)], in: tree) }
+            time("the top list") { _ = model.flatTop(tree) }
+            time("what's inside, Library") { _ = LookContents.rows(of: library, in: tree) }
+            time("facts, Library") { _ = LookContents.facts(of: library, in: tree) }
+            time("facts, your files") { _ = LookContents.facts(of: tree.home, in: tree) }
+            time("pictures, biggest") { _ = LookContents.media(in: biggest, tree: tree) }
+            time("the menu for it") { _ = model.actions(for: NamedThing(biggest)) }
+            time("kinds, biggest") { _ = tree.kindBytes(biggest) }
+            time("find by path") { _ = tree.find(path: "/System/Volumes/Data" + home + "/Library/Caches") }
+            time("search: a", rounds: 3) { _ = Search.run("a", in: tree) }
+            time("search: mkv", rounds: 3) { _ = Search.run("mkv", in: tree) }
+            time("search: node_modules", rounds: 3) { _ = Search.run("node_modules", in: tree) }
+            time("search: ø", rounds: 3) { _ = Search.run("ø", in: tree) }
+            time("search: blåbær", rounds: 3) { _ = Search.run("blåbær", in: tree) }
+            time("one picture") { _ = model.drawing(tree) }
+            time("the names around it") { _ = model.makeLabels() }
+            let pieces = model.engine.layout.pieces.count
+            time("hover on, hover off", rounds: 20) { model.setHover(pieces / 2); model.setHover(nil) }
+            time("zoom in and back", rounds: 3) { model.zoom(into: RingLayout.chainTail(tree: tree, biggest)); model.go(to: 0) }
+            time("the list for this picture") { model.refreshShownRows() }
+            time("Map to Free Up and back", rounds: 3) { model.setLens(.freeUp); model.setLens(.map) }
+            time("open files", rounds: 3) { _ = OpenFiles.snapshot() }
+            time("check one thing", rounds: 1) {
+                let item = PlanItem(id: "bench", title: "bench", note: "", tierRaw: Tier.yourCall.rawValue, paths: [home + "/Library"], lastKnownBytes: 0)
+                _ = PlanChecks.run(items: [item], trueBytes: [:], otherCopy: [:], runningApps: [], fullAccess: true)
+            }
+            let everything = model.flatRows.filter(\.isPlannable).compactMap { row -> PlanItem? in
+                let paths = row.nodes.compactMap { tree.path($0).map(ThingText.visible) }
+                return paths.isEmpty ? nil : PlanItem(id: row.id, title: row.title, note: "", tierRaw: row.tier.rawValue, paths: paths, lastKnownBytes: row.bytes)
+            }
+            print("bench \(everything.count) things could be ticked, \(everything.reduce(0) { $0 + $1.paths.count }) paths")
+            time("check them all, first time", rounds: 1) { _ = PlanChecks.run(items: everything, trueBytes: [:], otherCopy: [:], runningApps: [], fullAccess: true) }
+            time("check them all, again", rounds: 3) { _ = PlanChecks.run(items: everything, trueBytes: [:], otherCopy: [:], runningApps: [], fullAccess: true) }
+            time("check them all, while ticking", rounds: 3) { _ = PlanChecks.run(items: everything, trueBytes: [:], otherCopy: [:], runningApps: [], fullAccess: true, fresh: false) }
+            let tops = model.flatRows.filter(\.isPlannable).flatMap(\.nodes)
+            print("bench \(tops.count) nodes in those")
+            time("what they'd free", rounds: 3) { _ = Accounting.effect(of: tops, except: [], in: tree) }
+            let effect = Accounting.effect(of: tops, except: [], in: tree)
+            time("the disk as it'd be after", rounds: 3) { _ = AfterPlan(tree: tree, ids: tops, excluded: [], effect: effect) }
+            time("the other copies of each", rounds: 1) { for row in model.flatRows { _ = Accounting.otherCopies(of: row.nodes, in: tree) } }
+            if let volume = model.volume { time("save the map", rounds: 1) { TreeCache.save(tree, for: volume) } }
+            if let volume = model.volume { time("read the saved map", rounds: 3) { _ = TreeCache.load(for: volume) } }
+            time("gather facts, afresh", rounds: 1) { _ = Facts.gather(tree: tree, running: [], fullAccess: true, reusing: nil) }
+            time("gather facts, again", rounds: 2) { _ = Facts.gather(tree: tree, running: [], fullAccess: true, reusing: facts) }
+            time("newest change, 40,000 files", rounds: 1) { _ = Walker.newestChange(in: home + "/Library", limit: 40_000) }
+            time("size of ~/Media", rounds: 3) { _ = Walker.size(of: home + "/Media") }
+            time("size of ~/dev", rounds: 1) { _ = Walker.size(of: home + "/dev") }
+            time("size of ~/Library", rounds: 1) { _ = Walker.size(of: home + "/Library") }
+            time("suggestions", rounds: 3) { _ = Wins.build(tree: tree, rules: model.rules, running: [], facts: facts) }
+            let all = Wins.build(tree: tree, rules: model.rules, running: [], facts: facts)
+            time("sorting them into boxes", rounds: 3) { _ = Sections.build(from: all, tree: tree, facts: facts) }
+            time("changes map", rounds: 3) { _ = ChangeMap(tree: tree, window: model.changeWindow) }
         case "othercopy":
             if let row = model.flatRows.first(where: { $0.title == argument }) { model.toggleOtherCopies(of: row) } else { print("no such row: \(argument)") }
         case "moveplan":
@@ -354,15 +519,100 @@ enum ScriptRunner {
             model.engine.timeScale = Float(argument) ?? 1
         case "shot":
             guard let w = mainWindow else { print("no window"); return }
-            // With the display off for a moment, as on a locked screen, a picture can fail. It works when it's back on.
-            for _ in 0..<8 where !FileManager.default.fileExists(atPath: argument) {
-                let task = Process()
-                task.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-                task.arguments = ["-x", "-o", "-l", String(w.windowNumber), argument]
-                try? task.run()
-                task.waitUntilExit()
-                if !FileManager.default.fileExists(atPath: argument) { try? await Task.sleep(for: .seconds(1)) }
+            await picture(of: w, to: argument)
+            print("shot \(argument)")
+        case "leaks":
+            findLeaks(in: model)
+        case "labelpoint":
+            // labelpoint 2: the pointer arrives on the name around the ring with this number, and moves a little while it's there.
+            guard let w = mainWindow, let at = labelPoint(argument, model) else { print("no such name: \(argument)"); return }
+            func move(_ x: Double, _ y: Double) {
+                let p = NSPoint(x: x, y: w.frame.height - y)
+                guard let event = NSEvent.mouseEvent(with: .mouseMoved, location: p, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0) else { return }
+                w.contentView?.superview?.hitTest(p)?.mouseMoved(with: event)
+                model.mapView?.mouseMoved(with: event)
             }
+            let label = at.label
+            print("name \"\(label.title)\" at \(Int(at.x)),\(Int(at.y)), lands on \(w.contentView?.superview?.hitTest(NSPoint(x: at.x, y: w.frame.height - at.y)).map { String(describing: type(of: $0)).prefix(24) } ?? "nothing")")
+            model.enterLabel(piece: label.pieceIndex)
+            print("arrived: lit \(model.hover?.title ?? "nothing")")
+            move(at.x, at.y)
+            try? await Task.sleep(for: .milliseconds(60))
+            print("after a small move: lit \(model.hover?.title ?? "nothing")")
+            move(at.x + 2, at.y)
+            try? await Task.sleep(for: .milliseconds(60))
+            print("after another: lit \(model.hover?.title ?? "nothing")")
+        case "labelleave":
+            // labelleave 2: the pointer goes from that name to empty space beside the ring.
+            guard let w = mainWindow, let at = labelPoint(argument, model) else { print("no such name: \(argument)"); return }
+            model.leaveLabel(piece: at.label.pieceIndex)
+            let p = NSPoint(x: 8, y: w.frame.height - 400)
+            if let event = NSEvent.mouseEvent(with: .mouseMoved, location: p, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0) { model.mapView?.mouseMoved(with: event) }
+            print("left: lit \(model.hover?.title ?? "nothing")")
+        case "ringpoint":
+            // The pointer on the biggest piece of the ring itself.
+            guard let w = mainWindow, let piece = model.engine.layout.pieces.filter({ !$0.isSmaller && !$0.isMark && $0.style == 0 }).max(by: { $0.bytes < $1.bytes }) else { return }
+            let angle = Double(piece.a0 + piece.a1) / 2, radius = Double(piece.r0 + piece.r1) / 2 * model.ring.radius
+            let p = NSPoint(x: model.ring.center.x + sin(angle) * radius, y: w.frame.height - (model.ring.center.y - cos(angle) * radius))
+            print("ring: lands on \(w.contentView?.superview?.hitTest(p).map { String(describing: type(of: $0)).prefix(24) } ?? "nothing")")
+            if let event = NSEvent.mouseEvent(with: .mouseMoved, location: p, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0) { model.mapView?.mouseMoved(with: event) }
+            print("on the ring: lit \(model.hover?.title ?? "nothing")")
+        case "ringclick":
+            // ringclick 2 2: a double-click on this piece of the ring, counting what can be clicked. `ringclick 2` is one click.
+            let numbers = argument.split(separator: " ").map(String.init)
+            let pieces = model.engine.layout.pieces.filter { !$0.isSmaller && !$0.isMark }
+            guard let at = Int(numbers.first ?? ""), pieces.indices.contains(at), let tree = model.tree else { print("no such piece: \(argument)"); return }
+            let piece = pieces[at]
+            let angle = Double(piece.a0 + piece.a1) / 2, radius = Double(piece.r0 + piece.r1) / 2 * model.ring.radius
+            print("on the ring at \"\(tree.name(piece.node))\", in \(model.displayName(model.focus)), \(model.plan.count) selected")
+            await run("press", "\(model.ring.center.x + sin(angle) * radius) \(model.ring.center.y - cos(angle) * radius) \(numbers.count > 1 ? numbers[1] : "1")", model)
+            try? await Task.sleep(for: .milliseconds(700))
+            print("now in \(model.displayName(model.focus)), selected thing \(model.selected.map(model.displayName) ?? "none"), \(model.plan.count) selected")
+        case "labelclick":
+            // labelclick 2: what a click on that name does. `labelclick 2 2` is the second click of a double-click.
+            let numbers = argument.split(separator: " ").map(String.init)
+            guard let at = labelPoint(numbers.first ?? "", model) else { print("no such name: \(argument)"); return }
+            print("clicking \"\(at.label.title)\", in \(model.displayName(model.focus)), \(model.plan.count) selected")
+            model.openLabel(piece: at.label.pieceIndex, count: numbers.count > 1 ? Int(numbers[1]) ?? 1 : 1)
+            try? await Task.sleep(for: .milliseconds(700))
+            print("now in \(model.displayName(model.focus)), selected thing \(model.selected.map(model.displayName) ?? "none"), \(model.plan.count) selected")
+        case "busy":
+            // busy anyway|cancel: what Send to Trash is asking, because something is using the folder, and the answer.
+            print("busy: \(model.busyToSend.map { "\($0.title) is in use. \($0.why)" } ?? "nothing asked")")
+            guard let busy = model.busyToSend else { return }
+            if argument.hasPrefix("/") {
+                // A picture of the question, which stays open.
+                try? await Task.sleep(for: .milliseconds(500))
+                if let sheet = NSApp.windows.first(where: { $0.isVisible && $0.sheetParent != nil }) { await picture(of: sheet, to: argument) } else { print("no sheet to picture: \(NSApp.windows.map(\.title))") }
+                return
+            }
+            model.busyToSend = nil
+            if argument == "anyway" {
+                model.sendAnyway(busy)
+                while model.cleanProgress != nil { try? await Task.sleep(for: .milliseconds(50)) }
+            }
+        case "cleananyway":
+            if let item = model.plan.items.first(where: { $0.paths.first == argument }) { model.acceptInUse(for: item.id) } else { print("no such planned thing: \(argument)") }
+        case "button":
+            // What the button under the Free Up list says, what's held back, and why.
+            print("ready \(model.readyItems.count) of \(model.plan.count); held: \(model.heldBackItems.map { "\($0.title): \(model.checks[$0.id]?.problems.map(\.text) ?? [])" })")
+        case "about":
+            // about /path/to/picture.png: About Headroom from the app menu, as a click on it would open it.
+            let titles = { NSApp.windows.filter(\.isVisible).map(\.title) }
+            print("open before: \(titles())")
+            guard let menu = NSApp.mainMenu?.items.first?.submenu, let at = menu.items.firstIndex(where: { $0.title == "About Headroom" }) else {
+                print("no About item")
+                return
+            }
+            menu.performActionForItem(at: at)
+            try? await Task.sleep(for: .milliseconds(600))
+            print("open after: \(titles())")
+            guard let w = NSApp.windows.first(where: { $0.isVisible && $0.title == "About Headroom" }) else {
+                print("no About window")
+                return
+            }
+            print("about: \(w.frame.size), resizable \(w.styleMask.contains(.resizable)), minimize \(w.standardWindowButton(.miniaturizeButton)?.isEnabled == true), zoom \(w.standardWindowButton(.zoomButton)?.isEnabled == true)")
+            await picture(of: w, to: argument)
             print("shot \(argument)")
         case "film":
             let parts = argument.split(separator: " ").map(String.init)
@@ -515,6 +765,108 @@ enum ScriptRunner {
             NSApp.terminate(nil)
         default:
             print("unknown step: \(command)")
+        }
+    }
+
+    /// Somewhere on a name around the ring, by its number among those names.
+    @MainActor
+    private static func labelPoint(_ argument: String, _ model: AppModel) -> (label: MapLabel, x: Double, y: Double)? {
+        let names = model.labels.filter { $0.place != .inside }
+        guard let at = Int(argument), names.indices.contains(at) else { return nil }
+        let label = names[at]
+        return (label, label.position.x + (label.place == .right ? 18 : -18), label.position.y)
+    }
+
+    /// With --hide-names: everything the app has ready to show, checked against the real names on this disk. A hit is printed to
+    /// be read, because a real folder can have an everyday name.
+    @MainActor
+    private static func findLeaks(in model: AppModel) {
+        guard let tree = model.tree else { return }
+        var real = Set<String>()
+        for id in tree.displayNames.keys {
+            let raw = tree.rawName(id).lowercased()
+            guard raw.count >= 4, !raw.hasPrefix("/") else { continue }
+            real.insert(raw)
+            real.insert((raw as NSString).deletingPathExtension)
+        }
+        real.insert(NSUserName().lowercased())
+        for volume in model.volumes where !volume.isBoot { real.insert(volume.name.lowercased()) }
+        for disk in model.facts.knownDisks { real.insert(disk.lowercased()) }
+
+        // Strings that are never shown: what things are known by, and where they are for doing something with them.
+        let unshown: Set<String> = ["id", "command", "bundleID", "appPath", "previewPath", "otherCopiesPath", "extraPaths", "key"]
+        var lines: [(place: String, text: String)] = []
+        func collect(_ place: String, _ value: Any) {
+            if let text = value as? String {
+                lines.append((place, text))
+                return
+            }
+            for child in Mirror(reflecting: value).children {
+                if let label = child.label, unshown.contains(label) { continue }
+                collect(place, child.value)
+            }
+        }
+        // Everything big enough to have a name on screen, and what's right inside it.
+        var things = model.flatTop(tree)
+        for top in things.prefix(60) { things += tree.children(top).prefix(12) }
+        for lens in [Lens.map, .changes, .freeUp] {
+            model.setLens(lens)
+            collect("list", model.shownRows)
+            collect("names around the ring", model.makeLabels())
+        }
+        for window in [ChangeWindow.lastScan, .days(7), .days(30)] {
+            collect("changes", ChangeMap(tree: tree, window: window).rows(tree: tree, rules: model.rules))
+        }
+        model.setLens(.map)
+        collect("suggestions", model.flatRows)
+        collect("boxes", Sections.build(from: Wins.build(tree: tree, rules: model.rules, running: [], facts: model.facts), tree: tree, facts: model.facts))
+        collect("copy list", model.listText()?.text ?? "")
+        for node in things {
+            let thing = NamedThing(node)
+            collect("name", [model.displayName(node), model.realName(of: node), tree.friendlyPath(node)])
+            collect("menu", model.actions(for: thing).map(\.title))
+            collect("delete menu", model.deleteActions(for: thing).map(\.title))
+            collect("story", Accounting.story(node, in: tree))
+            collect("middle of the ring", Accounting.hoverLine(node, bytes: tree.totals[Int(node)], in: tree) ?? "")
+            collect("facts", LookContents.facts(of: node, in: tree))
+            model.copyPath(of: thing)
+            collect("tip", model.tip ?? "")
+        }
+        for query in ["a", "e", "s"] {
+            for found in Search.run(query, in: tree).prefix(200) {
+                collect("search", [tree.name(found), tree.path(tree.nodes[Int(found)].parent).map(DiskTree.friendly) ?? ""])
+            }
+        }
+        collect("disks", model.volumes.map(\.shownName))
+
+        var seen = Set<String>()
+        var hits = 0
+        for line in lines {
+            let words = line.text.lowercased().split { " /,:;()\"“”›…·\n".contains($0) }.map { $0.hasSuffix(".") ? String($0.dropLast()) : String($0) }
+            for start in words.indices {
+                var run = ""
+                for end in start..<min(start + 8, words.count) {
+                    run += (end == start ? "" : " ") + words[end]
+                    if real.contains(run), seen.insert(run + "|" + line.place).inserted {
+                        hits += 1
+                        print("leak? \"\(run)\" in \(line.place): \(line.text)")
+                    }
+                }
+            }
+        }
+        print("leaks: looked at \(lines.count) lines against \(real.count) real names, \(hits) to read")
+    }
+
+    /// With the display off for a moment, as on a locked screen, a picture can fail. It works when it's back on.
+    @MainActor
+    private static func picture(of window: NSWindow, to path: String) async {
+        for _ in 0..<8 where !FileManager.default.fileExists(atPath: path) {
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+            task.arguments = ["-x", "-o", "-l", String(window.windowNumber), path]
+            try? task.run()
+            task.waitUntilExit()
+            if !FileManager.default.fileExists(atPath: path) { try? await Task.sleep(for: .seconds(1)) }
         }
     }
 

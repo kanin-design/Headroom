@@ -43,6 +43,14 @@ private struct SendToTrashCommand: View {
     }
 }
 
+private struct AboutCommand: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("About Headroom") { openWindow(id: "about") }
+    }
+}
+
 struct HeadroomApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
@@ -57,6 +65,9 @@ struct HeadroomApp: App {
         .windowResizability(.contentMinSize)
         .defaultSize(width: 1440, height: 900)
         .commands {
+            CommandGroup(replacing: .appInfo) {
+                AboutCommand()
+            }
             CommandGroup(replacing: .newItem) {
                 Button("Scan Again") { AppModel.shared.scan(hurry: true) }
                     .keyboardShortcut("r", modifiers: .command)
@@ -122,5 +133,19 @@ struct HeadroomApp: App {
                 .keyboardShortcut("f", modifiers: .command)
             }
         }
+
+        Window("About Headroom", id: "about") {
+            AboutView()
+                .windowMinimizeBehavior(.disabled)
+                .windowResizeBehavior(.disabled)
+                .windowFullScreenBehavior(.disabled)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentSize)
+        .windowBackgroundDragBehavior(.enabled)
+        .restorationBehavior(.disabled)
+        .defaultLaunchBehavior(.suppressed)
+        .defaultPosition(.center)
+        .commandsRemoved()
     }
 }

@@ -241,42 +241,4 @@ final class MapRenderer {
     }
 
     var commandQueue: MTLCommandQueue { queue }
-
-    /// Renders one frame off screen, for tests and for the app icon.
-    func renderPNG(to path: String, width: Int, height: Int, uniforms: UniformsGPU) {
-        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: Self.outputFormat, width: width, height: height, mipmapped: false)
-        d.usage = [.renderTarget, .shaderRead]
-        d.storageMode = .managed
-        guard let target = device.makeTexture(descriptor: d), let commands = queue.makeCommandBuffer() else { return }
-        encode(into: commands, target: target, uniforms: uniforms)
-        if let blit = commands.makeBlitCommandEncoder() {
-            blit.synchronize(resource: target)
-            blit.endEncoding()
-        }
-        commands.commit()
-        commands.waitUntilCompleted()
-        Self.writePNG(target, path: path)
-    }
-
-    static func writePNG(_ texture: MTLTexture, path: String) {
-        let w = texture.width, h = texture.height
-        var half = [Float16](repeating: 0, count: w * h * 4)
-        texture.getBytes(&half, bytesPerRow: w * 8, from: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0)
-        var bytes = [UInt8](repeating: 255, count: w * h * 4)
-        for i in 0..<(w * h) {
-            for c in 0..<3 {
-                let v = max(0, min(1, Float(half[i * 4 + c])))
-                let e = v <= 0.0031308 ? 12.92 * v : 1.055 * pow(v, 1 / 2.4) - 0.055
-                bytes[i * 4 + c] = UInt8(e * 255 + 0.5)
-            }
-        }
-        let space = CGColorSpace(name: CGColorSpace.displayP3)!
-        guard let provider = CGDataProvider(data: Data(bytes) as CFData),
-              let image = CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: w * 4, space: space,
-                                  bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue), provider: provider, decode: nil,
-                                  shouldInterpolate: false, intent: .defaultIntent),
-              let out = CGImageDestinationCreateWithURL(URL(fileURLWithPath: path) as CFURL, "public.png" as CFString, 1, nil) else { return }
-        CGImageDestinationAddImage(out, image, nil)
-        CGImageDestinationFinalize(out)
-    }
 }

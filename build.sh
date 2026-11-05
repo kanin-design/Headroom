@@ -20,7 +20,11 @@ cp .build/release/Headroom $APP/Contents/MacOS/Headroom
 # Its names are only for debugging, and they're over half the file.
 strip -x $APP/Contents/MacOS/Headroom
 cp Resources/Info.plist $APP/Contents/Info.plist
-[ -f Resources/AppIcon.icns ] && cp Resources/AppIcon.icns $APP/Contents/Resources/AppIcon.icns
+# One higher with every build, so About Headroom can tell you which one is running.
+BUILD=$(( $(cat .build-number 2>/dev/null || echo 0) + 1 ))
+echo $BUILD > .build-number
+plutil -replace CFBundleVersion -string "$BUILD" $APP/Contents/Info.plist
+cp Resources/Assets.car Resources/AppIcon.icns Resources/logo.png $APP/Contents/Resources/
 cp Sources/Headroom/Render/Shaders.metal $APP/Contents/Resources/Shaders.metal
 ID=$(security find-identity -p codesigning -v 2>/dev/null | awk -F'"' '/Apple Development/ {print $2; exit}')
 # A locked keychain can refuse the real identity. The app still runs ad-hoc, but will ask for access again.

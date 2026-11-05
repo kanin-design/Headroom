@@ -28,8 +28,8 @@ a first launch looks like, quit the app and start it without the saved scan:
 open build/Headroom.app --args --no-cache
 ```
 
-To take a screenshot without showing what's on your disk, start the app with `--hide-names`. That swaps folder and file names in
-the Map for made-up ones, and turns off moving anything to the Trash.
+To take a screenshot without showing what's on your disk, start the app with `--hide-names`. That swaps folder and file names for
+made-up ones everywhere, paths and disk names included, and turns off moving anything to the Trash.
 
 ## How to use Headroom
 
@@ -127,6 +127,7 @@ In Free Up:
 | `Advice/Sections.swift` | The boxes: every suggestion sorted by what it is, leftovers found by name and contents, and what's in the picture on screen |
 | `Advice/Plan.swift` | The list of what's selected and what it does to the numbers. No file is touched here |
 | `Advice/Cleaner.swift` | Everything that touches files, behind one check, and the checks before a clean |
+| `Advice/Walker.swift` | Looking closely at one folder: its size, newest change, largest file and files with more than one path |
 | `Advice/Advisors.swift` | Suggestions about whole things: a series, an app, a project |
 | `Advice/Facts.swift` | Spotlight and other apps' records, read in the background |
 | `Model/History.swift` | The saved last scan, snapshots for comparison, free-space history |
@@ -150,4 +151,4 @@ The logic behind the suggestions and the plan has automated tests, on made-up di
 swift test
 ```
 
-To redraw the app icon, run `Resources/make-icon.sh`.
+The app icon is an Icon Composer document, `Resources/AppIcon.icon`. After changing it, run `Resources/make-icon.sh`.

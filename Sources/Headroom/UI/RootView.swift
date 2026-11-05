@@ -57,6 +57,12 @@ struct RootView: View {
         .preferredColorScheme(.dark)
         .focusEffectDisabled()
         .animation(.spring(response: 0.42, dampingFraction: 0.88), value: model.panelOpen)
+        .alert("\(model.busyToSend?.title ?? "This") is in use", isPresented: Binding(get: { model.busyToSend != nil }, set: { if !$0 { model.busyToSend = nil } }), presenting: model.busyToSend) { busy in
+            Button("Send to Trash Anyway", role: .destructive) { model.sendAnyway(busy) }
+            Button("Cancel", role: .cancel) {}
+        } message: { busy in
+            Text(busy.why + " You can undo this until the Trash is emptied.")
+        }
         .onAppear { model.start() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             model.didBecomeActive()
@@ -138,7 +144,7 @@ struct DiskChip: View {
                 Button {
                     model.switchVolume(volume)
                 } label: {
-                    Label("\(volume.name)  ·  \(formatBytes(volume.free)) free of \(formatBytes(volume.capacity))",
+                    Label("\(volume.shownName)  ·  \(formatBytes(volume.free)) free of \(formatBytes(volume.capacity))",
                           systemImage: volume.isBoot ? "internaldrive" : "externaldrive")
                 }
             }
@@ -154,7 +160,7 @@ struct DiskChip: View {
                         .font(.system(size: 12, weight: .semibold))
                 }
                 VStack(alignment: .leading, spacing: -1) {
-                    Text(model.volume?.name ?? "Disk")
+                    Text(model.volume?.shownName ?? "Disk")
                         .font(.system(size: 12, weight: .semibold))
                     if model.isScanning {
                         Text(model.scanFiles > 0 ? "Reading \(formatCount(model.scanFiles)) files" : "Reading")
@@ -314,7 +320,7 @@ struct Breadcrumbs: View {
                         // You're already here, so a click on this one copies its name.
                         if node == model.focus { model.copyName(of: NamedThing(node)) } else { model.go(to: node) }
                     } label: {
-                        Text(index == 0 ? (model.volume?.name ?? "Disk") : model.displayName(node))
+                        Text(index == 0 ? (model.volume?.shownName ?? "Disk") : model.displayName(node))
                             .font(.system(size: 12, weight: node == model.focus ? .semibold : .medium))
                             .foregroundStyle(.white.opacity(node == model.focus ? 0.95 : 0.6))
                             .lineLimit(1)

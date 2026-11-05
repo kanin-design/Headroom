@@ -1,0 +1,238 @@
+{
+  "fill-specializations": [
+    {
+      "value": {
+        "solid": "display-p3:0.03000,0.03500,0.05000,1.00000"
+      }
+    },
+    {
+      "appearance": "dark",
+      "value": {
+        "solid": "display-p3:0.03000,0.03500,0.05000,1.00000"
+      }
+    }
+  ],
+  "groups": [
+    {
+      "name": "Free",
+      "layers": [
+        {
+          "image-name": "free.svg",
+          "name": "free",
+          "position": {
+            "scale": 1,
+            "translation-in-points": [
+              0,
+              0
+            ]
+          },
+          "glass": true,
+          "fill": {
+            "solid": "display-p3:0.62000,0.75000,0.86000,0.10000"
+          }
+        }
+      ],
+      "lighting": "individual",
+      "shadow": {
+        "kind": "none",
+        "opacity": 0
+      },
+      "specular": true,
+      "translucency": {
+        "enabled": true,
+        "value": 0.7
+      }
+    },
+    {
+      "name": "Ring",
+      "layers": [
+        {
+          "image-name": "root-0-0.png",
+          "name": "root-0-0",
+          "position": {
+            "scale": 1,
+            "translation-in-points": [
+              0,
+              0
+            ]
+          },
+          "glass": true
+        },
+        {
+          "image-name": "outer-0-1.png",
+          "name": "outer-0-1",
+          "position": {
+            "scale": 1,
+            "translation-in-points": [
+              0,
+              0
+            ]
+          },
+          "glass": true
+        },
+        {
+          "image-name": "outer-0-2.png",
+          "name": "outer-0-2",
+          "position": {
+            "scale": 1,
+            "translation-in-points": [
+              0,
+              0
+            ]
+          },
+          "glass": true
+        },
+        {
+          "image-name": "outer-0-3.png",
+          "name": "outer-0-3",
+          "position": {
+            "scale": 1,
+            "translation-in-points": [
+              0,
+              0
+            ]
+          },
+          "glass": true
+        },
+        {
+          "image-name": "root-1-4.png",
+          "name": "root-1-4",
+          "position": {
+            "scale": 1,
+            "translation-in-points": [
+              0,
+              0
+            ]
+          },
+          "glass": true
+        },
+        {
+          "image-name": "outer-1-5.png",
+          "name": "outer-1-5",
+          "position": {
+            "scale": 1,
+            "translation-in-points": [
+              0,
+              0
+            ]
+          },
+          "glass": true
+        },
+        {
+          "image-name": "outer-1-6.png",
+          "name": "outer-1-6",
+          "position": {
+            "scale": 1,
+            "translation-in-points": [
+              0,
+              0
+            ]
+          },
+          "glass": true
+        },
+        {
+          "image-name": "root-2-7.png",
+          "name": "root-2-7",
+          "position": {
+            "scale": 1,
+            "translation-in-points": [
+              0,
+              0
+            ]
+          },
+          "glass": true
+        },
+        {
+          "image-name": "outer-2-8.png",
+          "name": "outer-2-8",
+          "position": {
+            "scale": 1,
+            "translation-in-points": [
+              0,
+              0
+            ]
+          },
+          "glass": true
+        },
+        {
+          "image-name": "outer-2-9.png",
+          "name": "outer-2-9",
+          "position": {
+            "scale": 1,
+            "translation-in-points": [
+              0,
+              0
+            ]
+          },
+          "glass": true
+        },
+        {
+          "image-name": "root-3-10.png",
+          "name": "root-3-10",
+          "position": {
+            "scale": 1,
+            "translation-in-points": [
+              0,
+              0
+            ]
+          },
+          "glass": true
+        },
+        {
+          "image-name": "outer-3-11.png",
+          "name": "outer-3-11",
+          "position": {
+            "scale": 1,
+            "translation-in-points": [
+              0,
+              0
+            ]
+          },
+          "glass": true
+        }
+      ],
+      "lighting": "individual",
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.35
+      },
+      "specular": true,
+      "translucency": {
+        "enabled": false,
+        "value": 0
+      }
+    },
+    {
+      "name": "Bloom",
+      "layers": [
+        {
+          "image-name": "bloom.png",
+          "name": "bloom",
+          "position": {
+            "scale": 1,
+            "translation-in-points": [
+              0,
+              0
+            ]
+          },
+          "glass": false
+        }
+      ],
+      "lighting": "individual",
+      "shadow": {
+        "kind": "none",
+        "opacity": 0
+      },
+      "specular": false,
+      "translucency": {
+        "enabled": false,
+        "value": 0
+      }
+    }
+  ],
+  "supported-platforms": {
+    "squares": [
+      "macOS"
+    ]
+  }
+}

@@ -122,11 +122,14 @@ with the ring showing what each press did.
 **Checks run as you tick.** Each selected thing is looked at as soon as the ticking stops, and again just before anything
 moves. Is it still there? Is something running from it, or holding a file open in it? Has it changed since you selected it?
 Is the other disk plugged in, with room? Whatever needs a look shows at the top of the panel with a reason and a fix (Quit
-Chrome, Check again, Clean it anyway). Whatever isn't ready stays ticked, and everything else goes ahead.
+Chrome, Clean anyway). Whatever isn't ready stays ticked, and everything else goes ahead. A check never has the last word on
+something that can be put back: something using a folder is a reason to ask, and the answer is yours. Send to Trash asks the
+same thing straight away.
 
 **You can see it go.** Pieces leave as they're moved, and the Trash piece grows, labelled and striped. Free space
 doesn't change yet, and the panel says so. Emptying moves the Trash piece into the Free wedge, and the panel then reports
-what the disk really gave back.
+what the disk really gave back. The Finder hides a name that starts with a dot, even in the Trash, so what goes there shows
+without the dot, the message says so, and Undo brings it back under its own name.
 
 **Undo is real.** Everything keeps its place in the Trash on record, even across a restart, so Undo puts it all back
 and brings the list back too, ready to fix and run again.
@@ -244,6 +247,16 @@ Underneath:
   projects out of 20, and 0.3 s instead of 12 s. At launch, other apps' records are read once: the second pass, after the
   scan, only reads what a saved map couldn't have known.
 - The side panel only makes the rows you can see.
+- Looking closely at one folder has its own walk: `getattrlistbulk` on up to six threads, with one pass collecting the
+  folder's size, its newest change, its largest file and its files with more than one path. While you're ticking things, a
+  look from the last minute is used again. Check Again, coming back to the app and the clean itself always look afresh.
+- Moving something to another disk reads every file back from that disk to compare it. Each file is sent to the disk for
+  that, but making the disk empty its own cache happens once, at the end. That step takes about 10 ms and covers every file
+  written so far, and once per file it was nine tenths of the work. The original stays where it is until it has happened.
+- Finding a file's other copies goes up from the deepest folder and looks at each folder once, so 1,500 clones cost little
+  more than a few. Going deepest first also means one answer, whatever order the copies were found in, with nothing named
+  twice. The biggest copy comes first, because that's the one the panel names.
+- A folder's thumbnails are asked for together, and each shows as soon as it's ready.
 
 Measured on this Mac, an M5 MacBook Air with 2.1 million files and a 494 GB disk, without Full Disk Access:
 
@@ -262,8 +275,21 @@ Measured on this Mac, an M5 MacBook Air with 2.1 million files and a 494 GB disk
 | A refresh, while it reads | Under 150 MB of memory, about 360 MB at the very end if the ring moves |
 | First launch, at the peak | 450–480 MB of memory, with a copy of the tree for each new picture |
 | The saved scan on disk | 1 MB, read back in about 2 ms, and at most about 2 MB of snapshots |
-| The app | 3.5 MB |
+| The app | 6.7 MB, of which the icon is 4.4 MB |
 | Building the ring | Under 1 ms |
+
+And with Full Disk Access, for what happens after the scan:
+
+| | |
+|---|---|
+| Size of `~/Library`, 376,000 files | 1.7 s |
+| Size of `~/dev` | 0.55 s |
+| Checking 47 things, the first time | 0.35 s |
+| Checking them again | 0.2 s |
+| Checking them while you tick | 9 ms |
+| Copying 1,000 small files, compared and on the disk for good | 0.9 s |
+| Finding the other copies of 1,500 clones | About 30 ms |
+| Six thumbnails | About 160 ms |
 
 The scan's limit is APFS itself: about 15 µs per file in the kernel, whichever attributes are requested. Folders
 store no total size, and Spotlight only knows part of the disk. So the design makes the wait not matter, rather than

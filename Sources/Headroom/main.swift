@@ -48,8 +48,4 @@ if args.contains("--bench") {
     }
     exit(0)
 }
-if let i = args.firstIndex(of: "--make-icon"), i + 1 < args.count {
-    IconMaker.make(to: args[i + 1])
-    exit(0)
-}
 HeadroomApp.main()
