@@ -39,6 +39,19 @@ struct Node {
     @inline(__always) func has(_ flag: UInt16) -> Bool { flags & flag != 0 }
 }
 
+/// A block of names. A scan and its pictures share one, and a picture can outlive the block's use by the scan.
+final class NameStore: @unchecked Sendable {
+    let pointer: UnsafeMutablePointer<UInt8>
+    private let capacity: Int
+
+    init(capacity: Int) {
+        self.capacity = capacity
+        pointer = vmAlloc(UInt8.self, capacity)
+    }
+
+    deinit { vmFree(pointer, capacity) }
+}
+
 /// The scan's tables, kept flat and memory-mapped: they're touched only as far as they're used, their addresses
 /// never move while workers write to them, and a parent's index is always lower than its children's.
 final class DiskTree: @unchecked Sendable {
@@ -49,12 +62,21 @@ final class DiskTree: @unchecked Sendable {
     static let statRecent1 = Kind.count, statRecent7 = Kind.count + 1, statRecent30 = Kind.count + 2, statRecent14 = Kind.count + 3
 
     let nodes: UnsafeMutablePointer<Node>
-    let stats: UnsafeMutablePointer<UInt32>
+    /// One row per node until `compactStats`, and only the different rows after it. Read it through `statRow`.
+    private(set) var statTable: UnsafeMutablePointer<UInt32>
+    /// Which row each node has, once there's a row for each different set of numbers.
+    private var statIndex: UnsafeMutablePointer<UInt32>?
+    private var statRowCapacity = 0
+    private var statIndexCount = 0
+    private var nextStatRow: UInt32 = 0
+    /// In `statIndex`: this row is this node's alone, so it can be changed where it is.
+    private static let ownRow: UInt32 = 1 << 31
     let totals: UnsafeMutablePointer<UInt64>
     let totalFiles: UnsafeMutablePointer<UInt32>
     let dfsIn: UnsafeMutablePointer<UInt32>
     let dfsSize: UnsafeMutablePointer<UInt32>
-    let names: UnsafeMutablePointer<UInt8>
+    private var nameStore: NameStore
+    private(set) var names: UnsafeMutablePointer<UInt8>
     /// Links and clones inside a folder that are counted somewhere else.
     let aliasTotals: UnsafeMutablePointer<UInt64>
 
@@ -64,7 +86,6 @@ final class DiskTree: @unchecked Sendable {
     var isPartial = false
     /// The same for every picture of one scan, whose node numbers all mean the same thing.
     var scanID = UUID()
-    private let namesOwner: DiskTree?
     var displayNames: [UInt32: String] = [:]
     /// Files with more than one path, by key, once the scan has finished. See `Accounting`.
     var links: [LinkRecord] = []
@@ -82,25 +103,29 @@ final class DiskTree: @unchecked Sendable {
     var rootPath = ""
 
     init(sharingNamesWith owner: DiskTree? = nil) {
-        namesOwner = owner
         nodes = vmAlloc(Node.self, Self.capacity)
-        stats = vmAlloc(UInt32.self, Self.capacity * Self.statStride)
+        statTable = vmAlloc(UInt32.self, Self.capacity * Self.statStride)
         totals = vmAlloc(UInt64.self, Self.capacity)
         totalFiles = vmAlloc(UInt32.self, Self.capacity)
         dfsIn = vmAlloc(UInt32.self, Self.capacity)
         dfsSize = vmAlloc(UInt32.self, Self.capacity)
-        names = owner?.names ?? vmAlloc(UInt8.self, Self.namesCapacity)
+        nameStore = owner?.nameStore ?? NameStore(capacity: Self.namesCapacity)
+        names = nameStore.pointer
         aliasTotals = vmAlloc(UInt64.self, Self.capacity)
     }
 
     deinit {
         vmFree(nodes, Self.capacity)
-        vmFree(stats, Self.capacity * Self.statStride)
+        if let statIndex {
+            vmFree(statTable, statRowCapacity * Self.statStride)
+            vmFree(statIndex, statIndexCount)
+        } else {
+            vmFree(statTable, Self.capacity * Self.statStride)
+        }
         vmFree(totals, Self.capacity)
         vmFree(totalFiles, Self.capacity)
         vmFree(dfsIn, Self.capacity)
         vmFree(dfsSize, Self.capacity)
-        if namesOwner == nil { vmFree(names, Self.namesCapacity) }
         vmFree(aliasTotals, Self.capacity)
     }
 
@@ -110,7 +135,7 @@ final class DiskTree: @unchecked Sendable {
         let copy = DiskTree(sharingNamesWith: self)
         let n = count
         memcpy(copy.nodes, nodes, n * MemoryLayout<Node>.stride)
-        memcpy(copy.stats, stats, n * Self.statStride * MemoryLayout<UInt32>.stride)
+        memcpy(copy.statTable, statTable, n * Self.statStride * MemoryLayout<UInt32>.stride)
         // A folder finishing during the copy can already point at children past the end of it. And until a folder is read,
         // its file count is really how many entries it has.
         for i in 0..<n {
@@ -156,12 +181,12 @@ final class DiskTree: @unchecked Sendable {
                 c = next
             }
         }
-        let gone = stats + Int(id) * Self.statStride
+        let gone = statRow(id)
         var i = parent
         while true {
             totals[Int(i)] = totals[Int(i)] &- min(totals[Int(i)], bytes)
             totalFiles[Int(i)] = totalFiles[Int(i)] &- min(totalFiles[Int(i)], files)
-            let s = stats + Int(i) * Self.statStride
+            let s = changeableStatRow(i)
             for f in 0..<Self.statStride { s[f] = s[f] &- min(s[f], gone[f]) }
             if i == 0 { break }
             i = nodes[Int(i)].parent
@@ -214,12 +239,12 @@ final class DiskTree: @unchecked Sendable {
         }
         nodes[Int(id)].nextSibling = c
         if before == 0 { nodes[Int(parent)].firstChild = id } else { nodes[Int(before)].nextSibling = id }
-        let back = stats + Int(id) * Self.statStride
+        let back = statRow(id)
         var i = parent
         while true {
             totals[Int(i)] &+= bytes
             totalFiles[Int(i)] &+= files
-            let s = stats + Int(i) * Self.statStride
+            let s = changeableStatRow(i)
             for f in 0..<Self.statStride { s[f] &+= back[f] }
             if i == 0 { break }
             i = nodes[Int(i)].parent
@@ -307,14 +332,14 @@ final class DiskTree: @unchecked Sendable {
     }
 
     func kindBytes(_ id: UInt32) -> [UInt64] {
-        let s = stats + Int(id) * Self.statStride
+        let s = statRow(id)
         return (0..<Kind.count).map { UInt64(s[$0]) << 14 }
     }
 
     func dominantKind(_ id: UInt32) -> Kind {
         let n = nodes[Int(id)]
         if !n.has(NodeFlag.directory) && !n.has(NodeFlag.synthetic) { return Kind(rawValue: n.kind) ?? .other }
-        let s = stats + Int(id) * Self.statStride
+        let s = statRow(id)
         var best = 0
         var bestValue: UInt32 = 0
         for k in 0..<Kind.count where s[k] > bestValue { best = k; bestValue = s[k] }
@@ -359,12 +384,126 @@ final class DiskTree: @unchecked Sendable {
             totalFiles[p] &+= totalFiles[i]
             aliasTotals[p] &+= aliasTotals[i]
             if nodes[i].flags & (NodeFlag.unread | NodeFlag.incomplete) != 0 { nodes[p].flags |= NodeFlag.incomplete }
-            let from = stats + i * stride, to = stats + p * stride
+            let from = statTable + i * stride, to = statTable + p * stride
             for f in 0..<stride { to[f] &+= from[f] }
             i -= 1
         }
         sortChildren()
         numberSubtrees()
+    }
+
+    // MARK: What a finished tree can do without
+
+    @inline(__always) func statRow(_ id: Int) -> UnsafePointer<UInt32> {
+        if let statIndex { return UnsafePointer(statTable + Int(statIndex[id] & ~Self.ownRow) * Self.statStride) }
+        return UnsafePointer(statTable + id * Self.statStride)
+    }
+
+    @inline(__always) func statRow(_ id: UInt32) -> UnsafePointer<UInt32> { statRow(Int(id)) }
+
+    /// A node's row, to write to. A row other nodes share gets a copy first.
+    func changeableStatRow(_ id: UInt32) -> UnsafeMutablePointer<UInt32> {
+        guard let statIndex else { return statTable + Int(id) * Self.statStride }
+        let at = statIndex[Int(id)]
+        if at & Self.ownRow != 0 { return statTable + Int(at & ~Self.ownRow) * Self.statStride }
+        let row = nextStatRow
+        nextStatRow += 1
+        let target = statTable + Int(row) * Self.statStride
+        target.update(from: statTable + Int(at) * Self.statStride, count: Self.statStride)
+        statIndex[Int(id)] = row | Self.ownRow
+        return target
+    }
+
+    /// Most folders have one of a few sets of numbers, and over half have none at all, so a finished tree keeps each
+    /// different set once. Pictures of a running scan keep a row each, because the numbers still change.
+    func compactStats() {
+        guard statIndex == nil, count > 0 else { return }
+        let n = count, width = Self.statStride
+        let index = vmAlloc(UInt32.self, n)
+        // Row 0 stays all zeros. Each node can also end up with one row of its own, if it's changed later.
+        let rowCapacity = 2 * n + 1
+        let rows = vmAlloc(UInt32.self, rowCapacity * width)
+        var slots = 1024
+        while slots < 2 * n { slots <<= 1 }
+        let seen = vmAlloc(UInt32.self, slots)
+        defer { vmFree(seen, slots) }
+        var next: UInt32 = 1
+        let bytes = width * MemoryLayout<UInt32>.stride
+        for i in 0..<n {
+            let row = UnsafeRawPointer(statTable + i * width)
+            var hash: UInt64 = 0
+            var anything: UInt64 = 0
+            for word in 0..<(bytes / 8) {
+                let value = row.loadUnaligned(fromByteOffset: word * 8, as: UInt64.self)
+                anything |= value
+                hash = (hash ^ value) &* 0x9E37_79B9_7F4A_7C15
+                hash ^= hash >> 29
+            }
+            guard anything != 0 else { continue }
+            var at = Int(truncatingIfNeeded: hash) & (slots - 1)
+            while true {
+                let candidate = seen[at]
+                if candidate == 0 {
+                    (rows + Int(next) * width).update(from: statTable + i * width, count: width)
+                    seen[at] = next
+                    index[i] = next
+                    next += 1
+                    break
+                }
+                if memcmp(rows + Int(candidate) * width, row, bytes) == 0 {
+                    index[i] = candidate
+                    break
+                }
+                at = (at + 1) & (slots - 1)
+            }
+        }
+        vmFree(statTable, Self.capacity * width)
+        statTable = rows
+        statIndex = index
+        statRowCapacity = rowCapacity
+        statIndexCount = n
+        nextStatRow = next
+    }
+
+    /// The same few names turn up everywhere, so a finished tree keeps each one once. Pictures still on screen keep the block
+    /// they were made with, which goes when they do.
+    func compactNames() {
+        let n = count
+        var total = 0
+        for i in 0..<n { total += Int(nodes[i].nameLength) }
+        guard total > 0 else { return }
+        let packed = NameStore(capacity: total)
+        var slots = 1024
+        while slots < 2 * n { slots <<= 1 }
+        let seen = vmAlloc(UInt32.self, slots)
+        defer { vmFree(seen, slots) }
+        var used: UInt32 = 0
+        for i in 0..<n {
+            let length = Int(nodes[i].nameLength)
+            guard length > 0 else { continue }
+            let name = names + Int(nodes[i].nameOffset)
+            let hash = RuleBook.hash(UnsafePointer(name), length)
+            var at = Int(truncatingIfNeeded: hash ^ hash >> 32) & (slots - 1)
+            var found: UInt32?
+            while seen[at] != 0 {
+                let other = nodes[Int(seen[at]) - 1]
+                if Int(other.nameLength) == length, memcmp(packed.pointer + Int(other.nameOffset), name, length) == 0 {
+                    found = other.nameOffset
+                    break
+                }
+                at = (at + 1) & (slots - 1)
+            }
+            if let found {
+                nodes[i].nameOffset = found
+            } else {
+                (packed.pointer + Int(used)).update(from: name, count: length)
+                nodes[i].nameOffset = used
+                used += UInt32(length)
+                seen[at] = UInt32(i) + 1
+            }
+        }
+        nameStore = packed
+        names = packed.pointer
     }
 
     func sortChildren() {
@@ -440,6 +579,35 @@ struct LinkRecord {
     var when: UInt32
     var kind: UInt8
     var counted: Bool
+}
+
+/// A big table for one piece of work, with one plain value per node. Mapped, so all of it goes back the moment the work is
+/// done, where the heap would hold on to it.
+final class Mapped<T> {
+    let base: UnsafeMutablePointer<T>
+    let count: Int
+
+    /// Starts out as all zeros.
+    init(count: Int) {
+        self.count = max(count, 1)
+        base = vmAlloc(T.self, self.count)
+    }
+
+    convenience init(repeating value: T, count: Int) {
+        self.init(count: count)
+        base.initialize(repeating: value, count: self.count)
+    }
+
+    deinit { vmFree(base, count) }
+
+    @inline(__always) subscript(at: Int) -> T {
+        get { base[at] }
+        set { base[at] = newValue }
+    }
+
+    func bytes(_ items: Int? = nil) -> UnsafeRawBufferPointer {
+        UnsafeRawBufferPointer(start: base, count: (items ?? count) * MemoryLayout<T>.stride)
+    }
 }
 
 func vmAlloc<T>(_ type: T.Type, _ capacity: Int) -> UnsafeMutablePointer<T> {

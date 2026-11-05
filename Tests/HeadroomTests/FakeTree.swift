@@ -40,7 +40,7 @@ final class FakeDisk {
             tree.nodes[Int(parent)].firstChild = id
         }
         tree.nodes[Int(id)] = node
-        let s = tree.stats + Int(id) * DiskTree.statStride
+        let s = tree.statTable + Int(id) * DiskTree.statStride
         if !flags.isDirectory { s[Int(kind.rawValue)] = UInt32(truncatingIfNeeded: bytes >> 14) }
         tree.count = Int(count)
         return id
@@ -74,7 +74,12 @@ final class FakeDisk {
         tree.links.append(LinkRecord(key: key, bytes: bytes, dir: tree.nodes[Int(b)].parent, file: b, when: 0, kind: kind.rawValue, counted: false))
     }
 
-    func finish() { tree.finish() }
+    /// As a real scan ends, so what's tested is what the app reads.
+    func finish() {
+        tree.finish()
+        tree.compactStats()
+        tree.compactNames()
+    }
     func node(_ path: String) -> UInt32 { paths[path]! }
 }
 

@@ -225,15 +225,24 @@ Underneath:
 - Metal draws each piece from a single analytic shape, so the frame cost doesn't depend on how complex the map is.
   Nothing is drawn when nothing moves, so it uses no power at rest.
 - While the ring is still, its drawing memory is marked as free to take: the glow textures, and every surface but the
-  one on screen (or all of them when the window can't be seen). Nothing is released or made again, so the next frame
-  costs the same as any other, and if the Mac does take it, the ring simply draws again.
+  one on screen. Nothing is released or made again, so the next frame costs the same as any other, and if the Mac does
+  take it, the ring simply draws again. With the window covered, minimized or hidden, nothing is drawn at all and a running
+  scan makes no pictures. Minimized or hidden, the picture on screen can go too. Covered, it stays, because the window can
+  come to the front at any moment and mustn't show a gap.
+- A finished tree keeps each different set of numbers once. Of 337,000 folders and files here, 180,000 have none at all
+  and the rest share 14,000 sets, so 21.6 MB becomes about 2 MB. Names work the same way: 4.2 MB becomes 1.2 MB. A row is
+  only copied if something changes it, such as a clean.
 - A file with several paths costs one record per path, 512,000 of them here. Files in the same folders say the same
   thing, so those are merged into 67,000, with their bytes added up. Every question asked of them gets the same answer,
   with a seventh as many records to read.
-- While a scan runs, a picture is a copy of the whole tree, so there's never a second one waiting behind one nobody has
-  looked at yet. Whatever only the scan needs goes as soon as it ends.
-- At launch, other apps' records are read once. The second pass, after the scan, only reads what a saved map couldn't
-  have known.
+- What only the scan needs lives in mapped tables too, so it goes back the moment the scan ends, where a heap allocation
+  would stay with the app. While a scan runs, a picture is a copy of the whole tree, so there's never a second one waiting
+  behind one nobody has looked at yet.
+- Git is only asked about a project that could be suggested. One worked on in the last month isn't, whatever git would
+  say, and the first answer that rules a project out saves asking the rest, with the slowest question last. Here that's 4
+  projects out of 20, and 0.3 s instead of 12 s. At launch, other apps' records are read once: the second pass, after the
+  scan, only reads what a saved map couldn't have known.
+- The side panel only makes the rows you can see.
 
 Measured on this Mac, an M5 MacBook Air with 2.1 million files and a 494 GB disk, without Full Disk Access:
 
@@ -243,15 +252,15 @@ Measured on this Mac, an M5 MacBook Air with 2.1 million files and a 494 GB disk
 | First launch: half the bytes placed | 0.4 s |
 | First launch: placed after one second | 72–81% |
 | First launch: everything read | 13–14 s, on about 1.2 cores after the first look |
-| With a saved scan: the map on screen | The saved scan loads in under 10 ms |
+| With a saved scan: the map on screen | The saved scan loads in about 11 ms |
 | With a saved scan: the refresh | 14.5 s at low priority, on about 1.2 cores |
 | ⌘R, at full power | 6.9 s, against 40 s for `du` on the same data, and the scan also collects kinds, dates, links and clones |
-| At rest, window on screen | 0.0% CPU, 170–190 MB of memory |
-| At rest, window hidden or covered | 0.0% CPU, 120–160 MB of memory |
+| At rest, window on screen or covered | 0.0% CPU, 130–150 MB of memory |
+| At rest, window hidden | 0.0% CPU, about 110 MB of memory |
 | While the ring moves | About 220–260 MB more for drawing, which goes back about a quarter of a second after it stops |
-| A refresh, while it reads | Under 150 MB of memory, about 400 MB at the very end if the ring moves |
-| First launch, at the peak | About 480–520 MB of memory, with a copy of the tree for each new picture |
-| The saved scan on disk | 6 MB, and at most about 4 MB of snapshots |
+| A refresh, while it reads | Under 150 MB of memory, about 360 MB at the very end if the ring moves |
+| First launch, at the peak | 450–480 MB of memory, with a copy of the tree for each new picture |
+| The saved scan on disk | 1 MB, read back in about 2 ms, and at most about 2 MB of snapshots |
 | The app | 3.5 MB |
 | Building the ring | Under 1 ms |
 

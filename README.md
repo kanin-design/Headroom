@@ -58,6 +58,8 @@ They're only ever read, and nothing leaves your Mac.
 | ⌘F | Find a file or folder |
 | ⌘R | Scan again, at full power |
 | Right-click | Reveal in Finder, Quick Look, Copy Path, select it, move it to another disk |
+| Drag any empty background, or the top | Move the window |
+| Double-click the top | Fill the screen, or whatever System Settings says a title bar does |
 | Pinch | Zoom in and out |
 
 In Free Up:

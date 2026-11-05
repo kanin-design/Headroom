@@ -13,14 +13,24 @@ final class MapHostView: NSView {
     private var lastFrame: CFTimeInterval = 0
     private var trackingArea: NSTrackingArea?
     private var downPoint: NSPoint?
+    /// A press on empty background, which moves the window if the pointer moves.
+    private var backgroundDown: NSEvent?
+    /// How far down the window its top works as a title bar, whatever is under the pointer.
+    private static let titleBarHeight: CGFloat = 52
+    private var doubleClickWatch: Any?
+    /// For a check: how many times the window has been told to follow the pointer.
+    private(set) var windowMovesStarted = 0
     private var pinch: CGFloat = 0
-    private var framesDrawn = 0
+    private(set) var framesDrawn = 0
     private var surfaces: [IOSurfaceRef] = []
     private var surfaceOnScreen: IOSurfaceRef?
     private var surfacesAreResting = false
     // kIOSurfacePurgeableNonVolatile, Volatile and Empty, which Swift doesn't get by name.
     private static let mustBeKept: UInt32 = 0, mayBePurged: UInt32 = 1, isEmptied: UInt32 = 2
     private var engine: MapEngine? { model?.engine }
+    /// A scripted check takes pictures of the window wherever it is, so it keeps drawing.
+    static var drawsWhenHidden = ScriptRunner.path != nil
+    private var canBeSeen: Bool { Self.drawsWhenHidden || window?.occlusionState.contains(.visible) == true }
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
@@ -51,13 +61,17 @@ final class MapHostView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        NotificationCenter.default.removeObserver(self, name: NSWindow.didChangeOcclusionStateNotification, object: nil)
+        NotificationCenter.default.removeObserver(self)
         guard let window else {
             link?.invalidate()
             link = nil
             return
         }
-        NotificationCenter.default.addObserver(self, selector: #selector(windowCameOrWent(_:)), name: NSWindow.didChangeOcclusionStateNotification, object: window)
+        watchForDoubleClicksOnTop()
+        let center = NotificationCenter.default
+        center.addObserver(self, selector: #selector(windowCameOrWent(_:)), name: NSWindow.didChangeOcclusionStateNotification, object: window)
+        center.addObserver(self, selector: #selector(windowCameOrWent(_:)), name: NSWindow.didMiniaturizeNotification, object: window)
+        center.addObserver(self, selector: #selector(windowCameOrWent(_:)), name: NSApplication.didHideNotification, object: nil)
         link?.invalidate()
         let l = displayLink(target: self, selector: #selector(step(_:)))
         l.add(to: .main, forMode: .common)
@@ -113,7 +127,8 @@ final class MapHostView: NSView {
     }
 
     func startAnimating() {
-        guard let link else { return }
+        // It starts again when the window can be seen, from where it had got to.
+        guard let link, canBeSeen else { return }
         if link.isPaused {
             lastFrame = 0
             link.isPaused = false
@@ -163,12 +178,13 @@ final class MapHostView: NSView {
         restSurfaces()
     }
 
-    /// The drawing surfaces behind the one on screen, or all of them when the window can't be seen. Their memory can go and
-    /// they stay where they are, so there's nothing to make again when the ring next moves.
+    /// The drawing surfaces behind the one on screen. Their memory can go and they stay where they are, so there's nothing to
+    /// make again when the ring next moves. The picture on screen stays while the window is only covered, because it can come
+    /// to the front at any moment and has to be there. Minimized or hidden, it can go too.
     private func restSurfaces() {
         surfacesAreResting = true
-        let isVisible = window?.occlusionState.contains(.visible) ?? false
-        for surface in surfaces where surface !== surfaceOnScreen || !isVisible {
+        let isPutAway = window?.isMiniaturized == true || NSApp.isHidden
+        for surface in surfaces where surface !== surfaceOnScreen || isPutAway {
             IOSurfaceSetPurgeable(surface, Self.mayBePurged, nil)
         }
     }
@@ -199,13 +215,19 @@ final class MapHostView: NSView {
     }
 
     @objc private func windowCameOrWent(_ note: Notification) {
-        if window?.occlusionState.contains(.visible) == true {
+        let isVisible = window?.occlusionState.contains(.visible) == true
+        model?.windowCameOrWent(isVisible: isVisible || Self.drawsWhenHidden)
+        if isVisible {
             // What was on screen may be gone, so the ring is always drawn again.
             wakeSurfaces()
             startAnimating()
-        } else if link?.isPaused ?? true, framesDrawn > 0 {
-            restSurfaces()
+            return
         }
+        // Nobody can see it, so nothing is drawn. Whatever's still drawing gets a moment to finish.
+        if !Self.drawsWhenHidden { link?.isPaused = true }
+        guard link?.isPaused ?? true, framesDrawn > 0 else { return }
+        let frame = framesDrawn
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in self?.restAfter(frame) }
     }
 
     // MARK: Pointer
@@ -236,10 +258,59 @@ final class MapHostView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         downPoint = event.locationInWindow
+        backgroundDown = nil
         window?.makeFirstResponder(self)
+        let p = convert(event.locationInWindow, from: nil)
+        if p.y < Self.titleBarHeight {
+            downPoint = nil
+            moveWindow(with: event)
+        } else if isEmptyBackground(p) {
+            backgroundDown = event
+        }
+    }
+
+    /// Nothing is drawn here. The hole in the ring isn't empty: it holds the numbers, and a click there goes back up.
+    private func isEmptyBackground(_ p: CGPoint) -> Bool {
+        guard let model else { return false }
+        guard let polar = model.polar(p) else { return true }
+        return polar.radius >= RingLayout.hole && model.engine.layout.hit(angle: polar.angle, radius: polar.radius) == nil
+    }
+
+    /// A double-click along the top, with nothing else under it, is one on a title bar. It's caught here because the top of
+    /// the window is part ours and part macOS's real title bar, and this way the whole of it does the same.
+    private func watchForDoubleClicksOnTop() {
+        guard doubleClickWatch == nil else { return }
+        doubleClickWatch = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+            guard let self, event.clickCount == 2, let window, event.window === window,
+                  self.convert(event.locationInWindow, from: nil).y < Self.titleBarHeight,
+                  window.contentView?.superview?.hitTest(event.locationInWindow) === self else { return event }
+            // What you've chosen in System Settings for this. Fill and Zoom both end up filling the screen here.
+            switch UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") {
+            case "None": break
+            case "Minimize": window.performMiniaturize(nil)
+            default: window.performZoom(nil)
+            }
+            return nil
+        }
+    }
+
+    private func moveWindow(with event: NSEvent) {
+        windowMovesStarted += 1
+        window?.performDrag(with: event)
+    }
+
+    /// A plain click on the background still clears what's selected, so the window only moves once the pointer does.
+    override func mouseDragged(with event: NSEvent) {
+        guard let start = backgroundDown else { return }
+        let dx = event.locationInWindow.x - start.locationInWindow.x, dy = event.locationInWindow.y - start.locationInWindow.y
+        guard dx * dx + dy * dy >= 9 else { return }
+        backgroundDown = nil
+        downPoint = nil
+        moveWindow(with: start)
     }
 
     override func mouseUp(with event: NSEvent) {
+        backgroundDown = nil
         defer { downPoint = nil }
         guard let downPoint, let model else { return }
         let dx = event.locationInWindow.x - downPoint.x, dy = event.locationInWindow.y - downPoint.y

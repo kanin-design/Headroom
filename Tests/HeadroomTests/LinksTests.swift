@@ -193,8 +193,8 @@ final class SnapshotTests: XCTestCase {
         var times = stride(from: 0.0, to: 2 * 86_400, by: 1_200).map { now - $0 }
         times += (2..<42).map { now - Double($0) * 86_400 - 3_600 }
         let keep = History.snapshotsToKeep(times, now: now)
-        XCTAssertLessThanOrEqual(keep.count, 60)
-        XCTAssertLessThan(keep.filter { now - $0 < 2 * 86_400 }.count, 20, "Not 144")
+        XCTAssertLessThanOrEqual(keep.count, 34)
+        XCTAssertLessThanOrEqual(keep.filter { now - $0 < 2 * 86_400 }.count, 11, "Not 144")
         XCTAssertTrue(keep.contains(now), "The last scan is always there to compare with")
         XCTAssertTrue(keep.contains(now - 1_200), "And the one before it")
         for (days, label) in [(1.0, "a day"), (7.0, "a week"), (14.0, "two weeks"), (30.0, "a month")] {

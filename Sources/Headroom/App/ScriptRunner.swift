@@ -20,6 +20,9 @@ import QuickLookUI
 ///     box quick                tick a box in the panel, by id or title
 ///     point models             point at a box in the panel. Nothing after it: the pointer leaves
 ///     pointat Caches           point at one thing in the panel
+///     press x y clicks dx dy   a click, double-click or drag on the window, given to the app alone. `press piece 1` hits the ring
+///     frame                    where the window is, and whether it fills the screen
+///     memory, footprint        how much memory it uses, and what that's made of
 ///     open models              open a box
 ///     review                   check what's selected
 ///     clean, empty, undo       only ever act inside the throwaway test disk
@@ -295,6 +298,56 @@ enum ScriptRunner {
             model.mapView?.loseWhatItMayLose()
         case "redraw":
             model.mapView?.startAnimating()
+        case "stopwhenhidden":
+            // As in real use, where nothing is drawn while the window can't be seen.
+            MapHostView.drawsWhenHidden = false
+        case "frames":
+            print("frames drawn \(argument): \(model.mapView?.framesDrawn ?? -1)")
+        case "frame":
+            // Where the window is, whether it fills the screen, and whether it has been told to move.
+            if let w = mainWindow {
+                print("frame \(argument): \(Int(w.frame.minX)),\(Int(w.frame.minY)) \(Int(w.frame.width))x\(Int(w.frame.height)) zoomed \(w.isZoomed); moves started \(model.mapView?.windowMovesStarted ?? -1); selected \(model.selected.map { model.displayName($0) } ?? "nothing")")
+            }
+        case "press":
+            // press x y clicks [dx dy]: a click, double-click or drag at points from the window's top left, given straight to
+            // the app. Your real pointer doesn't move. `press piece` picks the middle of the biggest piece on the ring.
+            guard let w = mainWindow else { return }
+            var parts = argument.split(separator: " ").map(String.init)
+            var x = 0.0, y = 0.0
+            if parts.first == "piece" {
+                parts.removeFirst()
+                let layout = model.engine.layout
+                guard let piece = layout.pieces.filter({ !$0.isSmaller && !$0.isMark && $0.style == 0 }).max(by: { $0.bytes < $1.bytes }) else {
+                    print("press: no piece among \(layout.pieces.count)")
+                    return
+                }
+                let angle = Double(piece.a0 + piece.a1) / 2, radius = Double(piece.r0 + piece.r1) / 2 * model.ring.radius
+                x = model.ring.center.x + sin(angle) * radius
+                y = model.ring.center.y - cos(angle) * radius
+            } else {
+                guard parts.count >= 3, let px = Double(parts[0]), let py = Double(parts[1]) else { return }
+                x = px
+                y = py
+                parts.removeFirst(2)
+            }
+            let clicks = Int(parts.first ?? "1") ?? 1
+            let dx = parts.count > 2 ? Double(parts[1]) ?? 0 : 0, dy = parts.count > 2 ? Double(parts[2]) ?? 0 : 0
+            func send(_ type: NSEvent.EventType, _ px: Double, _ py: Double, count: Int) {
+                let at = NSPoint(x: px, y: w.frame.height - py)
+                if let event = NSEvent.mouseEvent(with: type, location: at, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: count, pressure: 1) {
+                    NSApp.sendEvent(event)
+                }
+            }
+            let target = w.contentView?.superview?.hitTest(NSPoint(x: x, y: w.frame.height - y))
+            print("press at \(Int(x)),\(Int(y)) lands on \(target.map { String(describing: type(of: $0)) } ?? "nothing")")
+            for click in 1...max(clicks, 1) {
+                send(.leftMouseDown, x, y, count: click)
+                if dx != 0 || dy != 0 {
+                    for step in 1...6 { send(.leftMouseDragged, x + dx * Double(step) / 6, y + dy * Double(step) / 6, count: click) }
+                }
+                send(.leftMouseUp, x + dx, y + dy, count: click)
+                try? await Task.sleep(for: .milliseconds(80))
+            }
         case "footprint":
             // What the memory is made of, by the tool macOS has for it.
             let process = Process()

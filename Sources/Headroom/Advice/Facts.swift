@@ -419,7 +419,6 @@ extension Facts {
 
     private static func readTree(into facts: inout Facts, tree: DiskTree, earlier: Facts?) {
         let nodes = tree.nodes
-        let stride = DiskTree.statStride
         let gitAvailable = Git.isAvailable
         var videos = 0
         var modelFolders: [String] = []
@@ -436,12 +435,14 @@ extension Facts {
                 guard nodes[Int(n.parent)].has(NodeFlag.projects) || n.has(NodeFlag.projects) else { continue }
                 // A project under git.
                 if gitAvailable, n.nameLength == 4, tree.name(id) == ".git", tree.totals[Int(n.parent)] >= 100_000_000, let path = tree.path(n.parent) {
-                    if let fact = earlier?.repos[path] ?? Git.read(path) { facts.repos[path] = fact }
+                    // Worked on lately, or not yours to move: it won't be suggested, whatever git would say.
+                    if tree.statRow(n.parent)[DiskTree.statRecent30] == 0, Safety.canTrash(path),
+                       let fact = earlier?.repos[path] ?? Git.read(path) { facts.repos[path] = fact }
                     continue
                 }
                 // A folder of numbered images.
                 if n.fileCount >= 100, tree.totals[i] >= 200_000_000 {
-                    let images = UInt64(tree.stats[i * stride + Int(Kind.image.rawValue)]) << 14
+                    let images = UInt64(tree.statRow(i)[Int(Kind.image.rawValue)]) << 14
                     if Double(images) >= Double(tree.totals[i]) * 0.8, let path = tree.path(id) {
                         if let frames = earlier?.frames[path] ?? frameFolder(path) { facts.frames[path] = frames }
                     }
@@ -552,27 +553,30 @@ enum Git {
         return String(data: data, encoding: .utf8)
     }
 
-    static func read(_ path: String) -> Facts.RepoFact? {
-        guard let status = run(["status", "--porcelain"], in: path) else { return nil }
-        let isClean = status.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let remote = run(["remote", "get-url", "origin"], in: path)?.trimmingCharacters(in: .whitespacesAndNewlines)
+    /// A project is only suggested when all of this holds, so the first thing that doesn't saves asking the rest. Walking the
+    /// whole project for uncommitted work is the slow part, so it goes last.
+    static func read(_ path: String, now: Date = Date()) -> Facts.RepoFact? {
         let last = run(["log", "-1", "--format=%ct"], in: path)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let lastCommit = TimeInterval(last ?? "").map({ Date(timeIntervalSince1970: $0) }) else { return nil }
+        var fact = Facts.RepoFact(path: path, lastCommit: lastCommit, remote: nil, isClean: false, allPushed: false)
+        guard now.timeIntervalSince(lastCommit) >= TimeInterval(Advisors.projectQuietDays) * 86_400 else { return fact }
+        fact.remote = run(["remote", "get-url", "origin"], in: path)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard fact.remote != nil else { return fact }
         // Every local branch has to be somewhere else too, with nothing extra, and nothing tucked away in a stash, in another
         // working folder, or on a commit no branch points at.
-        var allPushed = remote != nil
-        if let branches = run(["for-each-ref", "--format=%(upstream)|%(upstream:track)", "refs/heads"], in: path) {
-            for line in branches.split(separator: "\n") {
-                let parts = line.split(separator: "|", omittingEmptySubsequences: false)
-                let upstream = parts.first.map(String.init) ?? ""
-                let track = parts.count > 1 ? String(parts[1]) : ""
-                if upstream.isEmpty || track.contains("ahead") || track.contains("gone") { allPushed = false }
-            }
-        } else {
-            allPushed = false
+        guard let branches = run(["for-each-ref", "--format=%(upstream)|%(upstream:track)", "refs/heads"], in: path) else { return fact }
+        for line in branches.split(separator: "\n") {
+            let parts = line.split(separator: "|", omittingEmptySubsequences: false)
+            let upstream = parts.first.map(String.init) ?? ""
+            let track = parts.count > 1 ? String(parts[1]) : ""
+            if upstream.isEmpty || track.contains("ahead") || track.contains("gone") { return fact }
         }
-        if let stashes = run(["stash", "list"], in: path), !stashes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { allPushed = false }
-        if run(["symbolic-ref", "-q", "HEAD"], in: path) == nil { allPushed = false }
-        if let trees = run(["worktree", "list", "--porcelain"], in: path), trees.components(separatedBy: "worktree ").count > 2 { allPushed = false }
-        return Facts.RepoFact(path: path, lastCommit: TimeInterval(last ?? "").map { Date(timeIntervalSince1970: $0) }, remote: remote, isClean: isClean, allPushed: allPushed)
+        if let stashes = run(["stash", "list"], in: path), !stashes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return fact }
+        if run(["symbolic-ref", "-q", "HEAD"], in: path) == nil { return fact }
+        if let trees = run(["worktree", "list", "--porcelain"], in: path), trees.components(separatedBy: "worktree ").count > 2 { return fact }
+        fact.allPushed = true
+        guard let status = run(["status", "--porcelain"], in: path) else { return fact }
+        fact.isClean = status.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return fact
     }
 }

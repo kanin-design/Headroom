@@ -149,6 +149,7 @@ final class AppModel {
     @ObservationIgnored var factsRunning = false
     @ObservationIgnored var factsWanted = false
     @ObservationIgnored var factsOfSavedMap = false
+    @ObservationIgnored let windowHidden = LockedFlag()
     @ObservationIgnored var isReadingOtherDisk = false
     @ObservationIgnored var lastPlanItems: [PlanItem] = []
     @ObservationIgnored var pendingCleaned: [CleanedThing] = []
@@ -256,9 +257,10 @@ final class AppModel {
             Thread.current.qualityOfService = .userInitiated
             // A picture is a copy of the whole tree, so there's never a second one waiting behind one nobody has looked at yet.
             let pictureWaiting = LockedFlag()
+            let windowHidden = self?.windowHidden
             scan.run(mode: mode, tick: {
                 let files = Int(scan.scanner.filesSoFar)
-                let picture = showPictures && !pictureWaiting.value ? scan.picture() : nil
+                let picture = showPictures && !pictureWaiting.value && windowHidden?.value != true ? scan.picture() : nil
                 if picture != nil { pictureWaiting.value = true }
                 DispatchQueue.main.async {
                     if picture != nil { pictureWaiting.value = false }
@@ -386,6 +388,12 @@ final class AppModel {
                 if self.lens != .map { self.refreshLive() }
             }
         }
+    }
+
+    /// With the window out of sight, nothing is drawn, and a running scan makes no pictures for it.
+    func windowCameOrWent(isVisible: Bool) {
+        windowHidden.value = !isVisible
+        if isVisible { activeScan?.tickSoon() }
     }
 
     /// While a scan is showing its progress, what you're looking at is read first.

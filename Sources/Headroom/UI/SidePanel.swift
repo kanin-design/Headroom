@@ -315,7 +315,7 @@ struct MapPanel: View {
         VStack(alignment: .leading, spacing: 4) {
             SectionHeading(text: model.focus == 0 ? "Biggest" : "Inside", trailing: rows.count > 80 ? "Top 80 of \(rows.count)" : nil)
                 .padding(.horizontal, 8)
-            VStack(spacing: 0) {
+            LazyVStack(spacing: 0) {
                 ForEach(top, id: \.self) { node in
                     NodeRow(title: model.displayName(node),
                             subtitle: linksWorthNaming(tree, node) ? "plus \(formatBytes(tree.aliasTotals[Int(node)])) of links" : subtitle(tree, node),
@@ -350,7 +350,7 @@ struct MapPanel: View {
     private func color(_ tree: DiskTree, _ node: UInt32) -> Color {
         if let matching = model.mapColor(node) { return matching.swiftUI }
         let n = tree.nodes[Int(node)]
-        if n.has(NodeFlag.directory) { return Palette.blend(UnsafePointer(tree.stats + Int(node) * DiskTree.statStride)).swiftUI }
+        if n.has(NodeFlag.directory) { return Palette.blend(tree.statRow(node)).swiftUI }
         if n.has(NodeFlag.synthetic) { return Palette.color(.system).swiftUI }
         return Palette.color(Kind(rawValue: n.kind) ?? .other).swiftUI
     }
@@ -497,7 +497,7 @@ struct ChangesPanel: View {
     private var rows: some View {
         if model.tree != nil {
             let biggest = Double(max(model.changeRows.first?.delta ?? 1, 1))
-            VStack(spacing: 0) {
+            LazyVStack(spacing: 0) {
                 ForEach(model.changeRows) { row in
                     NodeRow(title: row.title, subtitle: row.subtitle, value: "+" + formatBytes(UInt64(max(row.delta, 0))), share: Double(row.delta) / biggest,
                             color: Palette.heat(0.3 + 0.6 * Float(Double(row.delta) / biggest)).swiftUI,
@@ -546,7 +546,7 @@ struct SearchPanel: View {
                     PanelTitle(title: "\(model.searchResults.count.formatted()) found")
                     let top = model.searchResults.prefix(120)
                     let biggest = Double(max(top.first.map { tree.totals[Int($0)] } ?? 1, 1))
-                    VStack(spacing: 0) {
+                    LazyVStack(spacing: 0) {
                         ForEach(top, id: \.self) { node in
                             let n = tree.nodes[Int(node)]
                             NodeRow(title: tree.name(node), subtitle: tree.path(n.parent).map(DiskTree.friendly), value: formatBytes(tree.totals[Int(node)]),

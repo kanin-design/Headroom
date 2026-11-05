@@ -225,6 +225,8 @@ final class DiskScan: @unchecked Sendable {
         scanner.freeLinks()
         reconcile(tree)
         tree.finish()
+        tree.compactStats()
+        tree.compactNames()
         tree.scanSeconds = elapsed()
         tree.finishedAt = Date()
     }
@@ -482,7 +484,7 @@ enum Accounting {
     }
 
     /// In place, and says how many are left at the front.
-    private static func merge(_ links: UnsafeMutableBufferPointer<LinkRecord>) -> Int {
+    static func merge(_ links: UnsafeMutableBufferPointer<LinkRecord>) -> Int {
         var count = 0
         var seen: [UInt64: (at: Int, count: Int)] = [:]
         var start = 0
@@ -552,7 +554,7 @@ enum Accounting {
     /// Its kind and its date move with it, or Changes would blame whichever folder a worker happened to reach first.
     private static func adjustStats(_ r: LinkRecord, in tree: DiskTree, now: UInt32, _ apply: (UInt32, UInt32) -> UInt32) {
         let units = UInt32(truncatingIfNeeded: (r.bytes &+ 8191) >> 14)
-        let s = tree.stats + Int(r.dir) * DiskTree.statStride
+        let s = tree.changeableStatRow(r.dir)
         s[Int(r.kind)] = apply(s[Int(r.kind)], units)
         let day: UInt32 = 86_400
         for (field, age) in [(DiskTree.statRecent1, day), (DiskTree.statRecent7, 7 * day), (DiskTree.statRecent14, 14 * day), (DiskTree.statRecent30, 30 * day)]

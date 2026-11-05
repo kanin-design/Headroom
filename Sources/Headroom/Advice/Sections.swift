@@ -480,16 +480,16 @@ enum Leftovers {
             return Double(media) >= Double(all) * 0.4
         }
 
-        var isProject = [Bool](repeating: false, count: n)
+        let isProject = Mapped<Bool>(repeating: false, count: n)
         for i in 1..<n where nodes[i].flags & NodeFlag.directory != 0 && nodes[i].flags & (NodeFlag.synthetic | NodeFlag.anchor) == 0 {
             let b = name(i)
             if b.count <= 8, projectHashes.contains(hash(b)) { isProject[Int(nodes[i].parent)] = true }
         }
 
-        var roles = [Role](repeating: .none, count: n)
-        var project = [UInt32](repeating: 0, count: n)
-        var inProject = [Bool](repeating: false, count: n)
-        var projectRoot = [UInt32](repeating: 0, count: n)
+        let roles = Mapped<Role>(repeating: .none, count: n)
+        let project = Mapped<UInt32>(count: n)
+        let inProject = Mapped<Bool>(repeating: false, count: n)
+        let projectRoot = Mapped<UInt32>(count: n)
         var newest: [UInt64: Int] = [:]
         var newestFolder: [UInt32: Int] = [:]
         var numbered: [(node: UInt32, parent: UInt32, version: Int)] = []

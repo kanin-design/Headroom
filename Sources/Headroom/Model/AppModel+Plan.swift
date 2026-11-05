@@ -270,7 +270,7 @@ extension AppModel {
             let part = Double(three) / Double(total)
             if part >= 0.6 { return "Three things are \(Int(part * 100))% of this." }
         }
-        if tree.stats[Int(folder) * DiskTree.statStride + DiskTree.statRecent30] == 0 {
+        if tree.statRow(folder)[DiskTree.statRecent30] == 0 {
             return "Nothing in here has changed for over a month."
         }
         return nil

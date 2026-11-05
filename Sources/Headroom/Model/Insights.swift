@@ -166,7 +166,7 @@ enum Wins {
             if rule.groups {
                 // Clearing build output costs you a rebuild, so projects you're working on aren't part of the one click.
                 let project = nodes[i].parent
-                let active = tree.stats[Int(project) * DiskTree.statStride + DiskTree.statRecent14] > 0
+                let active = tree.statRow(project)[DiskTree.statRecent14] > 0
                 // Nothing to rebuild it from means it doesn't rebuild itself, whatever it's called.
                 let noRecipe = rule.recipe.map { !recipeFound(parentPath(tree, id), $0) } ?? false
                 let key = UInt32(n.rule) << 2 | (noRecipe ? 2 : (active ? 1 : 0))
@@ -225,7 +225,7 @@ enum Wins {
                     row.tier = .redownload
                     row.askFirst = true
                     row.detail = "It's in the folder where tools keep their caches, but Headroom doesn't know this one. It may be more than a cache: a model, or something that took time to set up."
-                } else if tree.stats[i * DiskTree.statStride + DiskTree.statRecent14] > 0 {
+                } else if tree.statRow(i)[DiskTree.statRecent14] > 0 {
                     // A tool's cache costs a download or a slower build next time, so one you're using isn't part of the one click.
                     row.inUse = "Used in the last two weeks"
                 } else {
@@ -494,10 +494,11 @@ final class ChangeMap: @unchecked Sendable {
             if case .days(let d) = window { days = d } else { days = 30 }
             let field = days == 1 ? DiskTree.statRecent1 : (days == 7 ? DiskTree.statRecent7 : DiskTree.statRecent30)
             let cut = UInt32(Date().timeIntervalSince1970) &- UInt32(days) * 86_400
-            let width = DiskTree.statStride
             for i in 0..<n {
                 if nodes[i].has(NodeFlag.directory) {
-                    values[i] = Int64(tree.stats[i * width + field]) << 14
+                    // Left alone where nothing changed, so that part of the table never takes up memory.
+                    let units = tree.statRow(i)[field]
+                    if units != 0 { values[i] = Int64(units) << 14 }
                 } else if !nodes[i].has(NodeFlag.synthetic), nodes[i].modTime >= cut {
                     values[i] = Int64(bitPattern: tree.totals[i])
                 }
@@ -590,13 +591,11 @@ final class ChangeMap: @unchecked Sendable {
 enum Lenses {
     static func kindColorer(tree: DiskTree) -> RingLayout.Colorer {
         let nodes = tree.nodes
-        let stats = tree.stats
-        let stride = DiskTree.statStride
         return { node in
             let n = nodes[Int(node)]
             let lab: Lab
             if n.has(NodeFlag.directory) && (n.firstChild != 0 || n.fileCount > 0) {
-                lab = Palette.blend(UnsafePointer(stats + Int(node) * stride))
+                lab = Palette.blend(tree.statRow(node))
             } else if n.has(NodeFlag.synthetic) {
                 lab = Palette.color(.system)
             } else {

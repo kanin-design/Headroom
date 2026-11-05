@@ -54,11 +54,10 @@ enum Advisors {
 
     /// The slider doesn't take what you've been using, even though it could come back.
     private static func markInUse(_ rows: inout [WinRow], tree: DiskTree, facts: Facts) {
-        let stride = DiskTree.statStride
         let home = NSHomeDirectory()
         var androidBusy = facts.androidRunning
         if !androidBusy, let avd = tree.find(path: "/System/Volumes/Data" + home + "/.android/avd") {
-            androidBusy = tree.stats[Int(avd) * stride + DiskTree.statRecent14] > 0
+            androidBusy = tree.statRow(avd)[DiskTree.statRecent14] > 0
         }
         func mark(_ row: inout WinRow) {
             guard row.inUse == nil, row.tier >= .redownload, row.isPlannable, row.action != .emptyTrash else { return }
@@ -66,7 +65,7 @@ enum Advisors {
             if row.id.hasPrefix("series:") || row.id.hasPrefix("film:") || row.id.hasPrefix("app:") || row.id.hasPrefix("group:quiet-apps") { return }
             if androidBusy, row.nodes.contains(where: { (tree.path($0) ?? "").contains("/Android/") || (tree.path($0) ?? "").contains("/.android/") }) {
                 row.inUse = facts.androidRunning ? "Android tools are running" : "Android's emulator was used in the last two weeks"
-            } else if row.parts.isEmpty, row.nodes.contains(where: { tree.stats[Int($0) * stride + DiskTree.statRecent14] > 0 }) {
+            } else if row.parts.isEmpty, row.nodes.contains(where: { tree.statRow($0)[DiskTree.statRecent14] > 0 }) {
                 row.inUse = "Changed in the last two weeks"
             }
         }
@@ -397,7 +396,7 @@ enum Advisors {
             guard repo.isClean, repo.allPushed, let remote = repo.remote, let last = repo.lastCommit,
                   now.timeIntervalSince(last) >= TimeInterval(projectQuietDays) * 86_400, let node = tree.find(path: repo.path), Safety.canTrash(repo.path) else { continue }
             // Worked on lately, even without a commit.
-            if tree.stats[Int(node) * DiskTree.statStride + DiskTree.statRecent30] > 0 { continue }
+            if tree.statRow(node)[DiskTree.statRecent30] > 0 { continue }
             let bytes = tree.totals[Int(node)]
             let row = WinRow(id: "repo:" + repo.path, title: tree.name(node),
                              subtitle: "Last commit \(Titles.monthsText(since: last, now: now)) ago. Everything is pushed, so you can clone it again from \(shortRemote(remote)).",

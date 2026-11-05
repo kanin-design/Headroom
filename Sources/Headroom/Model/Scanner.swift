@@ -68,10 +68,50 @@ final class Scanner: @unchecked Sendable {
         var isUrgent: Bool { key >> 48 == 0 }
     }
 
+    /// The folders waiting, which can be hundreds of thousands. Mapped, like the tree's own tables: it never copies itself to
+    /// grow, and all of it goes back the moment the scan is done.
+    private struct JobTable {
+        private var jobs: UnsafeMutablePointer<Job>? = vmAlloc(Job.self, DiskTree.capacity)
+        private(set) var count = 0
+
+        var isEmpty: Bool { count == 0 }
+        var indices: Range<Int> { 0..<count }
+
+        subscript(at: Int) -> Job {
+            @inline(__always) get { jobs.unsafelyUnwrapped[at] }
+            @inline(__always) nonmutating set { jobs.unsafelyUnwrapped[at] = newValue }
+        }
+
+        @inline(__always) mutating func append(_ job: Job) {
+            guard count < DiskTree.capacity, let jobs else { return }
+            jobs[count] = job
+            count += 1
+        }
+
+        @inline(__always) mutating func removeLast() -> Job {
+            count -= 1
+            return jobs.unsafelyUnwrapped[count]
+        }
+
+        @inline(__always) func swapAt(_ a: Int, _ b: Int) {
+            let first = self[a]
+            self[a] = self[b]
+            self[b] = first
+        }
+
+        mutating func removeAll() { count = 0 }
+
+        mutating func free() {
+            if let jobs { vmFree(jobs, DiskTree.capacity) }
+            jobs = nil
+            count = 0
+        }
+    }
+
     // All of this is guarded by `lock`.
     private let lock = UnsafeMutablePointer<pthread_mutex_t>.allocate(capacity: 1)
     private let wake = UnsafeMutablePointer<pthread_cond_t>.allocate(capacity: 1)
-    private var queue: [Job] = []
+    private var queue = JobTable()
     private var seeds: [UInt32] = []
     private var inFlight = 0
     private var running = 0
@@ -93,8 +133,47 @@ final class Scanner: @unchecked Sendable {
     // Which file IDs have been counted. Split so that workers rarely wait on each other.
     private struct Stripe {
         var lock = os_unfair_lock()
-        var seen = Set<UInt64>()
+        var table: UnsafeMutablePointer<UInt64>?
+        var capacity = 0
+        var count = 0
+
+        /// A file ID is never 0, so 0 means an empty place.
+        mutating func insert(_ key: UInt64, hash: UInt64) -> Bool {
+            if count * 4 >= capacity * 3 { grow() }
+            guard let table else { return true }
+            var at = Int(truncatingIfNeeded: hash >> 20) & (capacity - 1)
+            while table[at] != 0 {
+                if table[at] == key { return false }
+                at = (at + 1) & (capacity - 1)
+            }
+            table[at] = key
+            count += 1
+            return true
+        }
+
+        private mutating func grow() {
+            let bigger = capacity == 0 ? 2048 : capacity * 2
+            let new = vmAlloc(UInt64.self, bigger)
+            if let table {
+                for from in 0..<capacity where table[from] != 0 {
+                    var at = Int(truncatingIfNeeded: (table[from] &* Scanner.mixer) >> 20) & (bigger - 1)
+                    while new[at] != 0 { at = (at + 1) & (bigger - 1) }
+                    new[at] = table[from]
+                }
+                vmFree(table, capacity)
+            }
+            table = new
+            capacity = bigger
+        }
+
+        mutating func free() {
+            if let table { vmFree(table, capacity) }
+            table = nil
+            capacity = 0
+            count = 0
+        }
     }
+    fileprivate static let mixer: UInt64 = 0x9E37_79B9_7F4A_7C15
     private let stripes: UnsafeMutablePointer<Stripe>
     private static let stripeCount = 256
 
@@ -117,7 +196,9 @@ final class Scanner: @unchecked Sendable {
     }
 
     deinit {
+        queue.free()
         freeLinks()
+        for index in 0..<Self.stripeCount { stripes[index].free() }
         stripes.deinitialize(count: Self.stripeCount)
         stripes.deallocate()
         pthread_mutex_destroy(lock)
@@ -197,8 +278,10 @@ final class Scanner: @unchecked Sendable {
         group.wait()
         tree.count = nodesSoFar
         // What the scan needed only while it was reading goes as soon as it's done.
-        queue = []
-        for index in 0..<Self.stripeCount { stripes[index].seen = [] }
+        pthread_mutex_lock(lock)
+        queue.free()
+        pthread_mutex_unlock(lock)
+        for index in 0..<Self.stripeCount { stripes[index].free() }
     }
 
     /// The links that were found, all together. The stretches the workers didn't finish are closed up.
@@ -750,7 +833,7 @@ final class Scanner: @unchecked Sendable {
 
         filesSeen.add(UInt64(fileCount), ordering: .relaxed)
 
-        let s = tree.stats + Int(id) * DiskTree.statStride
+        let s = tree.statTable + Int(id) * DiskTree.statStride
         withUnsafeBytes(of: &kindBytes) { raw in
             let k = raw.bindMemory(to: UInt64.self)
             for i in 0..<Kind.count { s[i] = Self.units(k[i]) }
@@ -807,9 +890,10 @@ final class Scanner: @unchecked Sendable {
 
     @inline(__always)
     private func firstTime(_ key: UInt64) -> Bool {
-        let stripe = stripes + Int(truncatingIfNeeded: (key &* 0x9E37_79B9_7F4A_7C15) >> 56)
+        let hash = key &* Self.mixer
+        let stripe = stripes + Int(truncatingIfNeeded: hash >> 56)
         os_unfair_lock_lock(&stripe.pointee.lock)
-        let inserted = stripe.pointee.seen.insert(key).inserted
+        let inserted = stripe.pointee.insert(key, hash: hash)
         os_unfair_lock_unlock(&stripe.pointee.lock)
         return inserted
     }

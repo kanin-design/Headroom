@@ -16,12 +16,6 @@ struct RootView: View {
 
                 CenterReadout(model: model, ring: ring)
 
-                // Grab anywhere along the top to move the window.
-                Color.clear
-                    .frame(height: 52)
-                    .contentShape(Rectangle())
-                    .gesture(WindowDragGesture())
-
                 // Centred over the ring, unless the window is so narrow that it would meet the disk chip.
                 LensSwitcher(model: model)
                     .position(x: max(ring.center.x, 432), y: 31)

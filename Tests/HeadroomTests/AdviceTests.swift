@@ -383,6 +383,8 @@ final class ProjectAdviceTests: XCTestCase {
 
 final class GitTests: XCTestCase {
     private var root = ""
+    /// Long after the commits these make, because a project with a recent commit isn't looked at any further.
+    private let later = Date().addingTimeInterval(TimeInterval(Advisors.projectQuietDays + 1) * 86_400)
 
     override func setUpWithError() throws {
         try XCTSkipUnless(Git.isAvailable)
@@ -421,7 +423,7 @@ final class GitTests: XCTestCase {
     }
 
     func testEverythingPushed() throws {
-        let fact = try XCTUnwrap(Git.read(try project()))
+        let fact = try XCTUnwrap(Git.read(try project(), now: later))
         XCTAssertTrue(fact.isClean)
         XCTAssertTrue(fact.allPushed)
         XCTAssertNotNil(fact.remote)
@@ -431,20 +433,20 @@ final class GitTests: XCTestCase {
     func testUncommittedWork() throws {
         let work = try project()
         try "more".write(toFile: work + "/b.txt", atomically: false, encoding: .utf8)
-        XCTAssertEqual(Git.read(work)?.isClean, false)
+        XCTAssertEqual(Git.read(work, now: later)?.isClean, false)
     }
 
     func testAnUnpushedCommit() throws {
         let work = try project()
         try "more".write(toFile: work + "/a.txt", atomically: false, encoding: .utf8)
         git("commit", "-am", "second", in: work)
-        XCTAssertEqual(Git.read(work)?.allPushed, false)
+        XCTAssertEqual(Git.read(work, now: later)?.allPushed, false)
     }
 
     func testABranchThatsNowhereElse() throws {
         let work = try project()
         git("branch", "side", in: work)
-        XCTAssertEqual(Git.read(work)?.allPushed, false)
+        XCTAssertEqual(Git.read(work, now: later)?.allPushed, false)
     }
 
     func testABranchWhoseRemoteBranchIsGone() throws {
@@ -454,27 +456,27 @@ final class GitTests: XCTestCase {
         git("checkout", "main", in: work)
         git("push", "origin", "--delete", "side", in: work)
         git("fetch", "--prune", in: work)
-        XCTAssertEqual(Git.read(work)?.allPushed, false)
+        XCTAssertEqual(Git.read(work, now: later)?.allPushed, false)
     }
 
     func testAStash() throws {
         let work = try project()
         try "more".write(toFile: work + "/a.txt", atomically: false, encoding: .utf8)
         git("stash", in: work)
-        XCTAssertEqual(Git.read(work)?.allPushed, false)
+        XCTAssertEqual(Git.read(work, now: later)?.allPushed, false)
     }
 
     func testADetachedHead() throws {
         let work = try project()
         git("checkout", "--detach", in: work)
-        XCTAssertEqual(Git.read(work)?.allPushed, false)
+        XCTAssertEqual(Git.read(work, now: later)?.allPushed, false)
     }
 
     func testAnotherWorkingFolder() throws {
         let work = try project()
         git("worktree", "add", root + "/other", "-b", "elsewhere", in: work)
         git("push", "-u", "origin", "elsewhere", in: root + "/other")
-        XCTAssertEqual(Git.read(work)?.allPushed, false)
+        XCTAssertEqual(Git.read(work, now: later)?.allPushed, false)
     }
 }
 
@@ -493,7 +495,7 @@ final class WinsTests: XCTestCase {
             tree.nodes[Int(node)].rule = id
             tree.nodes[Int(node)].flags |= NodeFlag.ruleRoot
         }
-        tree.stats[Int(disk.node("/Volumes/Fake/busy")) * DiskTree.statStride + DiskTree.statRecent14] = 10
+        tree.changeableStatRow(disk.node("/Volumes/Fake/busy"))[DiskTree.statRecent14] = 10
         let rows = Wins.build(tree: tree, rules: rules, recipeFound: { _, _ in true })
         let quiet = rows.first { $0.isQuick && $0.title == "node_modules" }
         let busy = rows.first { !$0.isQuick && $0.title == "node_modules" }
