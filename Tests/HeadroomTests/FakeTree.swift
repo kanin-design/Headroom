@@ -64,12 +64,12 @@ final class FakeDisk {
     }
 
     /// A file with two paths: it's counted at the first, and the second only links to it.
-    func linked(_ first: String, _ second: String, _ bytes: UInt64, kind: Kind = .video) {
+    func linked(_ first: String, _ second: String, _ bytes: UInt64, kind: Kind = .video, clone: Bool = false) {
         let a = file(first, bytes, kind: kind)
         let b = file(second, bytes, kind: kind, alias: true)
         // As the scanner does: a folder knows how much of it is links to files counted somewhere else.
         tree.nodes[Int(tree.nodes[Int(b)].parent)].aliasBytes &+= bytes
-        let key = UInt64(a) + 1000
+        let key = (UInt64(a) + 1000) | (clone ? 1 << 63 : 0)
         tree.links.append(LinkRecord(key: key, bytes: bytes, dir: tree.nodes[Int(a)].parent, file: a, when: 0, kind: kind.rawValue, counted: true))
         tree.links.append(LinkRecord(key: key, bytes: bytes, dir: tree.nodes[Int(b)].parent, file: b, when: 0, kind: kind.rawValue, counted: false))
     }

@@ -1,6 +1,5 @@
 import AppKit
 import Observation
-import QuickLookUI
 import SwiftUI
 
 /// The three questions the map can answer. The geometry stays put, so changing the question never loses your place.
@@ -50,7 +49,8 @@ struct HoverInfo: Equatable {
     var bytes: UInt64
     var share: String
     var note: String
-    var reclaim: UInt64?
+    /// What it is, if its files also have another path.
+    var links: String?
 }
 
 @MainActor
@@ -73,13 +73,25 @@ final class AppModel {
     var accessCardDismissed = false
 
     // Where you are
-    var focus: UInt32 = 0 { didSet { if oldValue != focus { refreshShownRows() } } }
+    var focus: UInt32 = 0 { didSet { if oldValue != focus { pointedThing = nil; closeLook(); refreshShownRows(); visitChanged() } } }
+    /// What the card Space opens is showing, when it's open.
+    var look: Look?
+    var lookCursor: Int?
+    @ObservationIgnored var lookWatch: Any?
+    @ObservationIgnored var lookCardFrame = CGRect.zero
+    @ObservationIgnored var lookContentFrame = CGRect.zero
+    @ObservationIgnored var factsCache: [UInt32: String] = [:]
+    @ObservationIgnored var factsVersion = -1
+    /// Where you've been, for the back and forward arrows, and where in that you are now.
+    var visited = [Visit()]
+    var visitAt = 0
+    @ObservationIgnored var visitPending = false
     /// Where you've been, so Back returns to the picture you came from.
     @ObservationIgnored var trail: [UInt32] = []
     var lens: Lens = .map
     var panelOpen = true
     var hover: HoverInfo?
-    var selected: UInt32? { didSet { if oldValue != selected { refreshStory() } } }
+    var selected: UInt32? { didSet { if oldValue != selected { refreshStory(); visitChanged() } } }
     var ring = RingGeometry(center: .zero, radius: 0, mapWidth: 0, windowHeight: 0)
 
     // Free Up
@@ -111,6 +123,7 @@ final class AppModel {
     var afterClean: AfterClean?
     /// A few words beside the ring, for when a click can't do what you asked.
     var tip: String?
+    var tipOffersUndo = false
     var expandedRow: String?
     var previewingAfter = false
 
@@ -180,7 +193,9 @@ final class AppModel {
     @ObservationIgnored let rules = RuleBook(homePath: NSHomeDirectory())
     @ObservationIgnored var activeScan: DiskScan?
     @ObservationIgnored private var labelTask: Task<Void, Never>?
-    @ObservationIgnored private var reclaimTask: Task<Void, Never>?
+    @ObservationIgnored private var linksTask: Task<Void, Never>?
+    /// The name under the pointer, off the ring: a row, a label, the path under the ring.
+    @ObservationIgnored var pointedThing: NamedThing?
     @ObservationIgnored var reclaim: ReclaimMap?
     @ObservationIgnored private var changes: ChangeMap?
     @ObservationIgnored var scanGeneration = 0
@@ -333,6 +348,7 @@ final class AppModel {
             focus = 0
             trail = []
             selected = nil
+            resetVisits()
             nameCache = [:]
             suggestions = Suggestions()
             boxes = []
@@ -435,6 +451,9 @@ final class AppModel {
                 // The end of a scan you've been watching: its folders are the same ones, so you simply stay where you are.
                 let sameScan = self.tree?.scanID == newTree.scanID
                 if !sameScan {
+                    self.pointedThing = nil
+                    self.closeLook()
+                    self.carryVisits(to: newTree)
                     // Keep your place, if the folder you were looking at still exists.
                     var keepPath: String?
                     if self.focus != 0, let tree = self.tree { keepPath = tree.path(self.focus) }
@@ -517,6 +536,7 @@ final class AppModel {
         focus = 0
         trail = []
         selected = nil
+        resetVisits()
         suggestions = Suggestions()
         boxes = []
         shownRows = []
@@ -719,9 +739,11 @@ final class AppModel {
     }
 
     func setHover(_ index: Int?) {
+        // With the card open, what it's about stays lit whenever the pointer isn't on something else.
+        let index = index ?? lookPieceIndex
         guard index != lastHoverIndex else { return }
         lastHoverIndex = index
-        reclaimTask?.cancel()
+        linksTask?.cancel()
         guard let index, let tree, index < engine.layout.pieces.count else {
             engine.setEmphasis(primary: nil, related: [])
             hover = nil
@@ -748,15 +770,15 @@ final class AppModel {
         engine.setEmphasis(primary: index, related: [index..<Int(p.end)], ancestors: chain)
         var info = describe(p, index: index, tree: tree)
         hover = info
-        // What you'd really get back takes a moment to work out, so it waits until the pointer rests.
+        // Whether its files also have another path takes a moment to work out, so it waits until the pointer rests.
         if !p.isSmaller, p.style != 1, p.style != 2, !tree.links.isEmpty, tree.nodes[Int(p.node)].flags & NodeFlag.synthetic == 0 {
-            let node = p.node
-            reclaimTask = Task { [weak self] in
+            let node = p.node, bytes = p.bytes
+            linksTask = Task { [weak self] in
                 try? await Task.sleep(for: .milliseconds(90))
                 guard let self, !Task.isCancelled else { return }
-                let value = await Task.detached(priority: .userInitiated) { Accounting.reclaimable([node], in: tree) }.value
-                guard !Task.isCancelled, self.lastHoverIndex == index else { return }
-                info.reclaim = value
+                let line = await Task.detached(priority: .userInitiated) { Accounting.hoverLine(node, bytes: bytes, in: tree) }.value
+                guard line != nil, !Task.isCancelled, self.lastHoverIndex == index else { return }
+                info.links = line
                 self.hover = info
             }
         }
@@ -775,7 +797,7 @@ final class AppModel {
         }
         var note = ""
         if lens == .freeUp, !p.isSmaller, !p.isMark, !n.has(NodeFlag.free), tree.path(p.node) != nil {
-            note = isPlanned(p.node) ? "Selected. Click to take it out." : "Click to select it. Double-click to open."
+            note = isPlanned(p.node) ? "Selected. Click to unselect." : "Click to select. Double-click to open."
         } else if lens == .changes, let changes {
             let delta = changes.value(of: p.node)
             if delta > 0 { note = "+\(formatBytes(UInt64(delta))) \(changes.shortCaption)" }
@@ -785,7 +807,7 @@ final class AppModel {
             if rule.tier != .none && rule.tier != .handsOff { note = rule.tier.title }
         }
         return HoverInfo(pieceIndex: index, node: p.node, title: displayName(piece: p), bytes: p.bytes,
-                         share: share, note: note, reclaim: nil)
+                         share: share, note: note, links: nil)
     }
 
     /// Lights up one thing from the panel or a label, as if the pointer were on it.
@@ -829,11 +851,19 @@ final class AppModel {
     func click(at polar: (angle: Float, radius: Float)?, count: Int = 1) {
         guard let polar else { return }
         if polar.radius < RingLayout.hole {
-            goUp()
+            if look != nil {
+                showInLook(focus, steppingIn: false)
+            } else {
+                goUp()
+            }
             return
         }
         guard let index = engine.layout.hit(angle: polar.angle, radius: polar.radius) else {
-            selected = nil
+            if look != nil {
+                closeLook()
+            } else {
+                selected = nil
+            }
             return
         }
         click(piece: index, count: count)
@@ -843,6 +873,25 @@ final class AppModel {
         guard let tree, index < engine.layout.pieces.count else { return }
         let p = engine.layout.pieces[index]
         let n = tree.nodes[Int(p.node)]
+        // With the card open, a click shows that piece in the card, and a double-click goes there.
+        if look != nil {
+            guard !p.isSmaller, tree.path(p.node) != nil else {
+                closeLook()
+                return
+            }
+            if count < 2 {
+                showInLook(p.node, steppingIn: false)
+                return
+            }
+            closeLook()
+            if n.has(NodeFlag.directory), n.firstChild != 0 {
+                zoom(into: p.tail, from: p)
+            } else {
+                selected = p.node
+                panelOpen = true
+            }
+            return
+        }
         // In Free Up a click means "this too", and a double-click opens it, as in the Finder.
         if lens == .freeUp, !n.has(NodeFlag.free), !p.isSmaller {
             if count == 1 || count == 2 { togglePiece(p.node) }
@@ -924,10 +973,12 @@ final class AppModel {
 
     func setLens(_ new: Lens) {
         guard new != lens else { return }
+        closeLook()
         lens = new
         selected = nil
         panelOpen = true
         pointing = nil
+        pointedThing = nil
         hotBox = nil
         hotRow = nil
         engine.setCalm(new == .map ? 1 : (new == .freeUp ? 0.55 : 0))
@@ -1004,62 +1055,6 @@ final class AppModel {
         restartScan(hurry: true)
     }
 
-    // MARK: Finder
-
-    func reveal(_ node: UInt32) {
-        guard let path = tree?.path(node) else { return }
-        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: Self.visiblePath(path))])
-    }
-
-    private static func visiblePath(_ path: String) -> String {
-        path.hasPrefix("/System/Volumes/Data/") ? String(path.dropFirst("/System/Volumes/Data".count)) : path
-    }
-
-    func copyPath(_ node: UInt32) {
-        guard let path = tree?.path(node) else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(Self.visiblePath(path), forType: .string)
-    }
-
-    func quickLookHovered() {
-        guard let node = hover?.node ?? selected, let path = tree?.path(node) else { return }
-        QuickLook.shared.show(URL(fileURLWithPath: Self.visiblePath(path)))
-    }
-
-    func contextMenu(forPiece index: Int) -> NSMenu? {
-        guard let tree, index < engine.layout.pieces.count else { return nil }
-        let p = engine.layout.pieces[index]
-        guard !p.isSmaller, tree.path(p.node) != nil else { return nil }
-        let menu = NSMenu()
-        let target = MenuTarget.shared
-        func add(_ title: String, _ symbol: String, _ action: @escaping () -> Void) {
-            let item = NSMenuItem(title: title, action: #selector(MenuTarget.run(_:)), keyEquivalent: "")
-            item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
-            item.target = target
-            item.representedObject = MenuAction(action)
-            menu.addItem(item)
-        }
-        add("Reveal in Finder", "folder") { self.reveal(p.node) }
-        add("Quick Look", "eye") {
-            self.selected = p.node
-            if let path = tree.path(p.node) { QuickLook.shared.show(URL(fileURLWithPath: Self.visiblePath(path))) }
-        }
-        add("Copy Path", "doc.on.doc") { self.copyPath(p.node) }
-        if let path = tree.path(p.node), Safety.canTrash(path) {
-            menu.addItem(.separator())
-            // The map can change while a menu is open, and these numbers only mean something in this one.
-            if isPlanned(p.node) {
-                add("Unselect it", "minus.circle") { if self.tree === tree { self.togglePiece(p.node) } }
-            } else {
-                add("Select it", "plus.circle") { if self.tree === tree { self.togglePiece(p.node) } }
-            }
-            for disk in otherDisks(for: path) {
-                add("Move to \(disk.name)", "externaldrive") { if self.tree === tree { self.planMove(node: p.node, to: disk) } }
-            }
-        }
-        return menu
-    }
-
     // MARK: Search
 
     func runSearch() {
@@ -1092,25 +1087,6 @@ final class MenuAction: NSObject {
 final class MenuTarget: NSObject {
     static let shared = MenuTarget()
     @objc func run(_ sender: NSMenuItem) { (sender.representedObject as? MenuAction)?.run() }
-}
-
-/// macOS's own preview panel.
-final class QuickLook: NSObject, QLPreviewPanelDataSource {
-    static let shared = QuickLook()
-    private var url: URL?
-
-    @MainActor
-    func show(_ url: URL) {
-        self.url = url
-        guard let panel = QLPreviewPanel.shared() else { return }
-        AppModel.shared.mapView?.window?.makeFirstResponder(AppModel.shared.mapView)
-        panel.updateController()
-        panel.reloadData()
-        panel.makeKeyAndOrderFront(nil)
-    }
-
-    func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int { url == nil ? 0 : 1 }
-    func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> QLPreviewItem! { url as NSURL? }
 }
 
 /// The last check before anything moves. Only your own files, never the folders that hold everything together.

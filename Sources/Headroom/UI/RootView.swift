@@ -16,6 +16,9 @@ struct RootView: View {
 
                 CenterReadout(model: model, ring: ring)
 
+                LookLayer(model: model, ring: ring, height: geometry.size.height)
+                    .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
+
                 // Centred over the ring, unless the window is so narrow that it would meet the disk chip.
                 LensSwitcher(model: model)
                     .position(x: max(ring.center.x, 432), y: 31)
@@ -260,9 +263,20 @@ struct BottomArea: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             if let tip = model.tip {
-                Text(tip)
-                    .font(.system(size: 12.5, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.92))
+                HStack(spacing: 12) {
+                    Text(tip)
+                        .font(.system(size: 12.5, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.92))
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                    if model.tipOffersUndo {
+                        Button("Undo") { model.undoCommand() }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 12.5, weight: .semibold))
+                            .foregroundStyle(Palette.reclaim(.rebuilds).swiftUI)
+                            .pointerStyle(.link)
+                    }
+                }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 9)
                     .glassEffect(.regular, in: Capsule())
@@ -297,7 +311,8 @@ struct Breadcrumbs: View {
                             .foregroundStyle(.white.opacity(0.35))
                     }
                     Button {
-                        model.go(to: node)
+                        // You're already here, so a click on this one copies its name.
+                        if node == model.focus { model.copyName(of: NamedThing(node)) } else { model.go(to: node) }
                     } label: {
                         Text(index == 0 ? (model.volume?.name ?? "Disk") : model.displayName(node))
                             .font(.system(size: 12, weight: node == model.focus ? .semibold : .medium))
@@ -308,6 +323,8 @@ struct Breadcrumbs: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .named(NamedThing(node), in: model)
+                    .help(node == model.focus ? "Click to copy the name" : "⌘-click to copy the name")
                 }
             }
             .padding(.horizontal, 12)
@@ -353,7 +370,7 @@ struct AccessCard: View {
                 Text("Some folders are locked")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.95))
-                Text("macOS keeps Downloads, Desktop, Documents and a few others private until you allow it.")
+                Text("macOS keeps Downloads, Desktop, Documents and a few others private until you give permission.")
                     .font(.system(size: 11.5))
                     .foregroundStyle(.white.opacity(0.62))
                     .fixedSize(horizontal: false, vertical: true)

@@ -2,7 +2,6 @@ import AppKit
 import IOSurface
 import Metal
 import QuartzCore
-import QuickLookUI
 import SwiftUI
 
 /// The ring's window into the display. It draws only while something is moving.
@@ -85,11 +84,6 @@ final class MapHostView: NSView {
             self.window?.makeFirstResponder(self)
         }
     }
-
-    // macOS's preview panel finds whoever will run it through the responder chain.
-    override func acceptsPreviewPanelControl(_ panel: QLPreviewPanel!) -> Bool { true }
-    override func beginPreviewPanelControl(_ panel: QLPreviewPanel!) { panel.dataSource = QuickLook.shared }
-    override func endPreviewPanelControl(_ panel: QLPreviewPanel!) { panel.dataSource = nil }
 
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
@@ -249,7 +243,9 @@ final class MapHostView: NSView {
     override func mouseMoved(with event: NSEvent) {
         guard let model else { return }
         let p = convert(event.locationInWindow, from: nil)
-        model.pointerMoved(to: model.polar(p))
+        // The card covers part of the ring. What's under it can't be pointed at.
+        let onCard = model.look != nil && model.lookCardFrame.contains(p)
+        model.pointerMoved(to: onCard ? nil : model.polar(p))
     }
 
     override func mouseExited(with event: NSEvent) {
@@ -264,6 +260,10 @@ final class MapHostView: NSView {
         if p.y < Self.titleBarHeight {
             downPoint = nil
             moveWindow(with: event)
+        } else if event.modifierFlags.contains(.command) {
+            // ⌘-click copies the name of what's under it, and that's all it does.
+            downPoint = nil
+            if let model, let polar = model.polar(p), let thing = model.thing(at: polar) { model.copyName(of: thing) }
         } else if isEmptyBackground(p) {
             backgroundDown = event
         }
@@ -318,10 +318,9 @@ final class MapHostView: NSView {
         model.click(at: pointInRing(event), count: event.clickCount)
     }
 
-    override func rightMouseDown(with event: NSEvent) {
-        guard let model, let polar = pointInRing(event), let index = model.engine.layout.hit(angle: polar.angle, radius: polar.radius),
-              let menu = model.contextMenu(forPiece: index) else { return }
-        NSMenu.popUpContextMenu(menu, with: event, for: self)
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard let model, let polar = pointInRing(event), let thing = model.thing(at: polar) else { return nil }
+        return model.menu(for: thing)
     }
 
     override func magnify(with event: NSEvent) {
@@ -342,14 +341,14 @@ final class MapHostView: NSView {
         if model.lens == .freeUp, model.handlePlanKey(event) { return }
         switch event.keyCode {
         case 53, 51: model.goUp()                 // escape, delete
-        case 49: model.quickLookHovered()         // space
+        case 49: model.toggleLook()               // space
         default: super.keyDown(with: event)
         }
     }
 
-    // Hold Option to see the disk as it will be after the clean.
+    // Hold Option to see the disk as it will be after the clean. With ⌘ it's part of a shortcut.
     override func flagsChanged(with event: NSEvent) {
-        model?.setPreviewAfter(event.modifierFlags.contains(.option))
+        model?.setPreviewAfter(event.modifierFlags.contains(.option) && !event.modifierFlags.contains(.command))
         super.flagsChanged(with: event)
     }
 }

@@ -6,20 +6,23 @@ struct SidePanel: View {
     let model: AppModel
 
     var body: some View {
-        Group {
-            if model.searchActive && !model.searchText.isEmpty {
-                SearchPanel(model: model)
-            } else {
-                VStack(spacing: 0) {
-                    Group {
-                        switch model.lens {
-                        case .map: MapPanel(model: model)
-                        case .changes: ChangesPanel(model: model)
-                        case .freeUp: FreeUpPanel(model: model)
+        VStack(spacing: 0) {
+            PanelArrows(model: model)
+            Group {
+                if model.searchActive && !model.searchText.isEmpty {
+                    SearchPanel(model: model)
+                } else {
+                    VStack(spacing: 0) {
+                        Group {
+                            switch model.lens {
+                            case .map: MapPanel(model: model)
+                            case .changes: ChangesPanel(model: model)
+                            case .freeUp: FreeUpPanel(model: model)
+                            }
                         }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        NextStepBar(model: model)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                    NextStepBar(model: model)
                 }
             }
         }
@@ -29,11 +32,42 @@ struct SidePanel: View {
     }
 }
 
+/// Back and forward through where you've been, in the same place on every tab.
+private struct PanelArrows: View {
+    let model: AppModel
+
+    var body: some View {
+        HStack(spacing: 4) {
+            arrow("chevron.left", help: "Back", isOn: model.canGoBack) { model.goBack() }
+            arrow("chevron.right", help: "Forward", isOn: model.canGoForward) { model.goForward() }
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 12)
+    }
+
+    private func arrow(_ symbol: String, help: String, isOn: Bool, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white.opacity(isOn ? 0.88 : 0.24))
+                .frame(width: 30, height: 24)
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.white.opacity(isOn ? 0.09 : 0.03)))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!isOn)
+        .help(help)
+    }
+}
+
 // MARK: Shared pieces
 
 struct PanelTitle: View {
     let title: String
     var subtitle: String? = nil
+    var copyTitle: (() -> Void)? = nil
+    var copySubtitle: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -42,12 +76,14 @@ struct PanelTitle: View {
                 .foregroundStyle(.white.opacity(0.96))
                 .lineLimit(2)
                 .truncationMode(.middle)
+                .clickToCopy(copyTitle, help: "Click to copy the name")
             if let subtitle {
                 Text(subtitle)
                     .font(.system(size: 11.5))
                     .foregroundStyle(.white.opacity(0.5))
                     .lineLimit(2)
                     .truncationMode(.middle)
+                    .clickToCopy(copySubtitle, help: "Click to copy the path")
             }
         }
     }
@@ -80,6 +116,8 @@ struct NodeRow: View {
     let share: Double
     let color: Color
     var valueColor: Color = .white.opacity(0.82)
+    /// Where the keyboard is, in a list you can walk through.
+    var isLit = false
     let onHover: (Bool) -> Void
     let onTap: () -> Void
     @State private var isHovered = false
@@ -120,7 +158,7 @@ struct NodeRow: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
-            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(.white.opacity(isHovered ? 0.075 : 0)))
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(.white.opacity(isHovered || isLit ? 0.075 : 0)))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -160,13 +198,23 @@ struct MapPanel: View {
     private func header(_ tree: DiskTree, _ subject: UInt32) -> some View {
         let name = subject == 0 ? (model.volume?.name ?? "Disk") : model.displayName(subject)
         let path = subject == 0 || HiddenNames.isOn ? nil : tree.path(subject).map(DiskTree.friendly)
-        return PanelTitle(title: name, subtitle: path)
+        let thing = NamedThing(subject)
+        return VStack(alignment: .leading, spacing: 5) {
+            PanelTitle(title: name, subtitle: path, copyTitle: { model.copyName(of: thing) }, copySubtitle: { model.copyPath(of: thing) })
+                .named(thing, in: model)
+            if subject != 0, let facts = model.facts(of: subject) {
+                Text(tree.sizeText(subject) + " · " + facts)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.white.opacity(0.62))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 
     private func summary(_ tree: DiskTree) -> some View {
         let free = tree.totals[Int(tree.free)]
         let fullness = 1 - Double(free) / Double(max(tree.capacityBytes, 1))
-        let biggest = flatTop(tree).first
+        let biggest = model.flatTop(tree).first
         let canGo = model.suggestions.everything.filter { $0.isQuick }.reduce(UInt64(0)) { $0 &+ $1.bytes }
         return VStack(alignment: .leading, spacing: 10) {
             if let biggest {
@@ -234,17 +282,21 @@ struct MapPanel: View {
                                 .font(.system(size: 14, weight: .semibold, design: .rounded).monospacedDigit())
                                 .foregroundStyle(Color(red: 1, green: 0.74, blue: 0.42))
                         }
-                        Text("\(formatBytes(story.sharedOut)) of it is the same files as \(story.sharedPlace ?? "another folder"). That space only comes back when both are gone.")
+                        Text("\(formatBytes(story.sharedOut)) of this is the same files as \(story.sharedPlace ?? "another folder"). That space only comes back when both are gone.")
                             .font(.system(size: 12))
                             .foregroundStyle(.white.opacity(0.68))
                             .fixedSize(horizontal: false, vertical: true)
+                        goTo(story.sharedPlace, story.sharedPlaceNode)
                     }
                 }
                 if story.linkedIn >= enough {
-                    Text("It also holds \(formatBytes(story.linkedIn)) of links to files counted under \(story.linkedPlace ?? "another folder"). They take no extra space here.")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.white.opacity(0.68))
-                        .fixedSize(horizontal: false, vertical: true)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("This also holds \(formatBytes(story.linkedIn)) of links to files counted under \(story.linkedPlace ?? "another folder"). They take no extra space here.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.white.opacity(0.68))
+                            .fixedSize(horizontal: false, vertical: true)
+                        goTo(story.linkedPlace, story.linkedPlaceNode)
+                    }
                 }
             }
             .padding(10)
@@ -253,13 +305,21 @@ struct MapPanel: View {
         }
     }
 
-    private func flatTop(_ tree: DiskTree) -> [UInt32] {
-        var all: [UInt32] = []
-        for top in tree.children(0) where top != tree.free && top != tree.hidden {
-            let n = tree.nodes[Int(top)]
-            if top == tree.home || n.has(NodeFlag.synthetic) { all += tree.children(top) } else { all.append(top) }
+    /// The other side of a hard link or a clone.
+    @ViewBuilder
+    private func goTo(_ place: String?, _ node: UInt32?) -> some View {
+        if let place, let node {
+            Button {
+                model.goToPlace(node)
+            } label: {
+                Label("Go to \(place)", systemImage: "arrow.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color(red: 1, green: 0.74, blue: 0.42))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .pointerStyle(.link)
         }
-        return all.filter { tree.totals[Int($0)] > 0 }.sorted { tree.totals[Int($0)] > tree.totals[Int($1)] }
     }
 
     @ViewBuilder
@@ -309,7 +369,7 @@ struct MapPanel: View {
     @ViewBuilder
     private func contents(_ tree: DiskTree) -> some View {
         let focus = RingLayout.chainTail(tree: tree, model.focus)
-        let rows: [UInt32] = model.focus == 0 ? flatTop(tree) : tree.children(focus).filter { tree.totals[Int($0)] > 0 }
+        let rows = model.panelNodes(tree)
         let top = rows.prefix(80)
         let biggest = Double(max(top.first.map { tree.totals[Int($0)] } ?? 1, 1))
         VStack(alignment: .leading, spacing: 4) {
@@ -321,9 +381,10 @@ struct MapPanel: View {
                             subtitle: linksWorthNaming(tree, node) ? "plus \(formatBytes(tree.aliasTotals[Int(node)])) of links" : subtitle(tree, node),
                             value: tree.sizeText(node),
                             share: Double(tree.totals[Int(node)]) / biggest,
-                            color: color(tree, node),
+                            color: model.listColor(node, in: tree),
                             onHover: { inside in model.highlight(node: inside ? node : nil) },
                             onTap: { open(node) })
+                        .named(NamedThing(node), in: model)
                 }
                 let own = tree.nodes[Int(focus)]
                 if model.focus != 0, own.bytes > 0 {
@@ -345,14 +406,6 @@ struct MapPanel: View {
         if n.has(NodeFlag.denied) { return "Can't be read" }
         if n.has(NodeFlag.ruleRoot) { return model.rules.rule(n.rule).tier.title }
         return nil
-    }
-
-    private func color(_ tree: DiskTree, _ node: UInt32) -> Color {
-        if let matching = model.mapColor(node) { return matching.swiftUI }
-        let n = tree.nodes[Int(node)]
-        if n.has(NodeFlag.directory) { return Palette.blend(tree.statRow(node)).swiftUI }
-        if n.has(NodeFlag.synthetic) { return Palette.color(.system).swiftUI }
-        return Palette.color(Kind(rawValue: n.kind) ?? .other).swiftUI
     }
 
     // Asked for when it's clicked. A row that held on to the tree it was drawn from would keep all of that tree in memory.
@@ -377,7 +430,7 @@ struct MapPanel: View {
                 }
                 .buttonStyle(.glass)
                 if Safety.canTrash(path) {
-                    PlanButton(model: model, node: subject)
+                    DeleteMenu(model: model, node: subject)
                 }
             }
             .controlSize(.regular)
@@ -385,7 +438,7 @@ struct MapPanel: View {
     }
 }
 
-private struct PlanButton: View {
+struct DeleteMenu: View {
     let model: AppModel
     let node: UInt32
 
@@ -393,12 +446,14 @@ private struct PlanButton: View {
         // Depends on the list, so it follows any change to it.
         let _ = model.plan.items.count
         let planned = model.isPlanned(node)
-        Button {
-            withAnimation(.snappy(duration: 0.2)) { model.togglePiece(node) }
+        Menu {
+            ThingMenuItems(actions: model.deleteActions(for: NamedThing(node)))
         } label: {
-            Label(planned ? "Selected" : "Select it", systemImage: planned ? "checkmark.circle.fill" : "plus.circle")
+            Label(planned ? "Selected" : "Delete", systemImage: planned ? "checkmark.circle.fill" : "trash")
         }
+        .menuStyle(.button)
         .buttonStyle(.glass)
+        .fixedSize()
     }
 }
 
@@ -504,6 +559,7 @@ struct ChangesPanel: View {
                             valueColor: Palette.heat(0.68).swiftUI,
                             onHover: { inside in model.highlight(node: inside ? row.node : nil) },
                             onTap: { open(row.node) })
+                        .named(NamedThing(row.node), in: model)
                 }
             }
             .padding(.horizontal, -8)
@@ -554,6 +610,7 @@ struct SearchPanel: View {
                                     color: Palette.color(tree.dominantKind(node)).swiftUI,
                                     onHover: { inside in if inside { model.highlight(node: node) } else { model.highlight(nodes: Array(model.searchResults.prefix(400))) } },
                                     onTap: { open(node) })
+                                .named(NamedThing(node), in: model)
                         }
                     }
                     .padding(.horizontal, -8)

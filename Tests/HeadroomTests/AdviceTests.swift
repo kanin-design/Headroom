@@ -530,7 +530,7 @@ final class WinsTests: XCTestCase {
         XCTAssertFalse(lost.isQuick)
         XCTAssertEqual(lost.tier, .yourCall)
         XCTAssertEqual(lost.nodes, [disk.node("/Volumes/Fake/lost/node_modules")])
-        XCTAssertTrue(lost.subtitle.contains("Nothing says what's in it"))
+        XCTAssertTrue(lost.subtitle.contains("Nothing says what's in this folder"))
     }
 
     func testARecipeCanBeAnyOfSeveralNames() throws {
@@ -908,7 +908,7 @@ final class FinderAskTests: XCTestCase {
             guard case .couldntGo(let why, _) = Cleaner.whyItFailed(failure) else { return XCTFail("\(failure) has no reason") }
             XCTAssertFalse(why.isEmpty)
         }
-        XCTAssertEqual(Cleaner.whyItFailed(FinderAsk.Failure.notAllowed), .couldntGo("macOS stopped Headroom from asking the Finder to move this. You can allow it in System Settings.", askSettings: true))
+        XCTAssertEqual(Cleaner.whyItFailed(FinderAsk.Failure.notAllowed), .couldntGo("macOS stopped Headroom from asking the Finder to move this. You can allow that in System Settings.", askSettings: true))
     }
 
     func testWhatFailedWaitsForYouToSayTryAgain() {

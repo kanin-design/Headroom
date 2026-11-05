@@ -122,7 +122,7 @@ enum Sections {
         }
         add("trash", "Trash", "Already thrown away", Palette.Box.trash, trash)
         add("quick", "Caches and build output", "Rebuilds itself. Nothing you'd miss", Palette.Box.quick, quick)
-        add("models", "AI models", models.count == 1 ? "It downloads again if needed" : "\(models.count) models. They download again if needed", Palette.Box.models, models)
+        add("models", "AI models", models.count == 1 ? "Downloads again if needed" : "\(models.count) models. They download again if needed", Palette.Box.models, models)
         if !kids.isEmpty {
             out.append(Section(id: "leftovers", title: "Project leftovers", detail: "Old versions, renders, review stills", color: Palette.Box.leftovers, kids: kids))
         }
@@ -131,10 +131,10 @@ enum Sections {
         add("watched", "Episodes you've watched", seenEpisodes == 1 ? "1 episode, going by Plex" : "\(seenEpisodes) episodes, going by Plex", Palette.Box.watched, watched)
         add("apps", "Apps you don't seem to use", "No sign of use for 6 months", Palette.Box.apps, apps)
         add("left", "Left behind by old apps", "The app isn't on this Mac", Palette.Box.left, left)
-        add("used", "Caches you've used lately", "They rebuild, but apps start slower", Palette.Box.used, used)
+        add("used", "Caches you've used lately", "Rebuild themselves, but apps start slower", Palette.Box.used, used)
         let androidRunning = android.contains { $0.inUse?.contains("running") == true }
-        add("android", "Android tools and emulator", "They download again if needed", note: androidRunning ? "Running now" : nil, Palette.Box.android, android)
-        add("games", "Games", "Steam can download them again", Palette.Box.games, games)
+        add("android", "Android tools and emulator", "Download again if needed", note: androidRunning ? "Running now" : nil, Palette.Box.android, android)
+        add("games", "Games", "Steam can download these again", Palette.Box.games, games)
         add("repos", "Projects you could clone again", "Everything is pushed", Palette.Box.repos, repos)
         add("films", "Films", names(films), Palette.Box.films, films)
         add("other", "Other big things", names(other), Palette.Box.other, other)

@@ -302,6 +302,7 @@ struct LabelsLayer: View {
                             if inside { model.setHover(label.pieceIndex) } else { model.setHover(nil) }
                         }
                         .onTapGesture { model.click(piece: label.pieceIndex) }
+                        .named(NamedThing(label.node), in: model)
                         .frame(width: room, alignment: right ? .leading : .trailing)
                         .position(x: right ? label.position.x + room / 2 : label.position.x - room / 2, y: label.position.y)
                         .transition(Self.comeAndGo)
@@ -510,10 +511,12 @@ struct CenterReadout: View {
                 .lineLimit(2)
                 .truncationMode(.middle)
             bigNumber(hover.bytes, size: size)
-            if let reclaim = hover.reclaim, Double(reclaim) < Double(hover.bytes) * 0.9 {
-                Text("Removing it frees \(formatBytes(reclaim))")
+            if let links = hover.links {
+                Text(links)
                     .font(.system(size: size * 0.052, weight: .semibold))
                     .foregroundStyle(Color(red: 1, green: 0.74, blue: 0.42))
+                    .lineLimit(2)
+                    .truncationMode(.middle)
             } else if !hover.note.isEmpty {
                 Text(hover.note)
                     .font(.system(size: size * 0.052, weight: .semibold))

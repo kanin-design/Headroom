@@ -1,6 +1,6 @@
 import AppKit
 import Foundation
-import QuickLookUI
+import SwiftUI
 
 /// Runs the real app through a written list of steps and photographs its window, so the whole interface can be
 /// checked by eye without anyone at the mouse. Started with `--script steps.txt`, and it keeps its data apart from yours.
@@ -14,8 +14,23 @@ import QuickLookUI
 ///     lens map|changes|freeUp
 ///     focus ~/some/folder      zoom straight to a folder
 ///     up
+///     back, forward            the arrows at the top of the panel
+///     select ~/some/file       as if it had been clicked: the panel shows it
 ///     hover ~/some/folder
-///     tick 0                   tick the nth row in Free Up, or the row with this title
+///     links ~/some/folder      what the middle of the ring says about its hard links or clones, and how long that takes
+///     pointname ~/some/folder  as if the pointer were on a row with this name. Nothing after it: the pointer leaves
+///     moveto x y               tell the window the pointer is here, without moving your real one
+///     rightclick x y           right-click here, say what the menu offers, and close it
+///     target                   what an action would apply to now
+///     where                    which folder it's in, and what's selected
+///     menu ~/some/folder       what a right-click offers for it, or for what an action would apply to now
+///     action Copy Path         do this from that list, to what an action would apply to now
+///     clipboard                what's been copied, on a clipboard of its own, and what the pill says
+///     menubar                  what's in the File and Edit menus
+///     key c cmd opt            give the menu bar this shortcut
+///     menuitem Edit Copy List  choose this from the menu bar
+///     copyroute                what ⌘C would copy now
+///     tick 0                 tick the nth row in Free Up, or the row with this title
 ///     plan ~/some/folder       add it to the planned actions, or take it out
 ///     box quick                tick a box in the panel, by id or title
 ///     point models             point at a box in the panel. Nothing after it: the pointer leaves
@@ -37,7 +52,9 @@ import QuickLookUI
 ///     mouse x y                move the real pointer path, in window points
 ///     click x y
 ///     activate                 bring the app to the front
-///     quicklook ~/some/file    open the preview panel, and report what it shows
+///     look ~/some/file         open the card Space opens, for this or for what an action would apply to now
+///     card                     what the card is showing
+///     keydown 49               a key as the app gets it, by key code. 49 is space
 ///     volume /Volumes/Name     switch to another disk
 ///     shot file.png
 ///     film 3 0.1 name          keep photographing in the background without holding anything up: 3 s, every 0.1 s
@@ -97,6 +114,124 @@ enum ScriptRunner {
             if argument.isEmpty { model.setHover(nil) }
             else if let node = resolve(argument, model) { model.highlight(node: node) }
             else { print("no such folder: \(argument)") }
+        case "links":
+            if let node = resolve(argument, model), let tree = model.tree {
+                let started = CFAbsoluteTimeGetCurrent()
+                let line = Accounting.hoverLine(node, bytes: tree.totals[Int(node)], in: tree)
+                let ms = (CFAbsoluteTimeGetCurrent() - started) * 1000
+                print("links \(argument): \(formatBytes(tree.totals[Int(node)])), \(line ?? "says nothing"), \(String(format: "%.1f", ms)) ms")
+            } else { print("no such folder: \(argument)") }
+        case "pointname":
+            model.pointedThing = resolve(argument, model).map { NamedThing($0) }
+        case "moveto":
+            guard let w = mainWindow else { return }
+            let parts = argument.split(separator: " ").compactMap { Double($0) }
+            guard parts.count == 2 else { return }
+            let at = NSPoint(x: parts[0], y: w.frame.height - parts[1])
+            guard let event = NSEvent.mouseEvent(with: .mouseMoved, location: at, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0) else { return }
+            let view = w.contentView?.superview?.hitTest(at)
+            print("moveto \(argument): lands on \(view.map { String(describing: type(of: $0)).prefix(30) } ?? "nothing")")
+            view?.mouseMoved(with: event)
+            w.contentView?.mouseMoved(with: event)
+            try? await Task.sleep(for: .milliseconds(60))
+        case "rightclick":
+            guard let w = mainWindow else { return }
+            let parts = argument.split(separator: " ").compactMap { Double($0) }
+            guard parts.count == 2 else { return }
+            let at = NSPoint(x: parts[0], y: w.frame.height - parts[1])
+            func event(_ type: NSEvent.EventType) -> NSEvent? {
+                NSEvent.mouseEvent(with: type, location: at, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
+            }
+            // An event made this way can't say which button it is, and SwiftUI asks. For as long as this takes, it's the right one.
+            let button = class_getInstanceMethod(NSEvent.self, #selector(getter: NSEvent.buttonNumber))!
+            let usual = method_getImplementation(button)
+            let right: @convention(block) (NSEvent) -> Int = { _ in 1 }
+            method_setImplementation(button, imp_implementationWithBlock(right))
+            defer { method_setImplementation(button, usual) }
+            var opened = false
+            let watch = NotificationCenter.default.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: nil) { note in
+                guard let menu = note.object as? NSMenu, !opened else { return }
+                opened = true
+                print("right-click \(argument): " + menu.items.map { item in
+                    item.isSeparatorItem ? "|" : item.title + (item.keyEquivalent.isEmpty ? "" : " [key]")
+                }.joined(separator: ", "))
+                menu.perform(#selector(NSMenu.cancelTracking), with: nil, afterDelay: 0.05, inModes: [.eventTracking, .common])
+            }
+            if let down = event(.rightMouseDown) { NSApp.sendEvent(down) }
+            if let up = event(.rightMouseUp) { NSApp.sendEvent(up) }
+            NotificationCenter.default.removeObserver(watch)
+            if !opened { print("right-click \(argument): no menu") }
+        case "target":
+            print("target \(argument):\(model.actionTarget.nodes.map { model.realName(of: $0) })")
+        case "where":
+            print("where \(argument): in \(model.realName(of: model.focus)), selected \(model.selected.map { model.realName(of: $0) } ?? "nothing"), \(model.plan.items.count) planned, back \(model.canGoBack), forward \(model.canGoForward), \(model.afterClean?.things.count ?? 0) in the Trash from here")
+        case "select":
+            model.selected = resolve(argument, model)
+            try? await Task.sleep(for: .milliseconds(100))
+        case "back":
+            model.goBack()
+            try? await Task.sleep(for: .milliseconds(400))
+        case "forward":
+            model.goForward()
+            try? await Task.sleep(for: .milliseconds(400))
+        case "menu":
+            let thing = resolve(argument, model).map { NamedThing($0) } ?? model.actionTarget
+            let titles = model.actions(for: thing).map { action in
+                (action.startsGroup ? "| " : "") + action.title + (action.submenu.isEmpty ? "" : " > [" + action.submenu.map { ($0.startsGroup ? "| " : "") + ($0.isNote ? "(\($0.title))" : $0.title) }.joined(separator: ", ") + "]")
+            }
+            print("menu \(argument): \(titles.joined(separator: ", "))")
+        case "action":
+            let actions = model.actions(for: model.actionTarget)
+            if let action = (actions + actions.flatMap(\.submenu)).first(where: { $0.title == argument }) { action.run() }
+            else { print("no such action: \(argument)") }
+            try? await Task.sleep(for: .milliseconds(60))
+        case "clipboard":
+            print("clipboard \(argument): \(AppModel.clipboard.string(forType: .string) ?? "nothing") | pill: \(model.tip ?? "none")")
+        case "menubar":
+            for title in ["File", "Edit", "View"] {
+                let items = NSApp.mainMenu?.items.first { $0.title == title }?.submenu?.items ?? []
+                func refresh(_ menu: NSMenu) {
+                    menu.delegate?.menuNeedsUpdate?(menu)
+                    menu.update()
+                    menu.items.compactMap(\.submenu).forEach(refresh)
+                }
+                NSApp.mainMenu?.items.first { $0.title == title }?.submenu.map(refresh)
+                func words(_ items: [NSMenuItem]) -> String {
+                    items.filter { !$0.isSeparatorItem }.map { item in
+                        var keys = ""
+                        if item.keyEquivalentModifierMask.contains(.shift) { keys += "⇧" }
+                        if item.keyEquivalentModifierMask.contains(.option) { keys += "⌥" }
+                        if item.keyEquivalentModifierMask.contains(.command) { keys += "⌘" }
+                        let key = item.keyEquivalent.isEmpty ? "" : " [\(keys)\(item.keyEquivalent == "\u{7F}" || item.keyEquivalent == "\u{8}" ? "⌫" : item.keyEquivalent)]"
+                        return item.title + (item.isEnabled ? "" : " (off)") + key + (item.submenu.map { " > (" + words($0.items) + ")" } ?? "")
+                    }.joined(separator: ", ")
+                }
+                print("\(title): " + words(items))
+            }
+        case "key":
+            guard let w = mainWindow else { return }
+            let parts = argument.split(separator: " ").map(String.init)
+            guard let key = parts.first else { return }
+            var flags: NSEvent.ModifierFlags = []
+            if parts.contains("cmd") { flags.insert(.command) }
+            if parts.contains("opt") { flags.insert(.option) }
+            if parts.contains("shift") { flags.insert(.shift) }
+            let characters = key == "delete" ? String(KeyEquivalent.delete.character) : (parts.contains("shift") ? key.uppercased() : key)
+            let codes: [String: UInt16] = ["c": 8, "o": 31, "r": 15, "y": 16, "z": 6, "[": 33, "]": 30, "delete": 51]
+            guard let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: w.windowNumber, context: nil, characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: codes[key] ?? 0) else { return }
+            print("key \(argument): \(NSApp.mainMenu?.performKeyEquivalent(with: event) == true ? "handled" : "not handled")")
+            try? await Task.sleep(for: .milliseconds(60))
+        case "menuitem":
+            let parts = argument.split(separator: " ", maxSplits: 1).map(String.init)
+            guard parts.count == 2, let menu = NSApp.mainMenu?.items.first(where: { $0.title == parts[0] })?.submenu,
+                  let at = menu.items.firstIndex(where: { $0.title == parts[1] }) else {
+                print("no such menu item: \(argument)")
+                return
+            }
+            menu.performActionForItem(at: at)
+            try? await Task.sleep(for: .milliseconds(60))
+        case "copyroute":
+            print("⌘C \(argument): \(model.wouldCopySelectedText ? "selected text" : "the name of \(model.actionTarget.nodes.map { model.realName(of: $0) })"), first responder \(mainWindow?.firstResponder.map { String(describing: type(of: $0)) } ?? "none")")
         case "tick":
             let rows = model.shownRows.filter(\.isPlannable)
             if let i = Int(argument) {
@@ -266,14 +401,23 @@ enum ScriptRunner {
             // Stage Manager shrinks a window it can't bring forward, as on a locked screen. It leaves floating ones alone.
             mainWindow?.level = .floating
             mainWindow?.orderFrontRegardless()
-        case "quicklook":
-            var path = argument
-            if path.hasPrefix("~") { path = NSHomeDirectory() + path.dropFirst() }
-            QuickLook.shared.show(URL(fileURLWithPath: path))
-            try? await Task.sleep(for: .milliseconds(700))
-            let panel = QLPreviewPanel.shared()
-            print("quick look visible: \(panel?.isVisible ?? false), showing: \((panel?.currentPreviewItem?.previewItemURL)?.lastPathComponent ?? "nothing")")
-            panel?.orderOut(nil)
+        case "look":
+            if let node = resolve(argument, model) { model.openLook(node) } else { model.toggleLook() }
+            try? await Task.sleep(for: .milliseconds(400))
+        case "card":
+            // What the card is showing, and what its first button would do.
+            if let look = model.look, let tree = model.tree {
+                print("card \(argument): \(model.realName(of: look.node)) on the \(look.onLeft ? "left" : "right"), \(model.lookRows(of: look.node, in: tree).count) rows, \(look.back.count) back, cursor \(model.lookCursor.map(String.init) ?? "none"), facts: \(model.facts(of: look.node) ?? "none"), lit: \(model.hover?.title ?? "nothing")")
+            } else {
+                print("card \(argument): closed")
+            }
+        case "keydown":
+            // A key as the app gets it, not the menu bar: keydown 49 is space.
+            guard let w = mainWindow, let code = UInt16(argument) else { return }
+            if let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: w.windowNumber, context: nil, characters: " ", charactersIgnoringModifiers: " ", isARepeat: false, keyCode: code) {
+                NSApp.sendEvent(event)
+            }
+            try? await Task.sleep(for: .milliseconds(120))
         case "volume":
             if let facts = VolumeFacts.read(path: argument) { model.switchVolume(facts) } else { print("no such disk: \(argument)") }
         case "memory":
@@ -314,6 +458,11 @@ enum ScriptRunner {
             guard let w = mainWindow else { return }
             var parts = argument.split(separator: " ").map(String.init)
             var x = 0.0, y = 0.0
+            var flags: NSEvent.ModifierFlags = []
+            if parts.first == "cmd" {
+                parts.removeFirst()
+                flags = .command
+            }
             if parts.first == "piece" {
                 parts.removeFirst()
                 let layout = model.engine.layout
@@ -334,7 +483,7 @@ enum ScriptRunner {
             let dx = parts.count > 2 ? Double(parts[1]) ?? 0 : 0, dy = parts.count > 2 ? Double(parts[2]) ?? 0 : 0
             func send(_ type: NSEvent.EventType, _ px: Double, _ py: Double, count: Int) {
                 let at = NSPoint(x: px, y: w.frame.height - py)
-                if let event = NSEvent.mouseEvent(with: type, location: at, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: count, pressure: 1) {
+                if let event = NSEvent.mouseEvent(with: type, location: at, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: count, pressure: 1) {
                     NSApp.sendEvent(event)
                 }
             }

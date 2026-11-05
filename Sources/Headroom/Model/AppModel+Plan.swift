@@ -545,11 +545,12 @@ extension AppModel {
         planChanged()
     }
 
-    func showTip(_ text: String) {
+    func showTip(_ text: String, for seconds: Double = 3.2, offeringUndo: Bool = false) {
         tip = text
+        tipOffersUndo = offeringUndo
         tipTask?.cancel()
         tipTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(3.2))
+            try? await Task.sleep(for: .seconds(seconds))
             guard !Task.isCancelled else { return }
             self?.tip = nil
         }
@@ -930,6 +931,123 @@ extension AppModel {
 
     func stopCleaning() { cleanStop.value = true }
 
+    // MARK: Send to Trash
+
+    /// One thing, right away, without going through the list. It has the same checks and the same way back as a clean. What
+    /// you'd get back was said in the menu, so a hard link is no reason to stop here.
+    func sendToTrash(_ thing: NamedThing) {
+        guard let node = thing.single, node != 0, let tree, canEditPlan else { return }
+        guard !tree.isPartial else {
+            showTip("Just a moment, the disk is still being read.")
+            return
+        }
+        let title = displayName(node)
+        guard let path = planPath(node, in: tree), let raw = tree.path(node), Safety.canTrash(raw) else {
+            showTip("\(title) is protected, so this can't go.")
+            return
+        }
+        factsOfSavedMap = false
+        message = nil
+        let item = PlanItem(id: "sent:" + path, title: title, note: tree.friendlyPath(node), tierRaw: Tier.noLoss.rawValue, paths: [path],
+                            lastKnownBytes: tree.totals[Int(node)], diskID: Cleaner.diskID(of: path))
+        let apps = NSWorkspace.shared.runningApplications.compactMap { app -> PlanChecks.RunningApp? in
+            guard let id = app.bundleIdentifier else { return nil }
+            return PlanChecks.RunningApp(bundleID: id, name: app.localizedName ?? id)
+        }
+        let fullAccess = hasFullAccess
+        // Nothing replaces the map while things are leaving it. The disk is read again afterwards.
+        if isScanning {
+            activeScan?.scanner.cancel()
+            activeScan = nil
+            isScanning = false
+            scanGeneration &+= 1
+            scanWasStopped = true
+        }
+        checkGeneration &+= 1
+        cleanProgress = CleanProgress(done: 0, total: 1, title: title)
+        if afterClean == nil {
+            takenOut = []
+            lastPlanItems = []
+        }
+        pendingCleaned = []
+        Task.detached(priority: .userInitiated) {
+            let check = PlanChecks.run(items: [item], trueBytes: [:], otherCopy: [:], runningApps: apps, fullAccess: fullAccess)[item.id] ?? ItemCheck()
+            let share = Accounting.effect(of: [node], except: [], in: tree).perTop
+            var reason = check.canGo ? nil : check.problems.first { $0.holdsBack || $0 == .gone }
+            var moved: (place: String, identity: String?)?
+            if reason == nil {
+                do { moved = try Cleaner.trash(path) } catch { reason = Cleaner.whyItFailed(error) }
+            }
+            let inTrash = moved
+            let why = reason
+            await MainActor.run { self.finishSending(node, item, path: path, moved: inTrash, why: why, share: share, tree: tree) }
+        }
+    }
+
+    private func finishSending(_ node: UInt32, _ item: PlanItem, path: String, moved: (place: String, identity: String?)?, why: CheckProblem?, share: [UInt32: UInt64], tree: DiskTree) {
+        cleanProgress = nil
+        if let moved {
+            // The card moves on to what's next, so that you can go through a whole row of things.
+            let looking = look?.node == node ? look : nil
+            let next = looking == nil ? nil : LookContents.next(after: node, in: tree)
+            didMove(path, to: moved.place, identity: moved.identity, item: item, trueBytes: share, tree: tree)
+            let things = pendingCleaned
+            pendingCleaned = []
+            var all = things
+            var old: [String] = []
+            var oldBytes: UInt64 = 0
+            var bytes = things.reduce(UInt64(0)) { $0 &+ $1.bytes }
+            // Joining a clean that's still waiting to be emptied.
+            if let waiting = afterClean, waiting.state == .waiting {
+                all = waiting.things + things
+                old = waiting.oldTrashItems
+                oldBytes = waiting.oldTrashBytes
+                bytes &+= waiting.bytes
+            }
+            afterClean = AfterClean(things: all, bytes: bytes, includesOldTrash: !old.isEmpty, oldTrashBytes: oldBytes, oldTrashItems: old)
+            if plan.covers(path) { plan.takeBack(path) }
+            rescanWhenBack = true
+            refreshShownRows()
+            if self.tree === tree {
+                treeVersion += 1
+                resolvePlanSynchronously(in: tree)
+                rebuildInsights()
+                relayout(.settle)
+            }
+            showTip("Moved to Trash: \(item.title)", for: 8, offeringUndo: true)
+            if let looking {
+                if let next {
+                    if look == nil { openLook(next, onLeft: looking.onLeft) } else { showInLook(next, steppingIn: false) }
+                } else {
+                    closeLook()
+                }
+            }
+        } else {
+            showTip("\(item.title) stayed where it is. \(why?.text ?? "")", for: 6)
+        }
+        if !plan.isEmpty { runChecks() }
+        savePlan()
+        if quitAfterClean {
+            NSApp.reply(toApplicationShouldTerminate: true)
+            return
+        }
+        if scanWasStopped {
+            scanWasStopped = false
+            scan()
+        }
+    }
+
+    /// The Undo button under the ring, and ⌘Z. While you're typing, ⌘Z means what it means in any text field.
+    func undoCommand() {
+        if mapView?.window?.firstResponder is NSText {
+            NSApp.sendAction(Selector(("undo:")), to: nil, from: nil)
+            return
+        }
+        guard let after = afterClean, after.state == .waiting, !after.things.isEmpty else { return }
+        undoClean()
+        showTip(after.things.count == 1 ? "Put back: \(after.things[0].title)" : "Put back \(after.things.count) things")
+    }
+
     private func didMove(_ path: String, to inTrash: String, identity: String?, item: PlanItem, trueBytes: [UInt32: UInt64], tree cleaned: DiskTree) {
         // On record first, whatever else is going on: this is what makes it possible to bring it back.
         var thing = CleanedThing(itemID: item.id, title: item.title, original: path, inTrash: inTrash, bytes: 0, identity: identity)
@@ -1224,9 +1342,8 @@ extension AppModel {
             guard let box = cursorBox else { return false }
             toggle(box)
         case 49:
-            guard let row = cursorBox?.rows.first, let tree, let node = row.nodes.first, let path = tree.path(node) else { return false }
-            let visible = path.hasPrefix("/System/Volumes/Data/") ? String(path.dropFirst("/System/Volumes/Data".count)) : path
-            QuickLook.shared.show(URL(fileURLWithPath: visible))
+            guard let row = cursorBox?.rows.first, let node = row.nodes.first else { return false }
+            openLook(node)
         case 40:
             guard let box = cursorBox, box.rows.count == 1, let row = box.rows.first else { return false }
             moveCursor(1)

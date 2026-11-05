@@ -27,7 +27,7 @@ They also get the numbers wrong in ways that matter:
 | "Wait, I want to keep that" | To change my mind | Nothing happens until you press Clean. One click unticks anything, and Keep stops suggesting it. After that it's in the Trash, and Undo puts it back |
 | "What is this folder? Can I delete it?" | A plain answer | Hover: name, size, what it is, what you'd really get back |
 | "Why doesn't it add up?" | The whole disk | The ring always sums to the real disk: macOS, swap, updates, hidden data, free |
-| "What's inside here?" | To go deeper | Click to zoom, click the middle to go back. Reveal in Finder, Quick Look |
+| "What's inside here?" | To go deeper | Click to zoom, click the middle to go back. Reveal in Finder, or Space for a card that shows what's inside at once |
 
 ## Principles
 
@@ -42,7 +42,8 @@ They also get the numbers wrong in ways that matter:
 5. **Free space is a real shape.** It's a visible part of the ring, and it's what grows when you clean
    up. That's the reward.
 6. **Nothing happens until you say so.** Ticks only select. Clean moves what's selected to the Trash, which stays visible on the map until you empty it, because space
-   isn't back until then. Emptying is always its own click.
+   isn't back until then. Emptying is always its own click. The one exception is Send to Trash, two steps into the Delete menu, for one thing you've
+   decided about: it goes at once, and Undo brings it back.
 7. **No waiting.** The window opens with a picture you can use. With a saved scan that's the whole map,
    refreshed quietly behind it. Without one, it's what the disk itself reports, and the big things arrive
    within about a second. Hover answers within the frame.

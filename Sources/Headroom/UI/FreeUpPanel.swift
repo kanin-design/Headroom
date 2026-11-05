@@ -182,6 +182,11 @@ private struct BoxView: View {
     private var color: Color { box.color.swiftUI }
     private var isLit: Bool { isHovered || model.hotBox == box.id || model.cursorRow == box.id }
 
+    private var thing: NamedThing {
+        let model = model, box = box
+        return NamedThing(nodes: box.rows.flatMap(\.nodes), title: box.title, toggle: { model.toggle(box) })
+    }
+
     private var head: some View {
         let state = model.rowStates[box.id] ?? .none
         return HStack(alignment: .top, spacing: nested ? 8 : 10) {
@@ -203,7 +208,7 @@ private struct BoxView: View {
                         Button {
                             withAnimation(.snappy(duration: 0.2)) { model.includeOtherCopies(of: box) }
                         } label: {
-                            Text("Include them")
+                            Text("Include other copies")
                                 .font(.system(size: 10.5, weight: .medium))
                                 .foregroundStyle(.white.opacity(0.88))
                                 .padding(.horizontal, 7)
@@ -237,6 +242,7 @@ private struct BoxView: View {
         .onTapGesture {
             withAnimation(.snappy(duration: 0.18)) { model.toggle(box) }
         }
+        .named(thing, in: model)
         .animation(.easeOut(duration: 0.14), value: isLit)
         .help(box.rowsATickTakes.count < box.rows.count ? "A tick leaves out what you set up by hand. Open this to tick those too." : "")
     }
@@ -573,7 +579,13 @@ struct ThingRow: View {
         .onTapGesture {
             if row.isPlannable { withAnimation(.snappy(duration: 0.18)) { model.toggle(row) } }
         }
+        .named(thing, in: model)
         .animation(.easeOut(duration: 0.14), value: isLit)
+    }
+
+    private var thing: NamedThing {
+        let model = model, row = row
+        return NamedThing(nodes: row.nodes, title: row.title, toggle: row.isPlannable ? { model.toggle(row) } : nil)
     }
 
     private func background(_ state: TickState, _ tint: Color) -> Color {
@@ -617,7 +629,7 @@ struct ThingRow: View {
                 small("Trash instead") { model.setStep(.trash, for: row.id) }
             } else if disks.count == 1, let disk = disks.first {
                 small("Move to \(disk.name)") { model.planMove(row, to: disk) }
-                    .help(disk.isPluggedIn ? "Copy it there and check the copy. Only then does this one go to the Trash." : "\(disk.name) isn't plugged in. Plug it in before you clean.")
+                    .help(disk.isPluggedIn ? "Copy this to \(disk.name) and check the copy. Only then does this one go to the Trash." : "\(disk.name) isn't plugged in. Plug it in before you clean.")
             } else if disks.count > 1 {
                 Menu {
                     ForEach(disks, id: \.self) { disk in
@@ -631,7 +643,7 @@ struct ThingRow: View {
                 .menuIndicator(.hidden)
                 .fixedSize()
             }
-            if row.isPlannable { small("Keep") { model.keep(row) }.help("Take this out, and stop suggesting it") }
+            if row.isPlannable { small("Keep") { model.keep(row) }.help("Take this out, and don't suggest this again") }
             if !row.nodes.isEmpty {
                 Button {
                     withAnimation(.snappy(duration: 0.22)) { model.toggleExpanded(row) }
@@ -878,6 +890,7 @@ private struct InnerRow: View {
         .onTapGesture {
             withAnimation(.snappy(duration: 0.18)) { model.togglePiece(node) }
         }
+        .named(NamedThing(node), in: model)
     }
 }
 
@@ -902,7 +915,7 @@ private struct LookRow: View {
                 Spacer(minLength: 4)
                 ForEach(Array(problems.enumerated()), id: \.offset) { _, problem in fix(problem) }
                 action("Keep") { model.keep(item: item) }
-                    .help("Take this out, and stop suggesting it")
+                    .help("Take this out, and don't suggest this again")
             }
             ForEach(Array(problems.enumerated()), id: \.offset) { _, problem in
                 Text(problem.text)
@@ -923,6 +936,7 @@ private struct LookRow: View {
         .onTapGesture {
             withAnimation(.snappy(duration: 0.2)) { isOpen.toggle() }
         }
+        .named(NamedThing(nodes: model.planNodes[item.id] ?? [], title: item.title), in: model)
     }
 
     private func action(_ text: String, _ run: @escaping () -> Void) -> some View {
@@ -948,7 +962,7 @@ private struct LookRow: View {
         case .inUse:
             action("Check again") { model.runChecks() }
         case .changed:
-            action("Clean it anyway") { model.acceptChange(for: item.id) }
+            action("Clean anyway") { model.acceptChange(for: item.id) }
         case .noGain:
             if model.otherCopies[item.id] != nil {
                 action("Select that copy too") { model.alsoPlanOtherCopy(for: item) }
@@ -1061,7 +1075,7 @@ struct NextStepBar: View {
                 .disabled(true)
                 .buttonStyle(GoButton())
             if !model.clearedItems.isEmpty {
-                Button("Put them back") { withAnimation(.snappy(duration: 0.2)) { model.restoreCleared() } }
+                Button("Bring back what you unticked") { withAnimation(.snappy(duration: 0.2)) { model.restoreCleared() } }
                     .buttonStyle(.plain)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.white.opacity(0.65))
@@ -1094,7 +1108,7 @@ struct NextStepBar: View {
                 .animation(.snappy(duration: 0.25), value: model.planBytes)
                 HStack(spacing: 6) {
                     if !onlyTrash {
-                        Text("Everything goes to the Trash first, so you can undo it.")
+                        Text("Everything goes to the Trash first, so you can undo this.")
                             .font(.system(size: 11))
                             .foregroundStyle(.white.opacity(0.45))
                             .lineLimit(1)
@@ -1186,7 +1200,7 @@ struct NextStepBar: View {
                     Button {
                         model.emptyNow()
                     } label: {
-                        Text(after.includesOldTrash ? "Empty the Trash" : "Empty \(after.things.count == 1 ? "it" : "these") for good")
+                        Text(after.includesOldTrash ? "Empty the Trash" : "Delete \(after.things.count == 1 ? "this" : "these") for good")
                     }
                     .buttonStyle(GoButton())
                     Button(after.things.isEmpty ? "Cancel" : "Undo") { model.undoClean() }
@@ -1204,7 +1218,7 @@ struct NextStepBar: View {
                         .buttonStyle(.plain)
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.white.opacity(0.65))
-                        .help("Leave it all in the Trash for now. You can still put things back from there yourself, or empty it later.")
+                        .help("Leave everything in the Trash for now. You can still put things back from there yourself, or empty the Trash later.")
                 }
             }
         case .emptying:
@@ -1252,7 +1266,7 @@ struct NextStepBar: View {
     }
 
     private func waitingText(_ after: AfterClean) -> String {
-        var text = "Free space stays the same until it's emptied. You can still undo this."
+        var text = "Free space stays the same until the Trash is emptied. You can still undo this."
         if after.includesOldTrash, after.oldTrashBytes > 0 { text = "Emptying also removes the \(formatBytes(after.oldTrashBytes)) that was already there. Until then, you can still undo this." }
         if after.failed > 0 { text += " \(after.failed) couldn't be moved." }
         if after.heldBack > 0 { text += " \(after.heldBack) stayed, and are still selected." }
@@ -1292,7 +1306,7 @@ struct WorthDoing: View {
                     } label: {
                         HStack(spacing: 5) {
                             Image(systemName: "sparkles")
-                            Text("See it all in Free Up")
+                            Text("See everything in Free Up")
                         }
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(bright)

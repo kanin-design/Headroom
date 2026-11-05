@@ -18,7 +18,7 @@ enum Tier: UInt8, Comparable {
         case .rebuilds: "Rebuilds itself"
         case .redownload: "Download again"
         case .yourCall: "Your call"
-        case .handsOff: "Leave it"
+        case .handsOff: "Leave alone"
         }
     }
 
@@ -26,8 +26,8 @@ enum Tier: UInt8, Comparable {
         switch self {
         case .none: ""
         case .noLoss: "Nothing is lost."
-        case .rebuilds: "It's made again when it's needed."
-        case .redownload: "It comes back, but you wait for the download."
+        case .rebuilds: "Made again when needed."
+        case .redownload: "Comes back, but you wait for the download."
         case .yourCall: "Only you know if these still matter."
         case .handsOff: "macOS looks after this."
         }
@@ -377,7 +377,7 @@ final class RuleBook: @unchecked Sendable {
 
     /// `~` is your home folder, and `*` is any one folder. The most specific match wins, because it's reached later.
     static let pathRules: [(String, Rule)] = [
-        ("~/.Trash", Rule(title: "Trash", detail: "Already thrown away, but it still takes up space until you empty it.", tier: .noLoss, notTrashable: true)),
+        ("~/.Trash", Rule(title: "Trash", detail: "Already thrown away, but still taking up space until you empty the Trash.", tier: .noLoss, notTrashable: true)),
 
         ("private/tmp", Rule(title: "Temporary files", detail: "Scratch files from running apps and sessions. A restart clears them.", tier: .noLoss, kind: .cache, restartClears: true, notTrashable: true)),
         ("private/var/folders/*/*/X/com.google.Chrome.code_sign_clone", Rule(title: "Chrome signing copies", detail: "Copies Chrome makes of itself to check its signature. They look huge but mostly share blocks with Chrome, and a restart clears them.", tier: .noLoss, kind: .cache, restartClears: true, notTrashable: true)),
@@ -390,7 +390,7 @@ final class RuleBook: @unchecked Sendable {
         ("~/Library/Caches/Google", Rule(title: "Chrome's browser cache", detail: "Copies of web pages. Sites load a little slower at first. Your logins aren't stored here.", tier: .rebuilds, kind: .cache, appBundleID: "com.google.Chrome")),
         ("~/Library/Caches/ms-playwright", cache("Playwright browsers", "Browsers Playwright downloads for testing.", command: "npx playwright uninstall --all")),
         ("~/.cache/*", { var rule = named(cache("Tool cache", "A command-line tool's cache. It rebuilds the next time the tool runs.")); rule.knownNames = knownToolCaches; return rule }()),
-        ("~/.cache/uv", only(cache("uv cache", "Python packages kept by uv. Quit anything using them first, so it doesn't pull packages out from under a running tool.", command: "uv cache prune"))),
+        ("~/.cache/uv", only(cache("uv cache", "Python packages kept by uv. Quit anything using them first, so no package gets pulled out from under a running tool.", command: "uv cache prune"))),
         ("~/.cache/huggingface", huggingFace),
         ("~/.npm/_cacache", cache("npm cache", "Packages npm has downloaded before.", command: "npm cache clean --force")),
         ("~/.npm/_npx", cache("npx cache", "Tools npx has downloaded before.")),
@@ -401,8 +401,8 @@ final class RuleBook: @unchecked Sendable {
         ("~/Library/pnpm/store", only(cache("pnpm store", "Packages shared between your projects.", command: "pnpm store prune"))),
         ("~/.pnpm-store", only(cache("pnpm store", "Packages shared between your projects.", command: "pnpm store prune"))),
         ("~/.bun/install/cache", cache("Bun cache", "Packages Bun has downloaded before.", command: "bun pm cache rm")),
-        ("~/Library/Developer/Xcode/DerivedData", cache("Xcode build output", "Xcode makes it again on the next build, which takes longer.")),
-        ("~/Library/Developer/CoreSimulator/Caches", cache("Simulator caches", "They rebuild the next time a simulator starts.")),
+        ("~/Library/Developer/Xcode/DerivedData", cache("Xcode build output", "Xcode makes this again on the next build, which takes longer.")),
+        ("~/Library/Developer/CoreSimulator/Caches", cache("Simulator caches", "Rebuild the next time a simulator starts.")),
         ("~/Library/Application Support/Claude/Cache", owned(cache("Claude app cache", "Web content cached by the Claude app."), "com.anthropic.claudefordesktop")),
         ("~/Library/Application Support/Claude/Code Cache", owned(cache("Claude app code cache", "Compiled code cached by the Claude app."), "com.anthropic.claudefordesktop")),
         ("~/Library/Application Support/Code/Cache", owned(cache("VS Code cache", "Web content cached by VS Code."), "com.microsoft.VSCode")),
@@ -410,7 +410,7 @@ final class RuleBook: @unchecked Sendable {
 
         ("~/Library/Developer/Xcode/iOS DeviceSupport", Rule(title: "iPhone debug symbols", detail: "Xcode copies these from each iPhone or iOS version you've debugged. It copies them again when needed.", tier: .redownload, kind: .cache)),
         ("~/Library/Developer/CoreSimulator/Devices", Rule(title: "Simulator devices", detail: "Simulated iPhones and their data. Apps and files inside them are lost.", tier: .redownload, kind: .app, command: "xcrun simctl delete unavailable", commandOnly: true)),
-        ("~/Library/Application Support/Steam/steamapps/common/*", named(Rule(title: "Steam game", detail: "Steam can download it again. Check first that your saves are in Steam Cloud.", tier: .redownload, kind: .app))),
+        ("~/Library/Application Support/Steam/steamapps/common/*", named(Rule(title: "Steam game", detail: "Steam can download this game again. Check first that your saves are in Steam Cloud.", tier: .redownload, kind: .app))),
         ("~/.ollama/models", model("Ollama models", "AI model weights. Pull them again with Ollama.")),
         ("~/.lmstudio/models", model("LM Studio models", "AI model weights. Download them again from LM Studio.")),
         ("~/LLM/*", { var rule = named(model("Local AI models", "AI model weights. They can be downloaded again from where they came from, if you know where that was.")); rule.askFirst = true; return rule }()),
@@ -434,17 +434,17 @@ final class RuleBook: @unchecked Sendable {
         (".pytest_cache", build("Python tool caches", "Caches from Python tools. They rebuild on the next run.")),
         (".mypy_cache", build("Python tool caches", "Caches from Python tools. They rebuild on the next run.")),
         (".ruff_cache", build("Python tool caches", "Caches from Python tools. They rebuild on the next run.")),
-        (".build", rebuilt(from: ["Package.swift"], build("Swift build output", "SwiftPM makes it again on the next build."))),
-        ("DerivedData", build("Xcode build output", "Xcode makes it again on the next build, which takes longer.")),
-        (".gradle", build("Gradle project caches", "Gradle makes them again on the next build.")),
-        ("Pods", rebuilt(from: ["Podfile"], marked(build("CocoaPods packages", "`pod install` brings them back."), "Manifest.lock"))),
-        (".next", rebuilt(from: ["package.json"], build("Web build output", "The framework makes it again on the next build."))),
-        (".nuxt", rebuilt(from: ["package.json"], build("Web build output", "The framework makes it again on the next build."))),
-        (".turbo", rebuilt(from: ["package.json"], build("Web build output", "The framework makes it again on the next build."))),
-        (".parcel-cache", rebuilt(from: ["package.json"], build("Web build output", "The framework makes it again on the next build."))),
-        (".dart_tool", rebuilt(from: ["pubspec.yaml"], build("Flutter build output", "`flutter pub get` and the next build make it again."))),
-        (".terraform", build("Terraform plugins", "`terraform init` brings them back.")),
-        (".tox", rebuilt(from: ["tox.ini", "pyproject.toml", "setup.cfg"], build("Python test environments", "tox makes them again on the next run."))),
+        (".build", rebuilt(from: ["Package.swift"], build("Swift build output", "SwiftPM makes this again on the next build."))),
+        ("DerivedData", build("Xcode build output", "Xcode makes this again on the next build, which takes longer.")),
+        (".gradle", build("Gradle project caches", "Gradle makes these again on the next build.")),
+        ("Pods", rebuilt(from: ["Podfile"], marked(build("CocoaPods packages", "`pod install` brings these back."), "Manifest.lock"))),
+        (".next", rebuilt(from: ["package.json"], build("Web build output", "The framework makes this again on the next build."))),
+        (".nuxt", rebuilt(from: ["package.json"], build("Web build output", "The framework makes this again on the next build."))),
+        (".turbo", rebuilt(from: ["package.json"], build("Web build output", "The framework makes this again on the next build."))),
+        (".parcel-cache", rebuilt(from: ["package.json"], build("Web build output", "The framework makes this again on the next build."))),
+        (".dart_tool", rebuilt(from: ["pubspec.yaml"], build("Flutter build output", "`flutter pub get` and the next build make this again."))),
+        (".terraform", build("Terraform plugins", "`terraform init` brings these back.")),
+        (".tox", rebuilt(from: ["tox.ini", "pyproject.toml", "setup.cfg"], build("Python test environments", "tox makes these again on the next run."))),
         ("huggingface", huggingFace),
     ]
 

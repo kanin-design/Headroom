@@ -224,7 +224,7 @@ enum Wins {
                     // Kept where caches go, but nothing says what's in it or how it comes back. It's not for the one click or the slider.
                     row.tier = .redownload
                     row.askFirst = true
-                    row.detail = "It's in the folder where tools keep their caches, but Headroom doesn't know this one. It may be more than a cache: a model, or something that took time to set up."
+                    row.detail = "This is in the folder where tools keep their caches, but Headroom doesn't know this one. It may be more than a cache: a model, or something that took time to set up."
                 } else if tree.statRow(i)[DiskTree.statRecent14] > 0 {
                     // A tool's cache costs a download or a slower build next time, so one you're using isn't part of the one click.
                     row.inUse = "Used in the last two weeks"
@@ -249,7 +249,7 @@ enum Wins {
         for at in rows.indices where rows[at].id.hasPrefix("group:") {
             let count = rows[at].nodes.count
             rows[at].subtitle = rows[at].id == smallerCachesID ? "\(count) apps" : (count == 1 ? tree.friendlyPath(rows[at].nodes[0]) : "In \(count) places")
-            if rows[at].id.hasSuffix(":no-recipe") { rows[at].subtitle += ". Nothing says what's in \(count == 1 ? "it" : "them")." }
+            if rows[at].id.hasSuffix(":no-recipe") { rows[at].subtitle += ". Nothing says what's in \(count == 1 ? "this folder" : "these folders")." }
         }
 
         // On any other disk the Trash is a folder at the top of the disk.
@@ -400,8 +400,8 @@ enum Wins {
             let usual: UInt64 = 13_000_000_000
             let total = tree.totals[Int(updates)]
             if total > usual + 2_000_000_000, updateIsWaiting() {
-                rows.append(WinRow(id: "update", title: "Install the waiting macOS update", subtitle: "Downloaded, and using extra space until it's installed",
-                                   detail: "macOS keeps a downloaded update in its startup area. Installing it should free most of this. It's an estimate, because macOS doesn't report the exact size.",
+                rows.append(WinRow(id: "update", title: "Install the waiting macOS update", subtitle: "Downloaded, and using extra space until installed",
+                                   detail: "macOS keeps a downloaded update in its startup area. Installing it should free most of this. That figure is an estimate, because macOS doesn't report the exact size.",
                                    tier: .noLoss, nodes: [updates], bytes: total - usual, paperBytes: 0, action: .softwareUpdate, command: nil, bundleID: nil))
             }
         }

@@ -151,6 +151,10 @@ final class LinksTests: XCTestCase {
         Accounting.merge(&otherHome)
         XCTAssertEqual(otherHome.count, 4, "Counted in different places")
 
+        var otherSort = group(1, 5, 6) + group(2 | 1 << 63, 5, 6)
+        Accounting.merge(&otherSort)
+        XCTAssertEqual(otherSort.count, 4, "A hard link and a clone get different names")
+
         var threePlaces = group(1, 5, 6) + [LinkRecord(key: 2, bytes: 100, dir: 5, file: 0, when: 0, kind: 0, counted: true),
                                             LinkRecord(key: 2, bytes: 100, dir: 6, file: 0, when: 0, kind: 0, counted: false),
                                             LinkRecord(key: 2, bytes: 100, dir: 7, file: 0, when: 0, kind: 0, counted: false)]

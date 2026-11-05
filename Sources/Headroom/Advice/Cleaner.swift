@@ -114,19 +114,19 @@ enum CheckProblem: Equatable {
 
     var text: String {
         switch self {
-        case .gone: "It's already gone."
+        case .gone: "Already gone."
         case .someGone(let n): "\(n) of these \(n == 1 ? "is" : "are") already gone."
         case .protected: "macOS protects this, so it can't be moved."
         case .appOpen(let name, _): "\(name) is open."
         case .inUse(let process, _): "\(process) has something open in here."
         case .someInUse(let n, let process): "\(n) \(n == 1 ? "is" : "are") in use by \(process) and will stay for now."
-        case .changed(let date): "It changed \(Self.ago(date)), after you selected it."
+        case .changed(let date): "Changed \(Self.ago(date)), after you selected this."
         case .noGain(let other): "You'd get nothing back: \(other) holds the same files."
         case .linkedOutOfSight(let bytes): "\(formatBytes(bytes)) of this also exists somewhere Headroom isn't allowed to look, so you may get less back."
-        case .diskMissing(let name): "\(name) isn't plugged in. It stays selected."
+        case .diskMissing(let name): "\(name) isn't plugged in, so this stays selected."
         case .differentDisk(let name): "This \(name) isn't the disk you selected this on, so nothing on it will be touched."
-        case .alreadyThere: "It's already in that folder, so there's nothing to move."
-        case .noRoom(let needed, let free): "It needs \(formatBytes(needed)), and that disk has \(formatBytes(free)) free."
+        case .alreadyThere: "Already in that folder, so there's nothing to move."
+        case .noRoom(let needed, let free): "This needs \(formatBytes(needed)), and that disk has \(formatBytes(free)) free."
         case .tooBigForDisk(let name): "\(name) can't hold files over 4 GB."
         case .needsPassword: "macOS will ask for your password for this one."
         case .couldntGo(let why, _): why
@@ -445,21 +445,21 @@ enum Cleaner {
     static func whyItFailed(_ error: Error) -> CheckProblem {
         switch error {
         case FinderAsk.Failure.notAllowed:
-            return .couldntGo("macOS stopped Headroom from asking the Finder to move this. You can allow it in System Settings.", askSettings: true)
+            return .couldntGo("macOS stopped Headroom from asking the Finder to move this. You can allow that in System Settings.", askSettings: true)
         case FinderAsk.Failure.cancelled:
-            return .couldntGo("You cancelled, so it stayed.", askSettings: false)
+            return .couldntGo("You cancelled, so this stayed.", askSettings: false)
         case FinderAsk.Failure.failed(let text):
             return .couldntGo("The Finder couldn't move this: \(text)", askSettings: false)
         case Failure.notAllowed:
             return .couldntGo("macOS protects this, so it can't be moved.", askSettings: false)
         case Failure.wouldOverwrite:
-            return .couldntGo("Something with that name is already there, so it stayed.", askSettings: false)
+            return .couldntGo("Something with that name is already there, so this stayed.", askSettings: false)
         case Failure.copyDidNotMatch:
             return .couldntGo("The copy didn't match the original, so the original stayed.", askSettings: false)
         case Failure.sameFile:
-            return .couldntGo("It's already there, so there's nothing to move.", askSettings: false)
+            return .couldntGo("Already there, so there's nothing to move.", askSettings: false)
         case Failure.stopped:
-            return .couldntGo("You stopped it before this was done.", askSettings: false)
+            return .couldntGo("You stopped the clean before this was done.", askSettings: false)
         default:
             return .couldntGo((error as NSError).localizedDescription, askSettings: false)
         }

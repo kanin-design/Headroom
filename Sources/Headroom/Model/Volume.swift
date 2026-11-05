@@ -301,9 +301,23 @@ struct LinkStory: Equatable {
     /// Counted here, but also linked from somewhere else, so removing this alone doesn't free it.
     var sharedOut: UInt64 = 0
     var sharedPlace: String?
+    /// How much of that is with `sharedPlace`, the folder that has the most of it, and how much of that is clones.
+    var sharedWithPlace: UInt64 = 0
+    var clonesWithPlace: UInt64 = 0
+    var sharedPlaceNode: UInt32?
     /// Links here to files counted somewhere else.
     var linkedIn: UInt64 = 0
     var linkedPlace: String?
+    var linkedPlaceNode: UInt32?
+
+    /// The folders worth going to: they hold enough of the same files to matter, for something this size.
+    func placesWorthNaming(size: UInt64) -> [(path: String, node: UInt32)] {
+        func matters(_ bytes: UInt64) -> Bool { bytes >= 50_000_000 || (bytes > 0 && Double(bytes) >= Double(size) * 0.1) }
+        var places: [(path: String, node: UInt32)] = []
+        if matters(sharedOut), let sharedPlace, let sharedPlaceNode { places.append((sharedPlace, sharedPlaceNode)) }
+        if matters(linkedIn), let linkedPlace, let linkedPlaceNode, linkedPlaceNode != sharedPlaceNode { places.append((linkedPlace, linkedPlaceNode)) }
+        return places
+    }
 }
 
 /// Keeps "how much you'd get back" honest when files have more than one path.
@@ -313,7 +327,7 @@ enum Accounting {
         let links = tree.links
         guard !links.isEmpty else { return story }
         let nodes = tree.nodes
-        var outPlaces: [UInt32: UInt64] = [:]
+        var outPlaces: [UInt32: (bytes: UInt64, clones: UInt64)] = [:]
         var inPlaces: [UInt32: UInt64] = [:]
         /// The folder to name: the nearest one that doesn't also contain this node.
         func place(_ dir: UInt32) -> UInt32 {
@@ -346,15 +360,40 @@ enum Accounting {
             if countedInside, let outside {
                 story.sharedOut &+= bytes
                 story.reclaim = story.reclaim &- min(story.reclaim, bytes)
-                outPlaces[place(outside), default: 0] &+= bytes
+                let folder = place(outside)
+                var shared = outPlaces[folder] ?? (0, 0)
+                shared.bytes &+= bytes
+                if links[start].isClone { shared.clones &+= bytes }
+                outPlaces[folder] = shared
             } else if !countedInside, let counted {
                 story.linkedIn &+= bytes
                 inPlaces[place(counted), default: 0] &+= bytes
             }
         }
-        if let top = outPlaces.max(by: { $0.value < $1.value }) { story.sharedPlace = tree.friendlyPath(top.key) }
-        if let top = inPlaces.max(by: { $0.value < $1.value }) { story.linkedPlace = tree.friendlyPath(top.key) }
+        if let top = outPlaces.max(by: { $0.value.bytes < $1.value.bytes }) {
+            story.sharedPlace = tree.friendlyPath(top.key)
+            story.sharedPlaceNode = top.key
+            story.sharedWithPlace = top.value.bytes
+            story.clonesWithPlace = top.value.clones
+        }
+        if let top = inPlaces.max(by: { $0.value < $1.value }) {
+            story.linkedPlace = tree.friendlyPath(top.key)
+            story.linkedPlaceNode = top.key
+        }
         return story
+    }
+
+    /// What the middle of the ring says about something that wouldn't all come back if it went: what it is, and where the other
+    /// path is. A folder can't be a hard link, but what's in it can. Most things say nothing, which is the quick part to find out.
+    static func hoverLine(_ node: UInt32, bytes: UInt64, in tree: DiskTree) -> String? {
+        guard Double(reclaimable([node], in: tree)) < Double(bytes) * 0.9 else { return nil }
+        let story = story(node, in: tree)
+        guard let place = story.sharedPlace else { return nil }
+        let isClones = story.clonesWithPlace > story.sharedWithPlace / 2
+        let isFile = !tree.nodes[Int(node)].has(NodeFlag.directory)
+        let name = isClones ? (isFile ? "Clone of" : "Clones of") : (isFile ? "Hard link to" : "Hard links to")
+        if Double(story.sharedWithPlace) >= Double(bytes) * 0.99 { return "\(name) \(place)" }
+        return "\(formatBytes(story.sharedWithPlace)) is \(name.lowercased()) \(place)"
     }
 
     /// Hard links and clones were counted by whichever worker saw them first, unless they were somewhere shy. This settles
@@ -499,13 +538,13 @@ enum Accounting {
             var hash = UInt64(size)
             for i in start..<end {
                 let r = links[i]
-                hash = (hash ^ UInt64(r.dir) ^ UInt64(r.file) << 32 ^ UInt64(r.kind) << 8 ^ (r.counted ? 1 : 0)) &* 0x9E37_79B9_7F4A_7C15
+                hash = (hash ^ UInt64(r.dir) ^ UInt64(r.file) << 32 ^ UInt64(r.kind) << 8 ^ (r.counted ? 1 : 0) ^ (r.isClone ? 2 : 0)) &* 0x9E37_79B9_7F4A_7C15
                 hash ^= hash >> 29
             }
             if let same = seen[hash] {
                 let isSame = same.count == size && (0..<size).allSatisfy { at in
                     let a = links[same.at + at], b = links[start + at]
-                    return a.dir == b.dir && a.file == b.file && a.kind == b.kind && a.counted == b.counted
+                    return a.dir == b.dir && a.file == b.file && a.kind == b.kind && a.counted == b.counted && a.isClone == b.isClone
                 }
                 if isSame {
                     for at in 0..<size { links[same.at + at].bytes &+= links[start].bytes }

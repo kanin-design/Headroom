@@ -579,6 +579,9 @@ struct LinkRecord {
     var when: UInt32
     var kind: UInt8
     var counted: Bool
+
+    /// A clone's key is its clone ID with the top bit set. Any other key is a hard link's file ID.
+    var isClone: Bool { key >> 63 != 0 }
 }
 
 /// A big table for one piece of work, with one plain value per node. Mapped, so all of it goes back the moment the work is

@@ -198,11 +198,11 @@ enum Advisors {
                 let file = tree.name(version)
                 let bytes = nodes[Int(version)].bytes
                 return WinRow(id: "film:" + (tree.path(version) ?? file), title: (file as NSString).deletingPathExtension, subtitle: "One of \(same.count) versions in this folder.",
-                              detail: "The same film in another quality. Plex shows them as one film, with a choice of versions.", tier: .yourCall, nodes: [version], bytes: bytes, paperBytes: bytes,
+                              detail: "The same film in another quality. Plex shows both as one film, with a choice of versions.", tier: .yourCall, nodes: [version], bytes: bytes, paperBytes: bytes,
                               action: .trash, command: nil, bundleID: nil)
             }
             var group = WinRow(id: "versions:" + (tree.path(folder) ?? name), title: "\(name): \(same.count) versions", subtitle: parts.map { formatBytes($0.bytes) }.joined(separator: " and ") + ". You could keep just one.",
-                               detail: "The same film in more than one quality. Open it to choose which to remove.", tier: .yourCall, nodes: parts.flatMap(\.nodes), bytes: parts.reduce(0) { $0 &+ $1.bytes },
+                               detail: "The same film in more than one quality. Open this row to choose which to remove.", tier: .yourCall, nodes: parts.flatMap(\.nodes), bytes: parts.reduce(0) { $0 &+ $1.bytes },
                                paperBytes: parts.reduce(0) { $0 &+ $1.paperBytes }, action: .trash, command: nil, bundleID: nil)
             group.parts = parts
             out.append(group)
@@ -255,14 +255,14 @@ enum Advisors {
         if !torrents.isEmpty {
             row.otherCopiesIsTorrent = true
             row.otherCopiesTitle = found.folders.count > 1 ? "Also remove the \(found.folders.count) torrent copies" : "Also remove the torrent copy"
-            var note = "That's when you get \(formatBytes(row.paperBytes)) back. Transmission stops sharing \(found.folders.count > 1 ? "them" : "it")."
+            var note = "That's when you get \(formatBytes(row.paperBytes)) back. Transmission stops sharing \(found.folders.count > 1 ? "those torrents" : "that torrent")."
             // The newest one is the one that may still be sharing.
             if let finished = torrents.compactMap(\.finished).max() {
                 let days = Int(now.timeIntervalSince(finished) / 86_400)
                 if days < seedingDays {
                     let when = days == 0 ? "today" : (days == 1 ? "yesterday" : "\(days) days ago")
-                    note = "That's when you get \(formatBytes(row.paperBytes)) back, but \(found.folders.count > 1 ? "the newest" : "it") only finished \(when), so it may still be sharing."
-                    row.otherCopiesCaution = "\(found.folders.count > 1 ? "The newest" : "It") only finished \(when), so it may still be sharing."
+                    note = "That's when you get \(formatBytes(row.paperBytes)) back, but \(found.folders.count > 1 ? "the newest torrent" : "the torrent") only finished \(when), so it may still be sharing."
+                    row.otherCopiesCaution = "\(found.folders.count > 1 ? "The newest torrent" : "The torrent") only finished \(when), so it may still be sharing."
                 }
             }
             row.otherCopiesNote = note
@@ -284,7 +284,7 @@ enum Advisors {
         parts.sort { $0.bytes > $1.bytes }
         if parts.count == 1 { return parts }
         var group = WinRow(id: "group:quiet-apps", title: "\(parts.count) apps with no sign of use for 6 months", subtitle: parts.prefix(4).map(\.title).joined(separator: ", ") + (parts.count > 4 ? " and \(parts.count - 4) more." : "."),
-                           detail: "Going by each app's own settings, caches and saved state, and by Spotlight. Open it to decide about each one.", tier: .yourCall, nodes: parts.flatMap(\.nodes),
+                           detail: "Going by each app's own settings, caches and saved state, and by Spotlight. Open this row to decide about each one.", tier: .yourCall, nodes: parts.flatMap(\.nodes),
                            bytes: parts.reduce(0) { $0 &+ $1.bytes }, paperBytes: parts.reduce(0) { $0 &+ $1.paperBytes }, action: .uninstall, command: nil, bundleID: nil)
         group.parts = parts
         return [group]
@@ -311,10 +311,10 @@ enum Advisors {
         }
         let bytes = nodes.reduce(UInt64(0)) { $0 &+ tree.totals[Int($1)] }
         var bits = ["No sign of use for \(Titles.monthsText(since: newest, now: now))"]
-        if app.fromAppStore { bits.append("You can download it again from the App Store") }
+        if app.fromAppStore { bits.append("You can download this again from the App Store") }
         if let note = app.makerNote { bits.append(String(note.dropLast())) }
         var row = WinRow(id: "app:" + app.bundleID, title: app.name, subtitle: sentence(bits),
-                         detail: "Uninstalling moves the app, its settings and its caches to the Trash. Going by its own files and by Spotlight, so it may be wrong about an app that only runs in the background.",
+                         detail: "Uninstalling moves the app, its settings and its caches to the Trash. Going by the app's own files and by Spotlight, so this may be wrong about an app that only runs in the background.",
                          tier: .yourCall, nodes: nodes, bytes: bytes, paperBytes: bytes, action: .uninstall, command: nil, bundleID: app.bundleID)
         row.appPath = app.path
         row.extraPaths = extras
@@ -322,7 +322,7 @@ enum Advisors {
         if dataBytes >= 1_000_000 {
             row.alsoNodes = dataNodes
             row.alsoTitle = "Also remove its data: \(formatBytes(dataBytes))"
-            row.alsoNote = "It may hold your own work, so it stays unless you say so."
+            row.alsoNote = "May hold your own work, so this stays unless you say so."
         }
         return row
     }
@@ -335,10 +335,10 @@ enum Advisors {
             guard let node = tree.find(path: "/System/Volumes/Data" + game.folder) ?? tree.find(path: game.folder) else { continue }
             var bits: [String] = []
             if let played = game.lastPlayed { bits.append("Last played \(Titles.dayText(played, now: now))") }
-            bits.append("Steam can download it again")
+            bits.append("Steam can download this again")
             let bytes = tree.totals[Int(node)]
             var row = WinRow(id: "steam:" + game.appID, title: game.name, subtitle: sentence(bits),
-                             detail: "Check first that your saves are in Steam Cloud. Steam shows it as not installed afterwards, and you can install it again from there.", tier: .redownload, nodes: [node], bytes: bytes, paperBytes: bytes,
+                             detail: "Check first that your saves are in Steam Cloud. Steam shows this game as not installed afterwards, and you can install the game again from there.", tier: .redownload, nodes: [node], bytes: bytes, paperBytes: bytes,
                              action: .trash, command: nil, bundleID: "com.valvesoftware.steam")
             row.extraPaths = [game.manifest]
             // Saves may only be on this Mac, so a game only goes on a tick of your own.
@@ -399,8 +399,8 @@ enum Advisors {
             if tree.statRow(node)[DiskTree.statRecent30] > 0 { continue }
             let bytes = tree.totals[Int(node)]
             let row = WinRow(id: "repo:" + repo.path, title: tree.name(node),
-                             subtitle: "Last commit \(Titles.monthsText(since: last, now: now)) ago. Everything is pushed, so you can clone it again from \(shortRemote(remote)).",
-                             detail: "Files that git ignores aren't in that copy: settings, data and anything you generated. Open it to check what's there.", tier: .yourCall, nodes: [node], bytes: bytes, paperBytes: bytes,
+                             subtitle: "Last commit \(Titles.monthsText(since: last, now: now)) ago. Everything is pushed, so you can clone this project again from \(shortRemote(remote)).",
+                             detail: "Files that git ignores aren't in that copy: settings, data and anything you generated. Open this row to check what's there.", tier: .yourCall, nodes: [node], bytes: bytes, paperBytes: bytes,
                              action: .trash, command: nil, bundleID: nil)
             parts.append(row)
         }
@@ -467,7 +467,7 @@ enum Advisors {
         var out: [WinRow] = []
         for thing in list {
             guard let node = tree.find(path: "/System/Volumes/Data" + NSHomeDirectory() + "/" + thing.path), tree.totals[Int(node)] >= 1_000_000_000 else { continue }
-            var row = WinRow(id: "handoff:" + thing.id, title: thing.title, subtitle: "Managed by \(thing.app), so it isn't something to remove by hand.", detail: thing.detail, tier: .handsOff, nodes: [node],
+            var row = WinRow(id: "handoff:" + thing.id, title: thing.title, subtitle: "Managed by \(thing.app), so this isn't something to remove by hand.", detail: thing.detail, tier: .handsOff, nodes: [node],
                              bytes: tree.totals[Int(node)], paperBytes: tree.totals[Int(node)], action: .openApp, command: nil, bundleID: thing.id)
             row.openAppName = thing.app
             out.append(row)
