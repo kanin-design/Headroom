@@ -23,6 +23,8 @@ final class MapHostView: NSView {
     private(set) var framesDrawn = 0
     private var surfaces: [IOSurfaceRef] = []
     private var surfaceOnScreen: IOSurfaceRef?
+    /// Surfaces of the size or format the picture had before, until the new picture is on screen.
+    private var retired: [IOSurfaceRef] = []
     private var surfacesAreResting = false
     // kIOSurfacePurgeableNonVolatile, Volatile and Empty, which Swift doesn't get by name.
     private static let mustBeKept: UInt32 = 0, mayBePurged: UInt32 = 1, isEmptied: UInt32 = 2
@@ -44,6 +46,7 @@ final class MapHostView: NSView {
         layerContentsRedrawPolicy = .never
         let l = metalLayer
         l.device = model.engine.renderer?.device
+        // Every Mac can draw this one. The first frame changes it if the narrow one will do.
         l.pixelFormat = MapRenderer.outputFormat
         l.colorspace = CGColorSpace(name: CGColorSpace.extendedLinearDisplayP3)
         l.wantsExtendedDynamicRangeContent = true
@@ -115,9 +118,7 @@ final class MapHostView: NSView {
         let size = CGSize(width: max(bounds.width * scale, 1), height: max(bounds.height * scale, 1))
         guard size != metalLayer.drawableSize else { return }
         metalLayer.drawableSize = size
-        // The layer makes new ones in the new size, and nothing should be keeping the old ones around.
-        wakeSurfaces()
-        surfaces = []
+        retireSurfaces()
     }
 
     func startAnimating() {
@@ -140,11 +141,14 @@ final class MapHostView: NSView {
     }
 
     private func drawFrame(isLast: Bool = false) {
-        guard let engine, let renderer = engine.renderer, bounds.width > 1, let drawable = metalLayer.nextDrawable(),
-              let commands = renderer.commandQueue.makeCommandBuffer() else { return }
+        guard let engine, let renderer = engine.renderer, bounds.width > 1 else { return }
+        let headroom = window?.screen?.maximumExtendedDynamicRangeColorComponentValue ?? 1
+        useFormat(Self.forcedFormat ?? renderer.screenFormat(headroom: headroom))
+        guard let drawable = metalLayer.nextDrawable(), let commands = renderer.commandQueue.makeCommandBuffer() else { return }
         framesDrawn &+= 1
         wakeSurfaces()
         if let surface = drawable.texture.iosurface { note(surface) }
+        if !retired.isEmpty { emptyRetired(once: drawable) }
         if isLast {
             let frame = framesDrawn
             // A moment after it's on screen, so moving the pointer from piece to piece doesn't keep going back and forth.
@@ -152,7 +156,6 @@ final class MapHostView: NSView {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { self?.restAfter(frame) }
             }
         }
-        let headroom = window?.screen?.maximumExtendedDynamicRangeColorComponentValue ?? 1
         let u = engine.uniforms(viewport: metalLayer.drawableSize, scale: contentScale, headroom: headroom)
         renderer.encode(into: commands, target: drawable.texture, uniforms: u)
         if metalLayer.presentsWithTransaction {
@@ -162,6 +165,42 @@ final class MapHostView: NSView {
         } else {
             commands.present(drawable)
             commands.commit()
+        }
+    }
+
+    /// For a check: the picture in one format, whatever the screen can do.
+    nonisolated(unsafe) static var forcedFormat: MTLPixelFormat?
+
+    /// The picture on screen takes half the memory while the screen can show at most 1.5 times white. When it can show more,
+    /// it goes back to the format that holds the brighter glow.
+    private func useFormat(_ format: MTLPixelFormat) {
+        guard metalLayer.pixelFormat != format else { return }
+        if ScriptRunner.path != nil { print("format now \(format == MapRenderer.outputFormat ? "wide" : "narrow")") }
+        metalLayer.pixelFormat = format
+        metalLayer.colorspace = CGColorSpace(name: format == MapRenderer.outputFormat ? CGColorSpace.extendedLinearDisplayP3 : CGColorSpace.extendedDisplayP3)
+        retireSurfaces()
+    }
+
+    /// A new size or format means new surfaces. The layer lets most of the old ones go, but the last one on screen stays in
+    /// memory behind the new picture for as long as nothing else is drawn, which can be for good. So once the new picture is
+    /// on screen, the old ones are emptied.
+    private func retireSurfaces() {
+        retired += surfaces
+        surfaces = []
+        surfaceOnScreen = nil
+    }
+
+    private func emptyRetired(once drawable: CAMetalDrawable) {
+        let old = retired
+        retired = []
+        drawable.addPresentedHandler { _ in
+            DispatchQueue.main.async { [weak self] in
+                // One the layer has started to use again keeps what's drawn in it.
+                let inUse = self?.surfaces ?? []
+                for surface in old where !inUse.contains(where: { $0 === surface }) {
+                    IOSurfaceSetPurgeable(surface, MapHostView.isEmptied, nil)
+                }
+            }
         }
     }
 
@@ -194,8 +233,10 @@ final class MapHostView: NSView {
         surfaceOnScreen = surface
         if let at = surfaces.firstIndex(where: { $0 === surface }) {
             surfaces.remove(at: at)
-        } else if surfaces.count > metalLayer.maximumDrawableCount {
-            IOSurfaceSetPurgeable(surfaces.removeFirst(), Self.mustBeKept, nil)
+        } else {
+            // New, or one that was emptied: either way, what's drawn in it now has to stay.
+            IOSurfaceSetPurgeable(surface, Self.mustBeKept, nil)
+            if surfaces.count > metalLayer.maximumDrawableCount { IOSurfaceSetPurgeable(surfaces.removeFirst(), Self.mustBeKept, nil) }
         }
         surfaces.append(surface)
     }

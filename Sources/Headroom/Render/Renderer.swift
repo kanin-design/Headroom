@@ -44,9 +44,21 @@ final class MapRenderer {
     private let downPipeline: MTLRenderPipelineState
     private let upPipeline: MTLRenderPipelineState
     private let compositePipeline: MTLRenderPipelineState
+    private let narrowCompositePipeline: MTLRenderPipelineState?
 
     static let hdrFormat: MTLPixelFormat = .rgba16Float
+    /// The picture on screen, when the screen can show more than white: the glow goes up to whatever the screen allows.
     static let outputFormat: MTLPixelFormat = .rgba16Float
+    /// The same picture in half the memory, for a screen that can go little or not at all past white. The ring never draws
+    /// brighter than the screen can show, and 10 bits a colour, curved like the eye sees, hold every value up to about 1.6
+    /// times white.
+    static let narrowOutputFormat: MTLPixelFormat = .bgr10_xr_srgb
+
+    /// Which of the two the screen needs now. Up to 1.5 times white, the narrow one holds it all, with room to spare. Only
+    /// Apple's own chips can draw the narrow one, so on any other Mac it's always the first.
+    func screenFormat(headroom: CGFloat) -> MTLPixelFormat {
+        headroom > 1.5 || narrowCompositePipeline == nil ? Self.outputFormat : Self.narrowOutputFormat
+    }
 
     private var instanceBuffer: MTLBuffer
     private var emphasisBuffer: MTLBuffer
@@ -108,6 +120,7 @@ final class MapRenderer {
         downPipeline = down
         upPipeline = up
         compositePipeline = comp
+        narrowCompositePipeline = pipeline("quad_vertex", "composite", format: Self.narrowOutputFormat, blended: false)
         instanceBuffer = instances
         emphasisBuffer = emphasis
     }
@@ -158,6 +171,15 @@ final class MapRenderer {
         guard !isResting else { return }
         isResting = true
         for texture in [piecesTexture, glowTexture].compactMap({ $0 }) + levels { texture.setPurgeableState(.volatile) }
+    }
+
+    /// For a check: what each texture takes, and what the GPU holds for this app in all.
+    func allocations() -> String {
+        let named = [("pieces", piecesTexture), ("glow", glowTexture)] + levels.enumerated().map { ("level \($0.offset + 1)", $0.element as MTLTexture?) }
+        let each = named.compactMap { name, texture in
+            texture.map { "\(name) \($0.width)x\($0.height) \(String(format: "%.1f", Double($0.allocatedSize) / 1_048_576)) MB" }
+        }
+        return each.joined(separator: ", ") + "; all \(device.currentAllocatedSize >> 20) MB"
     }
 
     func loseTargets() {
@@ -231,7 +253,7 @@ final class MapRenderer {
         }
 
         pass(commands, target: target) { e in
-            e.setRenderPipelineState(compositePipeline)
+            e.setRenderPipelineState((target.pixelFormat == Self.narrowOutputFormat ? narrowCompositePipeline : nil) ?? compositePipeline)
             e.setFragmentTexture(pieces, index: 0)
             e.setFragmentTexture(levels[1], index: 1)
             e.setFragmentTexture(levels[levels.count - 2], index: 2)

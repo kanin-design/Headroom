@@ -524,6 +524,19 @@ enum ScriptRunner {
             print("shot \(argument)")
         case "leaks":
             findLeaks(in: model)
+        case "format":
+            // format wide|narrow|auto: the picture on screen in one format, for comparing them.
+            MapHostView.forcedFormat = argument == "wide" ? MapRenderer.outputFormat : argument == "narrow" ? MapRenderer.narrowOutputFormat : nil
+            model.engine.requestFrame()
+            try? await Task.sleep(for: .milliseconds(400))
+        case "gpu":
+            // What the GPU holds for the ring, texture by texture.
+            print("gpu \(model.engine.renderer?.allocations() ?? "no renderer")")
+        case "headroom":
+            // How far above white this screen can go now, and at most: what the picture's format has to hold.
+            if let screen = mainWindow?.screen {
+                print("headroom now \(screen.maximumExtendedDynamicRangeColorComponentValue), at most \(screen.maximumPotentialExtendedDynamicRangeColorComponentValue), reference \(screen.maximumReferenceExtendedDynamicRangeColorComponentValue)")
+            }
         case "labelpoint":
             // labelpoint 2: the pointer arrives on the name around the ring with this number, and moves a little while it's there.
             guard let w = mainWindow, let at = labelPoint(argument, model) else { print("no such name: \(argument)"); return }
