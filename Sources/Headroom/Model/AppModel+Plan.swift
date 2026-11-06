@@ -773,7 +773,8 @@ extension AppModel {
     /// Looks at everything planned as it is now. Nothing changes. `fresh` is for when you asked, or came back: while you're
     /// ticking things, what was seen a moment ago will do.
     func runChecks(fresh: Bool = false) {
-        guard let tree else { return }
+        // Checking reads the planned things, and nothing is read without Full Disk Access.
+        guard let tree, hasFullAccess else { return }
         checkRun?.cancel()
         checkGeneration += 1
         let generation = checkGeneration
@@ -1345,7 +1346,7 @@ extension AppModel {
         let rules = self.rules
         Thread.detachNewThread { [weak self] in
             Thread.current.qualityOfService = .utility
-            let scan = DiskScan(facts: disk, rules: rules, fullAccess: true, askPerFolder: false)
+            let scan = DiskScan(facts: disk, rules: rules, fullAccess: true)
             scan.run(mode: .quiet)
             if !scan.scanner.wasCancelled, VolumeFacts.read(path: disk.mountPath) != nil { DiskIndex.save(scan.tree) }
             DispatchQueue.main.async {

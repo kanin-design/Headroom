@@ -26,7 +26,10 @@ echo $BUILD > .build-number
 plutil -replace CFBundleVersion -string "$BUILD" $APP/Contents/Info.plist
 cp Resources/Assets.car Resources/AppIcon.icns Resources/logo.png $APP/Contents/Resources/
 cp Sources/Headroom/Render/Shaders.metal $APP/Contents/Resources/Shaders.metal
-ID=$(security find-identity -p codesigning -v 2>/dev/null | awk -F'"' '/Apple Development/ {print $2; exit}')
+# The Headroom certificate signs every version the same way, so macOS keeps its permissions from one to the next and the
+# updater can tell a real update. It's made for this, so nobody needs to trust it. Without it, a development certificate.
+ID=$(security find-identity -p codesigning 2>/dev/null | awk -F'"' '$2 == "Headroom" {print $2; exit}')
+[[ -z "$ID" ]] && ID=$(security find-identity -p codesigning -v 2>/dev/null | awk -F'"' '/Apple Development/ {print $2; exit}')
 # A locked keychain can refuse the real identity. The app still runs ad-hoc, but will ask for access again.
 codesign --force --sign "${ID:--}" $APP 2>/dev/null || { echo "couldn't sign with \"$ID\": using an ad-hoc signature"; codesign --force --sign - $APP; }
 # The Dock and Finder go by the app's date, so without this they keep showing an older icon.

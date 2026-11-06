@@ -33,7 +33,7 @@ final class ScannerTests: XCTestCase {
 
     private func newScan() -> DiskScan {
         let facts = VolumeFacts(name: "Test", mountPath: root, capacity: 1 << 40, free: 1 << 39, isBoot: false)
-        return DiskScan(facts: facts, rules: RuleBook(homePath: NSHomeDirectory()), fullAccess: false, askPerFolder: false)
+        return DiskScan(facts: facts, rules: RuleBook(homePath: NSHomeDirectory()), fullAccess: false)
     }
 
     /// The scan on its own thread, with a limit: a hang is a failed test, not a stuck run.

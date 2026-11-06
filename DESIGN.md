@@ -275,6 +275,16 @@ Underneath:
   say, and the first answer that rules a project out saves asking the rest, with the slowest question last. Here that's 4
   projects out of 20, and 0.3 s instead of 12 s. At launch, other apps' records are read once: the second pass, after the
   scan, only reads what a saved map couldn't have known.
+- Updates come from GitHub's list of releases: the newest one with a disk image, if it's newer than this version and you
+  haven't said no to it. Putting it in place opens the disk image, checks it holds this app at that version, signed with
+  the same certificate, copies it next to the old one, moves the old one to the Trash and the new one into its place, and
+  opens it once this one has quit. Quitting while that happens waits for it, so there's never a moment with no app.
+- Full Disk Access is the one permission Headroom asks for. Without it, Headroom reads nothing at all: no scan, no saved
+  map, nothing about apps or files. Reading around the private folders wasn't enough, because a map read with access
+  names what's inside them, and looking up any of it brings up a prompt. The ring shows what the disk itself reports, and
+  a guide explains what's private and where to switch access on, once per version unless you say not now. Every version is signed with one certificate made for Headroom, rather than ad hoc, so macOS
+  sees each one as the same app: access granted once survives updates, and the updater can tell a real update from
+  anything else. It isn't a developer certificate, so no name is in it, and macOS still asks you to open the first one.
 - The side panel only makes the rows you can see.
 - Looking closely at one folder has its own walk: `getattrlistbulk` on up to six threads, with one pass collecting the
   folder's size, its newest change, its largest file and its files with more than one path. While you're ticking things, a

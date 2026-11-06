@@ -3,6 +3,7 @@ import SwiftUI
 
 struct RootView: View {
     @State private var model = AppModel.shared
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         GeometryReader { geometry in
@@ -65,6 +66,9 @@ struct RootView: View {
             Text(busy.why + " You can undo this until the Trash is emptied.")
         }
         .onAppear { model.start() }
+        // A new version found at launch brings its window forward, and so does a launch without Full Disk Access.
+        .onChange(of: Updater.shared.windowRequests) { openWindow(id: "update") }
+        .onChange(of: model.accessGuideRequests) { openWindow(id: "access") }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             model.didBecomeActive()
         }
@@ -167,6 +171,10 @@ struct DiskChip: View {
                         Text(model.scanFiles > 0 ? "Reading \(formatCount(model.scanFiles)) files" : "Reading")
                             .font(.system(size: 9.5, weight: .medium).monospacedDigit())
                             .foregroundStyle(.white.opacity(0.55))
+                    } else if !model.hasFullAccess, model.volume?.isBoot == true {
+                        Text("Waiting for access")
+                            .font(.system(size: 9.5, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.5))
                     } else if model.scanFiles > 0 {
                         Text("\(formatCount(model.scanFiles)) files")
                             .font(.system(size: 9.5, weight: .medium).monospacedDigit())
@@ -289,7 +297,7 @@ struct BottomArea: View {
                     .glassEffect(.regular, in: Capsule())
                     .transition(.opacity)
             }
-            if !model.hasFullAccess && !model.askPerFolder && !model.accessCardDismissed && !model.forceTouchGuarded, model.volume?.isBoot == true {
+            if !model.hasFullAccess && !model.accessCardDismissed, model.volume?.isBoot == true {
                 AccessCard(model: model)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             } else if model.focus != 0 {
@@ -364,9 +372,10 @@ struct MessageCard: View {
     }
 }
 
-/// Explains the hatched piece: macOS hides these folders until you say otherwise.
+/// Explains the hatched piece: Headroom reads nothing until macOS lets it read everything.
 struct AccessCard: View {
     let model: AppModel
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         HStack(alignment: .center, spacing: 14) {
@@ -374,24 +383,18 @@ struct AccessCard: View {
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.75))
             VStack(alignment: .leading, spacing: 2) {
-                Text("Some folders are locked")
+                Text("Waiting for Full Disk Access")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.95))
-                Text("macOS keeps Downloads, Desktop, Documents and a few others private until you give permission.")
+                Text("macOS keeps Downloads, Desktop, Documents and other folders private, so Headroom reads nothing until it may read everything.")
                     .font(.system(size: 11.5))
                     .foregroundStyle(.white.opacity(0.62))
                     .fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: 330, alignment: .leading)
-            VStack(spacing: 5) {
-                Button("Allow Full Disk Access") { model.openFullDiskAccess() }
-                    .buttonStyle(.glassProminent)
-                    .controlSize(.small)
-                Button("Ask for each folder") { model.useFolderPrompts() }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.6))
-            }
+            Button("Allow Full Disk Access") { openWindow(id: "access") }
+                .buttonStyle(.glassProminent)
+                .controlSize(.small)
             Button {
                 model.accessCardDismissed = true
             } label: {

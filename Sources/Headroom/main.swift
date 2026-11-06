@@ -5,7 +5,7 @@ if args.contains("--bench") {
     // How fast the picture gets right: when each share of the bytes was known, what the quiet part cost, and the total.
     let env = ProcessInfo.processInfo.environment
     let rules = RuleBook(homePath: NSHomeDirectory())
-    let scan = DiskScan(facts: VolumeFacts.read(path: env["HR_PATH"] ?? "/")!, rules: rules, fullAccess: false, askPerFolder: true)
+    let scan = DiskScan(facts: VolumeFacts.read(path: env["HR_PATH"] ?? "/")!, rules: rules, fullAccess: DiskScan.hasFullDiskAccess())
     final class Samples: @unchecked Sendable { var list: [(Double, UInt64)] = []; var stop = false }
     let samples = Samples()
     let start = DispatchTime.now()

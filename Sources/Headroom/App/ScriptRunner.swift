@@ -132,7 +132,6 @@ enum ScriptRunner {
         // Each line as it's written, so a run that gets stuck still says how far it got.
         setvbuf(stdout, nil, _IOLBF, 0)
         let model = AppModel.shared
-        model.forceTouchGuarded = !CommandLine.arguments.contains("--locked")
         Task { @MainActor in
             for raw in text.split(separator: "\n") {
                 let line = raw.trimmingCharacters(in: .whitespaces)
@@ -549,9 +548,9 @@ enum ScriptRunner {
                 return
             }
             let rules = model.rules
-            let access = model.hasFullAccess, guarded = model.askPerFolder || model.forceTouchGuarded
+            let access = model.hasFullAccess
             let result = await Task.detached(priority: .userInitiated) { () -> String in
-                Self.compareRefresh(of: tree, volume: volume, journal: journal, rules: rules, fullAccess: access, askPerFolder: guarded)
+                Self.compareRefresh(of: tree, volume: volume, journal: journal, rules: rules, fullAccess: access)
             }.value
             print(result)
         case "othercopy":
@@ -603,6 +602,23 @@ enum ScriptRunner {
             }
         case "timescale":
             model.engine.timeScale = Float(argument) ?? 1
+        case "checkupdates":
+            Updater.shared.checkNow()
+            Updater.shared.bringForward()
+        case "installupdate":
+            if case .available(let release) = Updater.shared.state { Updater.shared.install(release) } else { print("no update to install: \(Updater.shared.state)") }
+        case "signedlikethis":
+            // Whether the updater would take the app at this path.
+            print("signed like this app: \(Updater.isSignedLikeThis(URL(fileURLWithPath: argument))) — \(argument)")
+        case "updatestate":
+            print("update state \(Updater.shared.state)")
+        case "shotwindow":
+            // A picture of another window, by its title: "shotwindow Update Headroom /path.png".
+            guard let cut = argument.range(of: " /") else { print("shotwindow needs a title and a path"); return }
+            let title = String(argument[..<cut.lowerBound]), path = String(argument[argument.index(after: cut.lowerBound)...])
+            guard let w = NSApp.windows.first(where: { $0.title == title && $0.isVisible }) else { print("no window called \(title)"); return }
+            await picture(of: w, to: path)
+            print("shot \(path)")
         case "shot":
             guard let w = mainWindow else { print("no window"); return }
             await picture(of: w, to: argument)
@@ -990,14 +1006,14 @@ enum ScriptRunner {
     /// What a refresh costs and whether it comes out as a full read does. Between the two, the disk carries on changing, so
     /// what differs is listed where it starts, to tell a busy folder from a mistake.
     nonisolated private static func compareRefresh(of tree: DiskTree, volume: VolumeFacts, journal: ChangeJournal.Watcher, rules: RuleBook,
-                                                   fullAccess: Bool, askPerFolder: Bool) -> String {
+                                                   fullAccess: Bool) -> String {
         func seconds(_ since: DispatchTime) -> Double { Double(DispatchTime.now().uptimeNanoseconds - since.uptimeNanoseconds) / 1e9 }
         guard let facts = VolumeFacts.read(path: volume.mountPath) else { return "refreshcheck: no disk" }
         var out: [String] = []
         let asked = DispatchTime.now()
         guard let place = tree.journal, let taken = journal.take(from: place) else { return "refreshcheck: the journal lost track" }
         let askedFor = seconds(asked)
-        let refresh = DiskScan(facts: facts, rules: rules, fullAccess: fullAccess, askPerFolder: askPerFolder)
+        let refresh = DiskScan(facts: facts, rules: rules, fullAccess: fullAccess)
         guard refresh.refresh(from: tree, changes: taken.changes, place: taken.next) else { return "refreshcheck: the refresh said no" }
         var folders = 0
         for i in 0..<tree.count where tree.nodes[i].has(NodeFlag.directory) { folders += 1 }
@@ -1017,7 +1033,7 @@ enum ScriptRunner {
         let size = (try? FileManager.default.attributesOfItem(atPath: TreeCache.url(facts.name).path)[.size] as? Int) ?? 0
         out.append(String(format: "saved map %.1f MB, saved in %.2f s, read back in %.2f s%@", Double(size) / 1e6, saved, seconds(loadStart),
                           loaded == nil ? ", but it didn't read back" : ""))
-        let full = DiskScan(facts: facts, rules: rules, fullAccess: fullAccess, askPerFolder: askPerFolder)
+        let full = DiskScan(facts: facts, rules: rules, fullAccess: fullAccess)
         let fullStart = DispatchTime.now()
         full.run(mode: .full)
         out.append(String(format: "full read %.2f s", seconds(fullStart)))

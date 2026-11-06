@@ -57,7 +57,7 @@ final class RefreshTests: XCTestCase {
 
     private func newScan() -> DiskScan {
         let facts = VolumeFacts(name: "Test", mountPath: root, capacity: 1 << 40, free: 1 << 39, isBoot: false)
-        return DiskScan(facts: facts, rules: RuleBook(homePath: NSHomeDirectory()), fullAccess: false, askPerFolder: false)
+        return DiskScan(facts: facts, rules: RuleBook(homePath: NSHomeDirectory()), fullAccess: false)
     }
 
     /// Everything read, noting where the journal was, as the app does.

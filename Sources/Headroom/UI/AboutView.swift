@@ -3,6 +3,7 @@ import SwiftUI
 
 /// About Headroom, in the app menu: the icon, the logo, and which version and build this is.
 struct AboutView: View {
+    @Environment(\.openWindow) private var openWindow
     private var version: String {
         let number = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
         // macOS wants the number to be only a number, so "beta" is kept apart from it.
@@ -23,11 +24,30 @@ struct AboutView: View {
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
                 .padding(.top, 14)
+            update
+                .padding(.top, 16)
         }
         .padding(.top, 4)
         .padding(.bottom, 28)
         .frame(width: 320)
         .containerBackground(Color(red: 0.03, green: 0.03, blue: 0.042), for: .window)
+    }
+
+    /// A newer version, once one has been found, or a way to look.
+    @ViewBuilder
+    private var update: some View {
+        if case .available(let release) = Updater.shared.state {
+            Button("Update to \(release.shown)") { openWindow(id: "update") }
+                .buttonStyle(.glassProminent)
+                .controlSize(.small)
+        } else {
+            Button("Check for Updates") {
+                Updater.shared.checkNow()
+                openWindow(id: "update")
+            }
+            .buttonStyle(.glass)
+            .controlSize(.small)
+        }
     }
 
     @ViewBuilder

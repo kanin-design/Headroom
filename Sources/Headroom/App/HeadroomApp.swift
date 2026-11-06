@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.activate()
         }
         ScriptRunner.startIfAsked()
+        Updater.shared.checkAtLaunch()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
@@ -20,6 +21,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// A clean under way stops at the next safe point and writes down what it did, so it can still be undone.
     @MainActor
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // Halfway through swapping in a new version, the app could be left in the Trash with the new one not yet in place.
+        if Updater.shared.isInstalling {
+            Updater.shared.quitWhenInPlace = true
+            return .terminateLater
+        }
         let model = AppModel.shared
         guard model.cleanProgress != nil else {
             model.savePlan()
@@ -51,6 +57,17 @@ private struct AboutCommand: View {
     }
 }
 
+private struct UpdateCommand: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("Check for Updates…") {
+            Updater.shared.checkNow()
+            openWindow(id: "update")
+        }
+    }
+}
+
 struct HeadroomApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
@@ -67,6 +84,7 @@ struct HeadroomApp: App {
         .commands {
             CommandGroup(replacing: .appInfo) {
                 AboutCommand()
+                UpdateCommand()
             }
             CommandGroup(replacing: .newItem) {
                 Button("Scan Again") { AppModel.shared.scan(hurry: true) }
@@ -136,6 +154,34 @@ struct HeadroomApp: App {
 
         Window("About Headroom", id: "about") {
             AboutView()
+                .windowMinimizeBehavior(.disabled)
+                .windowResizeBehavior(.disabled)
+                .windowFullScreenBehavior(.disabled)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentSize)
+        .windowBackgroundDragBehavior(.enabled)
+        .restorationBehavior(.disabled)
+        .defaultLaunchBehavior(.suppressed)
+        .defaultPosition(.center)
+        .commandsRemoved()
+
+        Window("Full Disk Access", id: "access") {
+            AccessGuideView()
+                .windowMinimizeBehavior(.disabled)
+                .windowResizeBehavior(.disabled)
+                .windowFullScreenBehavior(.disabled)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentSize)
+        .windowBackgroundDragBehavior(.enabled)
+        .restorationBehavior(.disabled)
+        .defaultLaunchBehavior(.suppressed)
+        .defaultPosition(.center)
+        .commandsRemoved()
+
+        Window("Update Headroom", id: "update") {
+            UpdateView()
                 .windowMinimizeBehavior(.disabled)
                 .windowResizeBehavior(.disabled)
                 .windowFullScreenBehavior(.disabled)

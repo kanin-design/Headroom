@@ -66,6 +66,9 @@ final class MapRenderer {
     private(set) var instanceCount = 0
     private var emphasisSlot = 0
     private var emphasisOffset = 0
+    /// Pieces that stand out past their place: the one you're pointing at, and one still settling back after it. They're
+    /// drawn after all the rest, the furthest out last, or the pieces drawn after them would cover what stands out.
+    private var lifted: [Int] = []
 
     private var piecesTexture: MTLTexture?
     private var glowTexture: MTLTexture?
@@ -150,6 +153,8 @@ final class MapRenderer {
         values.withUnsafeBytes { raw in
             (emphasisBuffer.contents() + emphasisOffset).copyMemory(from: raw.baseAddress!, byteCount: bytes)
         }
+        // Past 1, emphasis lifts a piece outward: see the segment shader.
+        lifted = values.indices.filter { values[$0] > 1 }.sorted { values[$0] < values[$1] }
     }
 
     private func prepareTargets(width: Int, height: Int) {
@@ -223,7 +228,17 @@ final class MapRenderer {
             e.setVertexBuffer(emphasisBuffer, offset: emphasisOffset, index: 2)
             e.setFragmentBytes(&u, length: MemoryLayout<UniformsGPU>.stride, index: 1)
             if instanceCount > 0 {
-                e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: instanceCount)
+                let onTop = lifted.filter { $0 < instanceCount }
+                // Everything else in its order, in as few draws as the lifted pieces leave gaps for.
+                var start = 0
+                for at in onTop.sorted() {
+                    if at > start { e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: at - start, baseInstance: start) }
+                    start = at + 1
+                }
+                if start < instanceCount {
+                    e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: instanceCount - start, baseInstance: start)
+                }
+                for at in onTop { e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: 1, baseInstance: at) }
             }
         }
 

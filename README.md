@@ -4,7 +4,7 @@
 
 <p align="center">
   <b>See where your disk space went, and get it back. Fast.</b><br>
-  A native Mac app, written in Swift and Metal. Version 0.0.1, an early beta.
+  A native Mac app, written in Swift and Metal. Version 0.0.3, an early beta.
 </p>
 
 ![Headroom's map of a whole disk: a glowing ring of folders, each group in its own colour, with free space as an open wedge and the biggest folders listed beside the ring](docs/map.jpg)
@@ -53,8 +53,10 @@ Measured on an M5 MacBook Air with 2.1 million files on a 494 GB disk:
 
 ## Private
 
-Headroom never connects to the internet, so what it reads stays on your Mac. To say more about what's yours, it reads
-Plex's watched state, Transmission's torrents, Steam's last played dates and git, if you have them, and only ever reads.
+What Headroom reads stays on your Mac. The only time it goes online is to ask GitHub whether there's a newer version, at
+launch or when you choose Check for Updates, and to download it if you say yes. Nothing about your disk goes with the
+question. To say more about what's yours, it reads Plex's watched state, Transmission's torrents, Steam's last played
+dates and git, if you have them, and only ever reads.
 
 ## What you can do
 
@@ -111,9 +113,15 @@ To build Headroom yourself, clone this repository and use Xcode's command line t
 open build/Headroom.app
 ```
 
-The first time, the ring shows a striped "Hidden" piece, because macOS keeps Downloads, Desktop, Documents and a few
-other folders private. Click **Allow Full Disk Access** and switch Headroom on in the pane that opens. If you have a
-development certificate, the build is signed with it, so the permission survives rebuilds.
+The first time, Headroom explains what macOS keeps private and shows you where to switch on Full Disk Access. Until then
+it reads nothing at all, so macOS never asks you about a folder: the ring shows only what the disk itself reports, and
+Headroom reads the whole disk the moment it may. A build is signed with a certificate called Headroom if your
+keychain has one, and otherwise with your development certificate, so the permission survives rebuilds.
+
+When there's a new version, Headroom says so at launch and can put it in place itself. Say Not This Version and it waits
+for the one after. **Check for Updates…** in the Headroom menu, or in About, looks again whenever you like. Every
+version is signed with the same certificate, so an update keeps Full Disk Access, and Headroom only takes an update
+signed with it.
 
 Headroom is a personal project and a showcase, in an early beta. Headroom moves real files, so read what it tells you
 before you press **Clean**.

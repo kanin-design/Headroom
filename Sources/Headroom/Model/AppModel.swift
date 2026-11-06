@@ -77,7 +77,9 @@ final class AppModel {
     var scanIsHurrying = false
     var scanFiles = 0
     var hasFullAccess = false
-    var askPerFolder = UserDefaults.standard.bool(forKey: "askPerFolder")
+    /// Goes up each time the Full Disk Access guide should come forward.
+    var accessGuideRequests = 0
+    @ObservationIgnored var accessGuideShowing = false
     var accessCardDismissed = false
 
     // Where you are
@@ -232,7 +234,6 @@ final class AppModel {
     /// The Map view's colours for the picture on screen, so the list on the right can match the ring.
     @ObservationIgnored private var ringColours: RingColours?
     @ObservationIgnored private let colourMemory = ColourMemory()
-    @ObservationIgnored var forceTouchGuarded = false
     @ObservationIgnored var cacheLoadMilliseconds = 0.0
     /// How the last scan went about it, for a scripted check.
     @ObservationIgnored var lastScanNote = ""
@@ -246,17 +247,22 @@ final class AppModel {
     func start() {
         guard !didStart else { return }
         didStart = true
-        // A scripted run has to know this before its first scan, whichever gets going first.
-        if ScriptRunner.path != nil { forceTouchGuarded = !CommandLine.arguments.contains("--locked") }
         loadPlan()
-        hasFullAccess = DiskScan.hasFullDiskAccess()
+        // Asking for each folder is gone: it brought up a prompt per folder, and still left the rest needing Full Disk Access.
+        UserDefaults.standard.removeObject(forKey: "askPerFolder")
+        hasFullAccess = Self.mayReadEverything()
         volumes = VolumeFacts.available()
         volume = volumes.first
         guard let volume else { return }
+        if !hasFullAccess, volume.isBoot, Self.guideAtLaunch {
+            // Once the window is up, so the guide opens over the map.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { self.accessGuideRequests += 1 }
+        }
         history = History.points(for: volume)
         let launch = DispatchTime.now()
         var saved: DiskTree?
-        if !CommandLine.arguments.contains("--no-cache"), let cached = TreeCache.load(for: volume) {
+        // Without Full Disk Access nothing is read, the saved map included: whatever it names would be looked at.
+        if hasFullAccess, !CommandLine.arguments.contains("--no-cache"), let cached = TreeCache.load(for: volume) {
             present(cached, transition: .appear)
             cacheLoadMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - launch.uptimeNanoseconds) / 1e6
             watchJournal(from: cached, on: volume)
@@ -302,8 +308,9 @@ final class AppModel {
         guard let volume else { return }
         guard let facts = VolumeFacts.read(path: volume.mountPath) else { return }
         self.volume = facts
-        hasFullAccess = DiskScan.hasFullDiskAccess()
-        let scan = DiskScan(facts: facts, rules: rules, fullAccess: hasFullAccess, askPerFolder: askPerFolder || forceTouchGuarded)
+        hasFullAccess = Self.mayReadEverything()
+        guard hasFullAccess else { return showWithoutAccess(facts) }
+        let scan = DiskScan(facts: facts, rules: rules, fullAccess: hasFullAccess)
         activeScan = scan
         isScanning = true
         scanIsHurrying = hurry
@@ -397,6 +404,19 @@ final class AppModel {
                 self.present(tree, transition: .settle)
             }
         }
+    }
+
+    /// Without Full Disk Access, Headroom reads nothing at all, so macOS never has a folder to ask you about. The ring shows
+    /// what the disk itself reports: free space, macOS's own volumes, and the rest in one piece, waiting for access.
+    private func showWithoutAccess(_ facts: VolumeFacts) {
+        journal?.stop()
+        journal = nil
+        let waiting = DiskScan(facts: facts, rules: rules, fullAccess: false).picture()
+        waiting.displayNames[waiting.hidden] = "Waiting for access"
+        scanFiles = 0
+        // A map read before access went is put away too, so nothing on it gets looked at.
+        if tree?.isPartial == false { tree = nil }
+        show(waiting)
     }
 
     /// One more step of the scan that's running. Whatever you're doing carries on, and the numbers only get fuller.
@@ -635,7 +655,7 @@ final class AppModel {
         labels = []
         engine.apply(RingLayout(), .settle)
         history = History.points(for: facts)
-        let cached = TreeCache.load(for: facts)
+        let cached = hasFullAccess ? TreeCache.load(for: facts) : nil
         if let cached { present(cached, transition: .appear) }
         scan(refreshing: cached)
     }
@@ -652,7 +672,7 @@ final class AppModel {
     func didBecomeActive() {
         guard didStart, let tree else { return }
         // Coming back from System Settings with Full Disk Access switched on: read the rest straight away.
-        let access = DiskScan.hasFullDiskAccess()
+        let access = Self.mayReadEverything()
         if access != hasFullAccess {
             hasFullAccess = access
             restartScan(hurry: true)
@@ -898,7 +918,7 @@ final class AppModel {
         // Whether its files also have another path, and when it was last used, are worked out off the main thread from
         // the moment the pointer arrives, and the line shows them when they're ready. Pointing at something else stops it.
         let wantsLinks = !info.inTrash && !p.isSmaller && p.style != 1 && p.style != 2 && !tree.links.isEmpty && tree.nodes[Int(p.node)].flags & NodeFlag.synthetic == 0
-        if wantsLinks || info.tellsUse {
+        if hasFullAccess, wantsLinks || info.tellsUse {
             let node = p.node, bytes = p.bytes, tellsUse = info.tellsUse
             linksTask = Task { [weak self] in
                 let work = Task.detached(priority: .userInitiated) {
@@ -1232,12 +1252,25 @@ final class AppModel {
         if let url = URL(string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AllFiles") { NSWorkspace.shared.open(url) }
     }
 
-    /// Scan the guarded folders too, and let macOS ask about each one.
-    func useFolderPrompts() {
-        askPerFolder = true
-        UserDefaults.standard.set(true, forKey: "askPerFolder")
-        restartScan(hurry: true)
+    static let accessGuideDeclinedKey = "accessGuideDeclined"
+
+    /// Without Full Disk Access, the guide to it opens at launch, unless you said not now to it in this version.
+    static var guideAtLaunch: Bool {
+        showsGuide(declined: UserDefaults.standard.string(forKey: accessGuideDeclinedKey), version: Updater.currentNumber,
+                   scripted: ScriptRunner.path != nil, locked: actsLocked)
     }
+
+    /// A scripted check only shows it when it acts as if access were off.
+    nonisolated static func showsGuide(declined: String?, version: String, scripted: Bool, locked: Bool) -> Bool {
+        (!scripted || locked) && declined != version
+    }
+
+    /// A scripted check with --locked acts as if Full Disk Access were off, to see what that looks like.
+    static let actsLocked = ScriptRunner.path != nil && CommandLine.arguments.contains("--locked")
+
+    /// Whether every folder may be read. Without Full Disk Access, the ones macOS guards are left alone, so no prompt ever
+    /// comes up: Full Disk Access is the one thing Headroom asks for.
+    static func mayReadEverything() -> Bool { !actsLocked && DiskScan.hasFullDiskAccess() }
 
     // MARK: Search
 

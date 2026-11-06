@@ -99,14 +99,14 @@ final class DiskScan: @unchecked Sendable {
     /// What to watch in the change journal, for a refresh after this.
     var watchRoots: [String] { ChangeJournal.roots(of: tree) }
 
-    init(facts: VolumeFacts, rules: RuleBook, fullAccess: Bool, askPerFolder: Bool) {
+    init(facts: VolumeFacts, rules: RuleBook, fullAccess: Bool) {
         self.facts = facts
         self.rules = rules
         tree.volumeName = facts.name
         tree.capacityBytes = facts.capacity
         tree.freeBytes = facts.free
         tree.rootPath = facts.mountPath
-        scanner = Scanner(tree: tree, rules: rules, touchGuarded: fullAccess || askPerFolder)
+        scanner = Scanner(tree: tree, rules: rules, touchGuarded: fullAccess)
         if facts.isBoot { planBootDisk() } else { planExternalDisk() }
     }
 
