@@ -27,7 +27,7 @@ Measured on an M5 MacBook Air with 2.1 million files on a 494 GB disk:
 | Searching every name on the map | 2 to 14 ms per keystroke, across about 324,000 folders and files |
 | Sizing up `~/Library`, 376,000 files | 1.7 s |
 | Checking 47 things before a clean | 0.35 s, then 9 ms each time you tick one more |
-| Sitting open | 0% CPU and 130–150 MB of memory |
+| Sitting open | 0% CPU and 95–115 MB of memory |
 
 ## Honest about space
 
@@ -94,8 +94,11 @@ open it, reveal it in the Finder, open it in Terminal or send it to the Trash.
 
 ## Get started
 
-Headroom needs macOS 26 or later, and has been built and tested on Apple silicon. There's no download yet, so clone this
-repository and build Headroom with Xcode's command line tools. In the repository's folder:
+Headroom needs macOS 26 or later on a Mac with Apple silicon. Download the disk image from [Releases](../../releases),
+open it and drag Headroom to Applications. This beta isn't notarized by Apple, so the first time you open Headroom, macOS
+stops it. Open **System Settings → Privacy & Security**, click **Open Anyway** next to Headroom, and open Headroom again.
+
+To build Headroom yourself, clone this repository and use Xcode's command line tools. In the repository's folder:
 
 ```bash
 ./build.sh
