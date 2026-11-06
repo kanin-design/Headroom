@@ -28,7 +28,7 @@ Measured on an M5 MacBook Air with 2.1 million files on a 494 GB disk:
 | Searching every name on the map | 2 to 14 ms per keystroke, across about 324,000 folders and files |
 | Sizing up `~/Library`, 376,000 files | 1.7 s |
 | Checking 47 things before a clean | 0.35 s, then 9 ms each time you tick one more |
-| Sitting open | 0% CPU and 95–115 MB of memory |
+| Sitting open | 0% CPU and 130–150 MB of memory |
 
 ## Honest about space
 
@@ -78,8 +78,9 @@ box to select everything in it, or open the box to pick one thing at a time. Not
 
 ![Changes: what was new or changed in the last seven days, each folder coloured from red for a little to yellow for all of it, with a list of the folders responsible](docs/changes.jpg)
 
-What grew since the last scan, or in the last day, week or month. Each piece is coloured by how much of it is new or changed, red for a little
-and yellow for all of it, the middle says how much free space changed, and the panel lists what grew and what shrank.
+What grew since the last scan, or in the last day, week or month. Each piece is coloured by how much of it is new or
+changed, red for a little and yellow for all of it. The middle says how much free space changed, when there's an earlier
+scan to compare with, or otherwise how much was touched, going by file dates. The panel lists what grew or was touched.
 
 Or the other way round: what nothing has changed in for a month, three months or a year, deep blue for a little and
 pale ice for all of it. An app you opened, a film you watched or a game you played in that time counts as touched,
@@ -87,7 +88,7 @@ however old its files are.
 
 ### Search
 
-![Search: 70 matches for "mkv", each with its path and size, all of them lit up on the ring](docs/search.jpg)
+![Search: 65 matches for "mkv", each with its path and size, all of them lit up on the ring](docs/search.jpg)
 
 Press ⌘F and type. The matches are listed as you type, biggest first, each with its path and size, and they light up on
 the ring. Capitals and accents don't matter, in any alphabet.
@@ -116,7 +117,7 @@ open build/Headroom.app
 The first time, Headroom explains what macOS keeps private and shows you where to switch on Full Disk Access. Until then
 it reads nothing at all, so macOS never asks you about a folder: the ring shows only what the disk itself reports, and
 Headroom reads the whole disk the moment it may. A build is signed with a certificate called Headroom if your
-keychain has one, and otherwise with your development certificate, so the permission survives rebuilds.
+keychain has one, and otherwise with your development certificate if you have one, so the permission survives rebuilds.
 
 When there's a new version, Headroom says so at launch and can put it in place itself. Say Not This Version and it waits
 for the one after. **Check for Updates…** in the Headroom menu, or in About, looks again whenever you like. Every
@@ -131,12 +132,15 @@ before you press **Clean**.
 | | |
 |---|---|
 | ⌘1, ⌘2, ⌘3 | Map, Changes, Free Up |
+| ⇧⌘↑ | Back to the whole disk |
+| ⇧⌘P | Show or hide the panel |
 | ⌘F | Find a file or folder |
 | Space | A closer look at what you're pointing at |
 | Esc | Up a level |
 | ⌘[, ⌘] | Back and forward through where you've been |
 | ⌘C, ⌥⌘C | Copy the name, or the path |
 | ⌘O, ⌥⌘R | Open, or reveal in the Finder |
+| ⌘⌫ | Select or unselect it in Free Up |
 | ⌘Z | Undo the last Send to Trash or clean |
 | ⌘R | Read the disk again, at full power |
 | Hold ⌥ in Free Up | See the disk as it will be afterwards |
@@ -149,11 +153,13 @@ How Headroom is designed, with every measurement, is in [DESIGN.md](DESIGN.md).
 
 | Where | What |
 |---|---|
-| `Model/Scanner.swift` | The scan: `getattrlistbulk` on a thread pool, big things first, then the rest at low priority |
+| `Model/Scanner.swift` | The scan: `getattrlistbulk` on a thread pool, big things first. A refresh reads only what changed and copies the rest |
+| `Model/ChangeJournal.swift` | Which folders changed since a scan, from the record of changes macOS keeps |
 | `Advice/Walker.swift` | Looking closely at one folder: its size, newest change, largest file and files with more than one name |
 | `Advice/Cleaner.swift` | Everything that touches files, behind one set of checks |
 | `Advice/Sections.swift` | The Free Up boxes |
 | `Render/Shaders.metal` | Each piece's shape and light, the glow and the scale |
+| `App/Updater.swift` | New versions from GitHub's releases, taken only when signed with the same certificate |
 
 - `swift test` runs the tests, on made-up disks.
 - `build/Headroom.app/Contents/MacOS/Headroom --script steps.txt` drives the whole app from a script, without touching
@@ -161,4 +167,7 @@ How Headroom is designed, with every measurement, is in [DESIGN.md](DESIGN.md).
   throwaway disk image named `HeadroomTest`.
 - `--hide-names` swaps every folder and file name for a made-up one, for screenshots. With `--script`, put it last.
 - `--no-cache` starts without the saved scan, to see what a first launch looks like.
+- `--locked`, with `--script`, acts as if Full Disk Access were off, to see what that looks like.
+- `./release.sh` makes the release disk image, signed with the certificate called Headroom. A release signed any other
+  way would be turned down by every copy that updates itself.
 - The app icon is an Icon Composer document, `Resources/AppIcon.icon`. After changing it, run `Resources/make-icon.sh`.

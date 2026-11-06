@@ -6,8 +6,8 @@ import SwiftUI
 /// checked by eye without anyone at the mouse. Started with `--script steps.txt`, and it keeps its data apart from yours.
 /// It can look and click, but it can't move your files: the app may hold Full Disk Access, and that shouldn't be
 /// something another program can script. Its clean, empty and undo steps are stopped by `Cleaner.onlyInside` anywhere but
-/// a throwaway test disk. `--no-cache` starts without the saved scan, and `--locked` leaves the guarded folders alone,
-/// as on a first launch.
+/// a throwaway test disk. `--no-cache` starts without the saved scan, and `--locked` acts as if Full Disk Access were off,
+/// so nothing is read, as on a first launch without it.
 ///
 ///     wait 1.5                 pause, in seconds
 ///     scanned                  wait until the running scan has finished
