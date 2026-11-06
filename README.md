@@ -73,7 +73,7 @@ box to select everything in it, or open the box to pick one thing at a time. Not
 
 ### Changes
 
-![Changes: what grew in the last seven days, in heat colours on the ring, with a list of the folders responsible](docs/changes.jpg)
+![Changes: what was new or changed in the last seven days, each folder coloured from red for a little to yellow for all of it, with a list of the folders responsible](docs/changes.jpg)
 
 What grew since the last scan, or in the last day, week or month. Each piece is coloured by how much of it is new or changed, red for a little
 and yellow for all of it, the middle says how much free space changed, and the panel lists what grew and what shrank.

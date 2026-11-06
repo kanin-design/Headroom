@@ -61,7 +61,8 @@ import SwiftUI
 ///     window 7                 pick a Changes window, in days, or 0 for the last scan
 ///     search text
 ///     panel on|off
-///     size 1440 900
+///     size 1440 900            the window's size. size 1440 900 0 40 also puts its top left corner there on the screen,
+///                              away from wherever your real pointer is resting
 ///     timescale 0.1            slow every animation down
 ///     mouse x y                move the real pointer path, in window points
 ///     click x y
@@ -518,10 +519,13 @@ enum ScriptRunner {
             model.panelOpen = argument != "off"
         case "size":
             let numbers = argument.split(separator: " ").compactMap { Double($0) }
-            if numbers.count == 2, let w = mainWindow {
+            if numbers.count == 2 || numbers.count == 4, let w = mainWindow {
                 var frame = w.frame
                 frame.origin.y += frame.height - numbers[1]
                 frame.size = CGSize(width: numbers[0], height: numbers[1])
+                if numbers.count == 4, let screen = w.screen ?? NSScreen.main {
+                    frame.origin = CGPoint(x: screen.frame.minX + numbers[2], y: screen.frame.maxY - numbers[3] - numbers[1])
+                }
                 w.setFrame(frame, display: true)
             }
         case "timescale":
