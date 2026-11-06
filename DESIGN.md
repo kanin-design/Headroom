@@ -58,7 +58,9 @@ sunburst in the reference:
 - **Sorted clockwise from 12 o'clock,** biggest first, so position gives you the rank. Free space closes
   the circle.
 - **Rings that don't lie about area.** In a normal sunburst the same angle covers more area further out.
-  Rings get thinner as they go out to offset that.
+  Rings get thinner as they go out to offset that. Free space and what's hidden have nothing inside them to
+  draw, so they reach as far out as the rest of the disk does on average, and cover the same share of the
+  ring as of the disk.
 - **Tidy edges.** Slivers too small to see merge into one "smaller items" piece, so the outer edge reads
   as shape and not noise.
 - **Light that carries meaning.** Colours are in the wider Display P3 range. In Map they hold back a step at

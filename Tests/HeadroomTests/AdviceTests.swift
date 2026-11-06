@@ -668,6 +668,22 @@ final class LayoutTests: XCTestCase {
         let free = layout.pieces.first { $0.node == disk.tree.free }
         XCTAssertEqual(free?.bytes, 200_000_000_000)
     }
+
+    func testFreeAndHiddenCoverTheirShareOfTheRing() {
+        // Nothing inside Free or Hidden is drawn, so how far out they reach decides how big they look.
+        let disk = FakeDisk(capacity: 400_000_000_000, free: 100_000_000_000)
+        disk.file("/Volumes/Fake/A/B/C/deep.bin", 150_000_000_000)
+        disk.file("/Volumes/Fake/D/shallow.bin", 110_000_000_000)
+        disk.tree.nodes[Int(disk.tree.hidden)].bytes = 40_000_000_000
+        disk.finish()
+        let layout = RingLayout.build(tree: disk.tree, focus: 0, colorer: { _ in .zero })
+        func area(_ p: Piece) -> Double { Double(p.sweep) * Double(p.r1 * p.r1 - p.r0 * p.r0) }
+        let drawn = layout.pieces.filter { !$0.isMark }.map(area).reduce(0, +)
+        for (id, share) in [(disk.tree.free, 0.25), (disk.tree.hidden, 0.10)] {
+            let piece = layout.pieces.first { $0.node == id }
+            XCTAssertEqual(piece.map(area) ?? 0, share * drawn, accuracy: 0.002 * drawn)
+        }
+    }
 }
 
 final class SafetyTests: XCTestCase {

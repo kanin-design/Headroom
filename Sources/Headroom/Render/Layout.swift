@@ -64,6 +64,7 @@ struct RingLayout {
         let scale = (1.0 - hole) / (edges[edges.count - 1] - hole)
         edges = edges.map { hole + ($0 - hole) * scale }
         layout.place(tree, parentNode: focus, parentPiece: -1, a0: 0, a1: 2 * .pi, ring: 0, edges: edges, colorer: colorer)
+        if isRoot { layout.reachLikeTheRest(free: tree.free, hidden: tree.hidden, atLeast: edges[2]) }
 
         // A shallow folder gets thicker rings, so the picture fills the same space and every level is easier to see.
         if !isRoot, let deepest = layout.pieces.map(\.ring).max(), Int(deepest) + 2 < edges.count {
@@ -219,6 +220,21 @@ struct RingLayout {
         return h
     }
 
+    /// Free space and what's hidden are shapes of their own, the free wedge being the thing that grows when you clean up.
+    /// Nothing inside them is drawn, so a fixed depth would make them look bigger or smaller than they are. They reach as
+    /// far out as the rest of the disk does on average instead, so each covers the same share of the ring as of the disk.
+    private mutating func reachLikeTheRest(free: UInt32, hidden: UInt32, atLeast: Float) {
+        func isOwnShape(_ p: Piece) -> Bool { p.ring == 0 && (p.node == free || p.node == hidden) }
+        var area: Float = 0, sweep: Float = 0
+        for p in pieces where !p.isMark && !isOwnShape(p) {
+            area += p.sweep * (p.r1 * p.r1 - p.r0 * p.r0)
+            if p.ring == 0 { sweep += p.sweep }
+        }
+        // With nothing else drawn yet, they are the whole disk between them and can fill the ring.
+        let reach = sweep > 0 ? min(max((Self.hole * Self.hole + area / sweep).squareRoot(), atLeast), 1) : 1
+        for i in pieces.indices where isOwnShape(pieces[i]) { pieces[i].r1 = reach }
+    }
+
     private mutating func place(_ tree: DiskTree, parentNode: UInt32, parentPiece: Int32,
                                 a0: Float, a1: Float, ring: Int, edges: [Float], colorer: Colorer) {
         guard ring + 1 < edges.count else { return }
@@ -276,12 +292,7 @@ struct RingLayout {
             if n.has(NodeFlag.free) { style = 1 }
             else if n.has(NodeFlag.hidden) || n.has(NodeFlag.locked) { style = 2 }
             else if !n.has(NodeFlag.directory) && !n.has(NodeFlag.synthetic) { style = 4 }
-            // Free space runs the full depth of the ring: it's a real shape, the thing that grows when you clean up.
-            // What's hidden goes a little way out, so it can't be mistaken for free.
-            var outer = r1
-            if id == tree.free { outer = 1 }
-            else if id == tree.hidden { outer = edges[min(ring + 3, edges.count - 1)] }
-            pieces.append(Piece(node: id, tail: id, key: Self.pathKey(tree, id), a0: angle, a1: angle + sweep, r0: r0, r1: outer,
+            pieces.append(Piece(node: id, tail: id, key: Self.pathKey(tree, id), a0: angle, a1: angle + sweep, r0: r0, r1: r1,
                                 ring: Int32(ring), parent: parentPiece, end: index + 1, isSmaller: false, smallerCount: 0,
                                 color: color, style: style, seed: seed, bytes: bytes, planned: plannerNow?(id) == true ? 1 : 0))
             if n.firstChild != 0 {

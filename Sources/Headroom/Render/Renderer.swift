@@ -29,6 +29,7 @@ struct UniformsGPU {
     var glowAtRest: Float = 1
     var previewShare: Float = 0     // what the thing you're pointing at would add to that
     var ghostCount: Float = 0       // how many colours it has
+    var freeOuter: Float = 1        // how far out the free wedge reaches, as a share of the radius
     var previewColor: SIMD4<Float> = .zero
     // Each colour's RGB, and in w where it ends, as a share of the whole. As long as `MapEngine.ghostSliceLimit`.
     var ghostSlices: (SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>)

@@ -29,6 +29,7 @@ struct Uniforms {
     float glowAtRest;       // how much glow a piece gives off until you point at it, 0...1
     float previewShare;     // what the thing you're pointing at would add to the free space
     float ghostCount;       // how many colours the new free space has
+    float freeOuter;        // how far out the free wedge reaches, as a share of the radius
     float4 previewColor;
     float4 ghostSlices[12]; // each colour, and in w where it ends, as a share of the whole
 };
@@ -291,7 +292,7 @@ fragment float4 composite(QuadOut in [[stage_in]],
         float back = u.freeStart - a;
         back -= full * floor(back / full);
         float arc = back * rPx;
-        float inner = 0.34 * u.radius, outer = u.radius;
+        float inner = 0.34 * u.radius, outer = u.freeOuter * u.radius;
         float rad = max(inner - rPx, rPx - outer);
         if (u.ghost > 0.0005) {
             float along = max(-arc, arc - sweep * rPx);

@@ -384,6 +384,7 @@ final class MapEngine {
         if let free = layout.pieces.first(where: { $0.style == 1 }) {
             u.ghost = ghostNow
             u.freeStart = free.a0
+            u.freeOuter = free.r1
             u.previewShare = previewNow
             u.previewColor = SIMD4(previewColor, 0)
             u.ghostCount = Float(ghostSlices.count)
