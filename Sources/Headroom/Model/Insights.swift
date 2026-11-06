@@ -374,7 +374,7 @@ enum Wins {
         let nodes = tree.nodes
         if let trash, tree.totals[Int(trash)] > 1_000_000 {
             var row = WinRow(id: "trash", title: "Already in the Trash", subtitle: "Thrown away, but still using space", detail: "This space only comes back once the Trash is emptied, and emptying it is always your last step.",
-                             tier: .noLoss, nodes: [trash], bytes: tree.totals[Int(trash)], paperBytes: 0, action: .emptyTrash, command: nil, bundleID: nil)
+                             tier: .noLoss, nodes: [trash], bytes: Accounting.reclaimable([trash], in: tree), paperBytes: 0, action: .emptyTrash, command: nil, bundleID: nil)
             row.isQuick = true
             rows.append(row)
         }

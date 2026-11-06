@@ -4,7 +4,7 @@
 
 <p align="center">
   <b>See where your disk space went, and get it back. Fast.</b><br>
-  A native Mac app, written in Swift and Metal. Version 0.0.3, an early beta.
+  A native Mac app, written in Swift and Metal. Version 0.0.4, an early beta.
 </p>
 
 ![Headroom's map of a whole disk: a glowing ring of folders, each group in its own colour, with free space as an open wedge and the biggest folders listed beside the ring](docs/map.jpg)

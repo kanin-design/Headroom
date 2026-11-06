@@ -353,6 +353,12 @@ extension AppModel {
     // MARK: Selecting
 
     /// What Send to Trash in the File menu means right now, where the pointer can't be on anything else.
+    /// Whether this can be sent to the Trash as it is, which the Delete submenu and the File menu both go by.
+    func canSendToTrash(_ node: UInt32) -> Bool {
+        guard node != 0, let tree, let raw = tree.path(node) else { return false }
+        return Safety.canTrash(raw)
+    }
+
     var trashTitle: String {
         let node = selected ?? focus
         return node == 0 ? "Send to Trash" : "Send “\(realName(of: node))” to Trash"

@@ -309,7 +309,12 @@ final class AppModel {
         guard let facts = VolumeFacts.read(path: volume.mountPath) else { return }
         self.volume = facts
         hasFullAccess = Self.mayReadEverything()
-        guard hasFullAccess else { return showWithoutAccess(facts) }
+        guard hasFullAccess else {
+            showWithoutAccess(facts)
+            // Asking to read the disk again, with nothing allowed to be read, brings up the way to allow it.
+            if hurry { accessGuideRequests += 1 }
+            return
+        }
         let scan = DiskScan(facts: facts, rules: rules, fullAccess: hasFullAccess)
         activeScan = scan
         isScanning = true

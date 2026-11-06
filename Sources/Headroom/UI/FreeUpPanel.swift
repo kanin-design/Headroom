@@ -40,12 +40,16 @@ struct FreeUpPanel: View {
 
     private var emptyState: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(model.focus == 0 ? "Nothing here needs doing." : "Nothing in here stands out.")
+            // With nothing read, there's no knowing what could go.
+            Text(!model.hasFullAccess ? "What could go shows once Headroom has Full Disk Access." : model.focus == 0 ? "Nothing here needs doing." : "Nothing in here stands out.")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.white.opacity(0.85))
-            Text("If you know better, click any piece on the ring to pick it yourself.")
-                .font(.system(size: 11.5))
-                .foregroundStyle(.white.opacity(0.5))
+                .fixedSize(horizontal: false, vertical: true)
+            if model.hasFullAccess {
+                Text("If you know better, click any piece on the ring to pick it yourself.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.white.opacity(0.5))
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)

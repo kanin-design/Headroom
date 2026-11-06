@@ -54,6 +54,8 @@ final class Updater {
 
     private static let skippedKey = "skippedUpdate"
     private static let releases = URL(string: "https://api.github.com/repos/kanin-design/Headroom/releases?per_page=20")!
+    /// What Headroom is and how it works, for Help.
+    static let readme = URL(string: "https://github.com/kanin-design/Headroom#readme")!
     /// A scripted check reads its releases from a file instead.
     private static var feedFile: URL? {
         let args = CommandLine.arguments

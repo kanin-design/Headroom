@@ -217,8 +217,13 @@ struct MapPanel: View {
         let biggest = model.flatTop(tree).first
         let canGo = model.suggestions.everything.filter { $0.isQuick }.reduce(UInt64(0)) { $0 &+ $1.bytes }
         return VStack(alignment: .leading, spacing: 10) {
-            if let biggest {
-                Text("Your disk is \(Int(fullness * 100))% full. \(model.displayName(biggest)) is the biggest thing \(tree.isPartial ? "found so far" : "on it"), at \(formatBytes(tree.totals[Int(biggest)])).")
+            if !model.hasFullAccess {
+                Text("Your disk is \(Int((fullness * 100).rounded()))% full. What's on it shows once Headroom has Full Disk Access.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.white.opacity(0.78))
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if let biggest {
+                Text("Your disk is \(Int((fullness * 100).rounded()))% full. \(model.displayName(biggest)) is the biggest thing \(tree.isPartial ? "found so far" : "on it"), at \(formatBytes(tree.totals[Int(biggest)])).")
                     .font(.system(size: 13))
                     .foregroundStyle(.white.opacity(0.78))
                     .fixedSize(horizontal: false, vertical: true)
@@ -587,7 +592,8 @@ struct ChangesPanel: View {
                 if !model.changeRows.isEmpty { scale }
             }
             if model.changeRows.isEmpty {
-                Text(untouched ? "Nothing big has been left that long." : model.changeUsesHistory ? "Nothing grew by much." : "Nothing much was touched.")
+                Text(!model.hasFullAccess ? "What changed shows once Headroom has Full Disk Access."
+                     : untouched ? "Nothing big has been left that long." : model.changeUsesHistory ? "Nothing grew by much." : "Nothing much was touched.")
                     .font(.system(size: 12.5))
                     .foregroundStyle(.white.opacity(0.55))
             } else {

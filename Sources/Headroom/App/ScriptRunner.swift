@@ -284,7 +284,7 @@ enum ScriptRunner {
         case "clipboard":
             print("clipboard \(argument): \(AppModel.clipboard.string(forType: .string) ?? "nothing") | pill: \(model.tip ?? "none")")
         case "menubar":
-            for title in ["File", "Edit", "View"] {
+            for title in (NSApp.mainMenu?.items ?? []).map(\.title) {
                 let items = NSApp.mainMenu?.items.first { $0.title == title }?.submenu?.items ?? []
                 func refresh(_ menu: NSMenu) {
                     menu.delegate?.menuNeedsUpdate?(menu)
@@ -293,7 +293,8 @@ enum ScriptRunner {
                 }
                 NSApp.mainMenu?.items.first { $0.title == title }?.submenu.map(refresh)
                 func words(_ items: [NSMenuItem]) -> String {
-                    items.filter { !$0.isSeparatorItem }.map { item in
+                    // Hidden items are only there for their keys, such as the Globe key's, and nobody sees them.
+                    items.filter { !$0.isSeparatorItem && !$0.isHidden }.map { item in
                         var keys = ""
                         if item.keyEquivalentModifierMask.contains(.shift) { keys += "⇧" }
                         if item.keyEquivalentModifierMask.contains(.option) { keys += "⌥" }

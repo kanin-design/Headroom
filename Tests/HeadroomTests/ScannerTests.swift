@@ -134,7 +134,9 @@ final class ScannerTests: XCTestCase {
         var limit = rlimit()
         XCTAssertEqual(getrlimit(RLIMIT_NOFILE, &limit), 0)
         let before = limit
-        limit.rlim_cur = 96
+        // Short of files for eight workers, whatever the tests before this one left open: they all count against the limit.
+        let open = (try? FileManager.default.contentsOfDirectory(atPath: "/dev/fd").count) ?? 32
+        limit.rlim_cur = rlim_t(open + 64)
         XCTAssertEqual(setrlimit(RLIMIT_NOFILE, &limit), 0)
         defer {
             var back = before

@@ -44,8 +44,9 @@ private struct SendToTrashCommand: View {
 
     var body: some View {
         let node = model.selected ?? model.focus
+        // The same rule as the Delete submenu on the thing itself: what's protected stays, and says so by being off.
         Button(model.trashTitle) { model.sendToTrash(NamedThing(node)) }
-            .disabled(node == 0)
+            .disabled(!model.canSendToTrash(node))
     }
 }
 
@@ -143,6 +144,12 @@ struct HeadroomApp: App {
                     .keyboardShortcut("p", modifiers: [.command, .shift])
                 Divider()
             }
+            // Help is the README, where everything is explained. There's no sidebar to toggle.
+            CommandGroup(replacing: .help) {
+                Button("Headroom Help") { NSWorkspace.shared.open(Updater.readme) }
+                    .keyboardShortcut("?", modifiers: .command)
+            }
+            CommandGroup(replacing: .sidebar) {}
             CommandGroup(after: .textEditing) {
                 Button("Find") {
                     AppModel.shared.searchActive = true
