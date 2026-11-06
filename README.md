@@ -22,6 +22,7 @@ Measured on an M5 MacBook Air with 2.1 million files on a 494 GB disk:
 | | |
 |---|---|
 | Opening Headroom again | The map is on screen in about 0.2 s, from the last scan |
+| Bringing the map up to date | Only what changed since is read, in about a third of the time it takes to read everything |
 | A first launch | Half of the disk is placed in 0.4 s, and about three quarters within a second |
 | Reading the whole disk again (⌘R) | 6.9 s. `du` takes 40 s on the same disk, and collects less |
 | Searching every name on the map | 2 to 14 ms per keystroke, across about 324,000 folders and files |
@@ -77,6 +78,10 @@ box to select everything in it, or open the box to pick one thing at a time. Not
 
 What grew since the last scan, or in the last day, week or month. Each piece is coloured by how much of it is new or changed, red for a little
 and yellow for all of it, the middle says how much free space changed, and the panel lists what grew and what shrank.
+
+Or the other way round: what nothing has changed in for a month, three months or a year, deep blue for a little and
+pale ice for all of it. An app you opened, a film you watched or a game you played in that time counts as touched,
+however old its files are.
 
 ### Search
 

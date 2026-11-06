@@ -57,9 +57,14 @@ final class NameStore: @unchecked Sendable {
 final class DiskTree: @unchecked Sendable {
     static let capacity = 48_000_000
     static let namesCapacity = 3_000_000_000
-    /// Fields per node in `stats`: bytes per Kind, then recency, all in units of 16 KiB.
-    static let statStride = 16
+    /// Fields per node in `stats`: bytes per Kind, then recency, all in units of 16 KiB. Recency is what changed in the last
+    /// so many days: 1, 7, 30 and 14, then three months and a year, which say by what's left what's gone untouched.
+    static let statStride = 18
     static let statRecent1 = Kind.count, statRecent7 = Kind.count + 1, statRecent30 = Kind.count + 2, statRecent14 = Kind.count + 3
+    static let statRecent91 = Kind.count + 4, statRecent365 = Kind.count + 5
+    /// Each recency field, and how many days back it reaches.
+    static let recency: [(field: Int, days: UInt32)] = [(statRecent1, 1), (statRecent7, 7), (statRecent14, 14), (statRecent30, 30),
+                                                        (statRecent91, 91), (statRecent365, 365)]
 
     let nodes: UnsafeMutablePointer<Node>
     /// One row per node until `compactStats`, and only the different rows after it. Read it through `statRow`.
@@ -89,9 +94,23 @@ final class DiskTree: @unchecked Sendable {
     var displayNames: [UInt32: String] = [:]
     /// Files with more than one path, by key, once the scan has finished. See `Accounting`.
     var links: [LinkRecord] = []
+    /// Hard-linked files with only one of their paths on the map. A refresh reads their folders again, as it does the
+    /// folders in `links`, so it always knows where each one is counted.
+    var singleLinks: [LinkRecord] = []
 
     var finishedAt = Date()
     var scanSeconds = 0.0
+    /// Every folder and big file the scan found, as it left them. Only a whole map can be the start of a refresh, and taking
+    /// something out of it by hand, after a clean, makes it a picture of what's expected rather than of what was read.
+    var isWhole = false
+    /// Whether the folders macOS guards were read.
+    var readGuarded = false
+    /// Where the disk's change journal was when this was read, so a refresh can ask what has changed since.
+    var journal: ChangeJournal.Place?
+    /// When every folder was last read from the disk, rather than copied over from the map before.
+    var fullReadAt = Date.distantPast
+    /// How many bytes of names are in use, once they're packed.
+    private(set) var nameBytes = 0
 
     // Well-known nodes.
     var home: UInt32 = 0
@@ -168,6 +187,7 @@ final class DiskTree: @unchecked Sendable {
 
     /// Takes a removed folder or file out of the sums, so the ring can update at once without a new scan.
     func remove(_ id: UInt32) {
+        isWhole = false
         let bytes = totals[Int(id)], files = totalFiles[Int(id)]
         let parent = nodes[Int(id)].parent
         markSubtree(id, gone: true)
@@ -195,6 +215,7 @@ final class DiskTree: @unchecked Sendable {
 
     /// Adds bytes to a node, and to everything above it.
     func add(_ bytes: UInt64, to id: UInt32) {
+        isWhole = false
         nodes[Int(id)].bytes &+= bytes
         var i = id
         while true {
@@ -216,6 +237,7 @@ final class DiskTree: @unchecked Sendable {
 
     /// Takes bytes out of a node's own, and out of everything above it.
     func subtract(_ bytes: UInt64, from id: UInt32) {
+        isWhole = false
         let amount = min(bytes, nodes[Int(id)].bytes)
         nodes[Int(id)].bytes &-= amount
         var i = id
@@ -228,6 +250,7 @@ final class DiskTree: @unchecked Sendable {
 
     /// Puts back something taken out with `remove`: it never stopped knowing what it held.
     func restore(_ id: UInt32) {
+        isWhole = false
         markSubtree(id, gone: false)
         let parent = nodes[Int(id)].parent
         let bytes = totals[Int(id)], files = totalFiles[Int(id)]
@@ -249,6 +272,11 @@ final class DiskTree: @unchecked Sendable {
             if i == 0 { break }
             i = nodes[Int(i)].parent
         }
+    }
+
+    /// The folders the scan started from, by their paths. They're always among the first nodes.
+    var anchors: [(path: String, id: UInt32)] {
+        (0..<min(count, 64)).compactMap { i in nodes[i].has(NodeFlag.anchor) ? (rawName(UInt32(i)), UInt32(i)) : nil }
     }
 
     /// Finds a node by its absolute path, by walking down from the scan roots.
@@ -372,11 +400,12 @@ final class DiskTree: @unchecked Sendable {
         }
     }
 
-    /// Runs once after the scan: totals, kinds, recency, sorted children and subtree ranges.
-    func finish() {
+    /// Runs once after the scan: totals, kinds, recency, sorted children and subtree ranges. `totalsReady` when they've just
+    /// been added up, so they aren't added up twice.
+    func finish(totalsReady: Bool = false) {
         let n = count
         guard n > 0 else { return }
-        sumTotals()
+        if !totalsReady { sumTotals() }
         let stride = Self.statStride
         for i in 0..<n {
             totalFiles[i] = nodes[i].fileCount
@@ -508,6 +537,53 @@ final class DiskTree: @unchecked Sendable {
         }
         nameStore = packed
         names = packed.pointer
+        nameBytes = Int(used)
+    }
+
+    // MARK: Saving and reading back
+
+    /// For saving a finished tree: its different rows of numbers, and which one each node has.
+    var packedStats: (rows: UnsafePointer<UInt32>, rowCount: Int, index: UnsafePointer<UInt32>)? {
+        guard let statIndex else { return nil }
+        return (UnsafePointer(statTable), Int(nextStatRow), UnsafePointer(statIndex))
+    }
+
+    /// For reading one back: room for its rows and its index, to be filled in, as `compactStats` would have left them.
+    func roomForPackedStats(rowCount: Int, nodes n: Int) -> (rows: UnsafeMutablePointer<UInt32>, index: UnsafeMutablePointer<UInt32>) {
+        vmFree(statTable, Self.capacity * Self.statStride)
+        let capacity = 2 * n + rowCount + 1
+        statTable = vmAlloc(UInt32.self, capacity * Self.statStride)
+        let index = vmAlloc(UInt32.self, n)
+        statIndex = index
+        statRowCapacity = capacity
+        statIndexCount = n
+        nextStatRow = UInt32(rowCount)
+        return (statTable, index)
+    }
+
+    /// The names of a tree read back, already packed.
+    func readNames(_ bytes: Int) -> UnsafeMutablePointer<UInt8> {
+        nameBytes = bytes
+        return names
+    }
+
+    /// After reading a whole map back: the sums that weren't saved, because they're quicker to add up again than to read.
+    func restoreSums() {
+        let n = count
+        guard n > 0 else { return }
+        sumTotals()
+        for i in 0..<n {
+            totalFiles[i] = nodes[i].fileCount
+            aliasTotals[i] = nodes[i].has(NodeFlag.directory) ? nodes[i].aliasBytes : 0
+        }
+        var i = n - 1
+        while i > 0 {
+            let p = Int(nodes[i].parent)
+            totalFiles[p] &+= totalFiles[i]
+            aliasTotals[p] &+= aliasTotals[i]
+            i -= 1
+        }
+        numberSubtrees()
     }
 
     func sortChildren() {
@@ -583,6 +659,8 @@ struct LinkRecord {
     var when: UInt32
     var kind: UInt8
     var counted: Bool
+    /// A hard link's number of paths, everywhere, as the disk said when this one was read.
+    var paths: UInt16 = 0
 
     /// A clone's key is its clone ID with the top bit set. Any other key is a hard link's file ID.
     var isClone: Bool { key >> 63 != 0 }

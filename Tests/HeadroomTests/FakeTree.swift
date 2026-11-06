@@ -41,7 +41,13 @@ final class FakeDisk {
         }
         tree.nodes[Int(id)] = node
         let s = tree.statTable + Int(id) * DiskTree.statStride
-        if !flags.isDirectory { s[Int(kind.rawValue)] = UInt32(truncatingIfNeeded: bytes >> 14) }
+        if !flags.isDirectory {
+            let units = UInt32(truncatingIfNeeded: bytes >> 14)
+            s[Int(kind.rawValue)] = units
+            // As the scan does: what changed in each of the last so many days.
+            let now = UInt32(Date().timeIntervalSince1970)
+            for (field, days) in DiskTree.recency where modTime >= now &- days * 86_400 { s[field] = units }
+        }
         tree.count = Int(count)
         return id
     }

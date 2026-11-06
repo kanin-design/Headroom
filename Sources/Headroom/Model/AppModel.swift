@@ -212,6 +212,9 @@ final class AppModel {
     @ObservationIgnored let engine = MapEngine()
     @ObservationIgnored let rules = RuleBook(homePath: NSHomeDirectory())
     @ObservationIgnored var activeScan: DiskScan?
+    /// The startup disk's change journal, collected from where the map on screen was read, so that a refresh only reads
+    /// what has changed since.
+    @ObservationIgnored var journal: ChangeJournal.Watcher?
     @ObservationIgnored private var labelTask: Task<Void, Never>?
     @ObservationIgnored private var linksTask: Task<Void, Never>?
     /// The name under the pointer, off the ring: a row, a label, the path under the ring.
@@ -231,6 +234,8 @@ final class AppModel {
     @ObservationIgnored private let colourMemory = ColourMemory()
     @ObservationIgnored var forceTouchGuarded = false
     @ObservationIgnored var cacheLoadMilliseconds = 0.0
+    /// How the last scan went about it, for a scripted check.
+    @ObservationIgnored var lastScanNote = ""
     @ObservationIgnored var lastHoverIndex: Int?
     @ObservationIgnored var lastPointer: (angle: Float, radius: Float)?
     @ObservationIgnored var nameCache: [UInt32: String] = [:]
@@ -250,18 +255,41 @@ final class AppModel {
         guard let volume else { return }
         history = History.points(for: volume)
         let launch = DispatchTime.now()
+        var saved: DiskTree?
         if !CommandLine.arguments.contains("--no-cache"), let cached = TreeCache.load(for: volume) {
             present(cached, transition: .appear)
             cacheLoadMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - launch.uptimeNanoseconds) / 1e6
+            watchJournal(from: cached, on: volume)
+            saved = cached
         }
-        scan()
+        scan(refreshing: saved)
         readOtherDisksQuietly()
+    }
+
+    /// For a saved map: what changed while the app was closed is in the journal, unless so much has happened that reading
+    /// the disk is quicker than going through it.
+    private func watchJournal(from map: DiskTree, on facts: VolumeFacts) {
+        guard facts.isBoot, let place = map.journal, let behind = ChangeJournal.distance(from: place, for: facts.mountPath),
+              behind < 3_000_000 else { return }
+        journal?.stop()
+        journal = ChangeJournal.Watcher(from: place, roots: ChangeJournal.roots(of: map))
+    }
+
+    /// The map a quiet scan can refresh, reading only what has changed since: one the startup disk's scan left whole, read
+    /// in full within the last day, by this build and the same way, and that the journal has been watched from.
+    private func refreshable(_ map: DiskTree?, facts: VolumeFacts, scan: DiskScan) -> DiskTree? {
+        guard facts.isBoot, !HiddenNames.isOn, let map, map.isWhole, !map.isPartial, let place = map.journal,
+              map.rootPath == facts.mountPath, Date().timeIntervalSince(map.fullReadAt) < 86_400,
+              map.readGuarded == scan.scanner.touchGuarded,
+              let journal, journal.base == place, journal.roots == scan.watchRoots else { return nil }
+        return map
     }
 
     /// Reads the disk. With no map on screen, you get a picture from the first frame that fills in as the scan goes, and it
     /// works like any other map. With a map on screen, the scan stays out of the way and the map glides to the new numbers
-    /// at the end. `hurry` is for when you asked: it runs at full power, even if a quiet scan is already under way.
-    func scan(hurry: Bool = false) {
+    /// at the end, and it only reads what has changed since that map, when it can. `hurry` is for when you asked: it runs at
+    /// full power and reads everything, even if a quiet scan is already under way. `readAll` reads everything quietly.
+    func scan(hurry: Bool = false, readAll: Bool = false, refreshing given: DiskTree? = nil) {
         if isScanning {
             if hurry {
                 scanIsHurrying = true
@@ -287,9 +315,38 @@ final class AppModel {
         let mode: ScanMode = hurry ? .full : (showPictures ? .firstLook : .quiet)
         // Free space, macOS and swap come straight from the disk, so the very first frame already has them.
         if showPictures { show(scan.picture()) }
+        let base = hurry || readAll ? nil : refreshable(given ?? tree, facts: facts, scan: scan)
+        if base == nil, facts.isBoot {
+            // Everything's read, and the journal is watched from here, for the refresh after.
+            journal?.stop()
+            journal = ChangeJournal.Watcher.starting(roots: scan.watchRoots)
+            scan.place = journal?.base
+        }
+        let journal = base == nil ? nil : self.journal
 
         Thread.detachNewThread { [weak self] in
             Thread.current.qualityOfService = .userInitiated
+            var note = "read everything"
+            if let base, let journal {
+                // At launch, what happened while the app was closed comes first.
+                let asked = Date()
+                if let place = base.journal, journal.waitForHistory(timeout: 6), let taken = journal.take(from: place) {
+                    if scan.refresh(from: base, changes: taken.changes, place: taken.next) {
+                        note = String(format: "refreshed: %.2f s for the journal, %d folders changed, %d of the map's read again",
+                                      Date().timeIntervalSince(asked), taken.changes.folders.count, scan.foldersToRead)
+                    } else {
+                        scan.place = taken.next
+                    }
+                } else {
+                    let fresh = ChangeJournal.Watcher.starting(roots: scan.watchRoots)
+                    scan.place = fresh?.base
+                    DispatchQueue.main.async {
+                        guard let self, self.scanGeneration == generation else { fresh?.stop(); return }
+                        self.journal?.stop()
+                        self.journal = fresh
+                    }
+                }
+            }
             // A picture is a copy of the whole tree, so there's never a second one waiting behind one nobody has looked at yet.
             let pictureWaiting = LockedFlag()
             let windowHidden = self?.windowHidden
@@ -304,6 +361,15 @@ final class AppModel {
                     if let picture { self.show(picture) }
                 }
             })
+            if scan.surprised {
+                DispatchQueue.main.async {
+                    guard let self, self.scanGeneration == generation else { return }
+                    self.isScanning = false
+                    self.activeScan = nil
+                    self.scan(readAll: true)
+                }
+                return
+            }
             let tree = scan.tree
             // A scan that was stopped, or a disk that was unplugged halfway, has only part of the picture. Keeping it
             // would show the wrong map on the next launch and spoil the next comparison.
@@ -324,6 +390,7 @@ final class AppModel {
                 self.isScanning = false
                 self.scanIsHurrying = false
                 self.heldPicture = nil
+                self.lastScanNote = note
                 self.scanFiles = Int(tree.totalFiles[0])
                 self.activeScan = nil
                 self.history = snapshot
@@ -413,13 +480,13 @@ final class AppModel {
         let kept = plan.kept
         Task.detached(priority: .utility) {
             let (wins, map) = Self.suggest(tree: picture, rules: rules, running: running, facts: facts, kept: kept)
-            let change = ChangeMap(tree: picture, window: window)
+            let change = Self.changeMap(tree: picture, window: window, rules: rules, facts: facts)
             let rows = change.rows(tree: picture, rules: rules)
             await MainActor.run {
                 self.insightsRunning = false
                 self.insightsAt = Date()
                 guard self.tree?.isPartial == true, self.tree?.scanID == picture.scanID else { return }
-                self.adopt(map, wins, change, rows)
+                self.adopt(map, wins, change, rows, for: window)
                 if self.searchActive { self.runSearch() }
                 if self.lens != .map { self.refreshLive() }
             }
@@ -462,7 +529,7 @@ final class AppModel {
         treeOnItsWay = true
         Task.detached(priority: .userInitiated) {
             let (wins, map) = Self.suggest(tree: newTree, rules: rules, running: running, facts: facts, kept: kept)
-            let change = ChangeMap(tree: newTree, window: window)
+            let change = Self.changeMap(tree: newTree, window: window, rules: rules, facts: facts)
             let rows = change.rows(tree: newTree, rules: rules)
             await MainActor.run {
                 self.treeOnItsWay = false
@@ -485,8 +552,8 @@ final class AppModel {
                 self.nameCache = [:]
                 self.treeVersion += 1
                 self.resolvePlanSynchronously(in: newTree)
-                self.adopt(map, wins, change, rows)
-                // A saved map leaves out the smallest folders, so a finished scan is worth a second look.
+                self.adopt(map, wins, change, rows, for: window)
+                // What was read for a saved map is read again once the scan after it has finished.
                 var isFresh = true
                 if case .appear = transition { isFresh = false }
                 self.gatherFacts(for: newTree, afresh: isFresh)
@@ -500,16 +567,17 @@ final class AppModel {
         }
     }
 
-    private func adopt(_ map: ReclaimMap, _ new: Suggestions, _ change: ChangeMap, _ rows: [ChangeRow]) {
+    private func adopt(_ map: ReclaimMap, _ new: Suggestions, _ change: ChangeMap, _ rows: [ChangeRow], for window: ChangeWindow) {
         reclaim = map
         suggestions = new
         winsScanID = tree?.scanID
-        changes = change
-        changeRows = rows
-        changeTotal = change.usesHistory ? change.total : rows.reduce(0) { $0 + $1.delta }
-        changeCaption = change.caption
-        changeUsesHistory = change.usesHistory
-        changeShrank = change.usesHistory ? tree.map { change.rows(tree: $0, rules: rules, shrinking: true) } ?? [] : []
+        // Another window may have been picked while this was worked out, and then that one is worked out again.
+        if window == changeWindow {
+            show(change, rows)
+        } else if let tree {
+            let current = Self.changeMap(tree: tree, window: changeWindow, rules: rules, facts: facts)
+            show(current, current.rows(tree: tree, rules: rules))
+        }
         refreshShownRows()
         tickTheTrash()
         refreshPlanNumbers()
@@ -567,8 +635,9 @@ final class AppModel {
         labels = []
         engine.apply(RingLayout(), .settle)
         history = History.points(for: facts)
-        if let cached = TreeCache.load(for: facts) { present(cached, transition: .appear) }
-        scan()
+        let cached = TreeCache.load(for: facts)
+        if let cached { present(cached, transition: .appear) }
+        scan(refreshing: cached)
     }
 
     /// A disk was plugged in or removed. If it was the one on screen, go back to the startup disk.
@@ -611,11 +680,11 @@ final class AppModel {
         let kept = plan.kept
         Task.detached(priority: .userInitiated) {
             let (wins, map) = Self.suggest(tree: tree, rules: rules, running: running, facts: facts, kept: kept)
-            let change = ChangeMap(tree: tree, window: window)
+            let change = Self.changeMap(tree: tree, window: window, rules: rules, facts: facts)
             let rows = change.rows(tree: tree, rules: rules)
             await MainActor.run {
                 guard self.treeVersion == version, self.tree === tree else { return }
-                self.adopt(map, wins, change, rows)
+                self.adopt(map, wins, change, rows, for: window)
                 if self.lens != .map { self.relayout(.recolor) }
             }
         }
@@ -624,14 +693,26 @@ final class AppModel {
     func setChangeWindow(_ window: ChangeWindow) {
         changeWindow = window
         guard let tree else { return }
-        let change = ChangeMap(tree: tree, window: window)
+        let change = Self.changeMap(tree: tree, window: window, rules: rules, facts: facts)
+        show(change, change.rows(tree: tree, rules: rules))
+        if lens == .changes { relayout(.recolor) }
+    }
+
+    /// The map for a Changes window. Looking back at what's gone untouched also needs to know what to leave out, and what
+    /// you're known to have used lately.
+    nonisolated static func changeMap(tree: DiskTree, window: ChangeWindow, rules: RuleBook, facts: Facts) -> ChangeMap {
+        guard case .untouched(let days) = window else { return ChangeMap(tree: tree, window: window) }
+        return ChangeMap(tree: tree, window: window, rules: rules, used: ChangeMap.usedRecently(facts, in: tree, days: days))
+    }
+
+    private func show(_ change: ChangeMap, _ rows: [ChangeRow]) {
         changes = change
-        changeRows = change.rows(tree: tree, rules: rules)
-        changeTotal = change.usesHistory ? change.total : changeRows.reduce(0) { $0 + $1.delta }
+        changeRows = rows
+        // A comparison counts down from free space, and what's untouched is the whole of it. Otherwise it's what the list adds up to.
+        changeTotal = change.usesHistory || change.isUntouched ? change.total : rows.reduce(0) { $0 + $1.delta }
         changeCaption = change.caption
         changeUsesHistory = change.usesHistory
-        changeShrank = change.usesHistory ? change.rows(tree: tree, rules: rules, shrinking: true) : []
-        if lens == .changes { relayout(.recolor) }
+        changeShrank = change.usesHistory ? tree.map { change.rows(tree: $0, rules: rules, shrinking: true) } ?? [] : []
     }
 
     // MARK: Drawing
@@ -846,7 +927,17 @@ final class AppModel {
         var note = ""
         var tellsUse = false
         let ownShape = p.node == tree.free || p.node == tree.hidden
-        if lens == .changes, let changes {
+        if lens == .changes, let changes, changes.isUntouched {
+            // All of it, or how much of it. A piece that's been touched says when, as it would on the map.
+            let untouched = changes.value(of: p.node)
+            if untouched > 0 {
+                // The window is in the panel, so a part only needs saying how much: the whole line has to fit in the middle.
+                note = Double(untouched) >= Double(p.bytes) * 0.999 ? "Untouched \(changeWindow.span)" : "\(formatBytes(UInt64(untouched))) untouched"
+            } else if !ownShape, !p.isSmaller, !p.isMark, p.style != 2, !(tree.isPartial && tree.isStillGrowing(p.node)) {
+                share = ""
+                tellsUse = !(n.has(NodeFlag.synthetic) || (n.rule != 0 && rules.rule(n.rule).tier == .handsOff))
+            }
+        } else if lens == .changes, let changes {
             let delta = changes.value(of: p.node)
             if delta > 0 { note = "+\(formatBytes(UInt64(delta))) \(changes.shortCaption)" }
             else if delta < 0 { note = "−\(formatBytes(UInt64(-delta))) \(changes.shortCaption)" }

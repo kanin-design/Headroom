@@ -139,7 +139,9 @@ enum LabelPlacer {
         case .changes:
             for row in model.changeRows.prefix(18) {
                 if let i = visiblePiece(for: row.node, layout: layout, tree: tree), !candidates.contains(where: { $0.index == i }) {
-                    candidates.append(Candidate(index: i, title: row.title, value: "+" + formatBytes(UInt64(max(row.delta, 0))), score: Double(row.delta)))
+                    // What grew has a plus. What's gone untouched is just how much.
+                    let sign = model.changeWindow.isUntouched ? "" : "+"
+                    candidates.append(Candidate(index: i, title: row.title, value: sign + formatBytes(UInt64(max(row.delta, 0))), score: Double(row.delta)))
                 }
             }
         case .freeUp:
@@ -488,6 +490,11 @@ struct CenterReadout: View {
 
     /// In Changes the middle says how much free space changed, from the scan it compares with, or else how much was
     /// touched, going by file dates.
+    private func changeColour(_ note: String) -> Color {
+        if model.changeWindow.isUntouched { return Palette.untouched.swiftUI }
+        return note.hasPrefix("−") ? Palette.cool.swiftUI : Palette.grew.swiftUI
+    }
+
     private func changesContent(size: CGFloat) -> some View {
         let window = model.changeWindow
         let when = window == .lastScan ? "since the last scan" : "in the last \(window.title)"
@@ -500,7 +507,7 @@ struct CenterReadout: View {
             EmptyView()
         } below: {
             VStack(spacing: size * 0.012) {
-                Text(history ? "free space \(when)" : "touched \(when)")
+                Text(window.isUntouched ? "untouched \(window.span)" : history ? "free space \(when)" : "touched \(when)")
                     .font(.system(size: size * 0.058, weight: .medium))
                     .foregroundStyle(.white.opacity(0.55))
                 if !history {
@@ -589,9 +596,12 @@ struct CenterReadout: View {
                     .minimumScaleFactor(0.85)
                     .truncationMode(.middle)
             } else if !hover.note.isEmpty {
+                // In Changes the line says what changed, in the view's own colours. When it says when something was last
+                // used, it looks as it does on the map.
+                let saysChange = model.lens == .changes && !hover.tellsUse
                 Text(hover.note)
-                    .font(.system(size: size * 0.072, weight: model.lens == .changes ? .semibold : .medium))
-                    .foregroundStyle(model.lens == .changes ? (hover.note.hasPrefix("−") ? Palette.cool.swiftUI : Palette.grew.swiftUI) : .white.opacity(0.72))
+                    .font(.system(size: size * 0.072, weight: saysChange ? .semibold : .medium))
+                    .foregroundStyle(saysChange ? changeColour(hover.note) : .white.opacity(0.72))
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
             } else if !hover.share.isEmpty {

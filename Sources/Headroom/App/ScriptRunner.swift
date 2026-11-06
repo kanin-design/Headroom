@@ -16,6 +16,8 @@ import SwiftUI
 ///     up
 ///     bench                    what everything costs on this disk, in milliseconds
 ///     meter start, meter name  how busy the main thread was between the two, and its longest stall
+///     pacing start, pacing name  whether every frame of the ring reached the screen on time between the two, what each
+///                              cost, and how busy the main thread was
 ///     sweep ring 5             the pointer travelling over the ring or the panel, without your real one moving
 ///     back, forward            the arrows at the top of the panel
 ///     select ~/some/file       as if it had been clicked: the panel shows it
@@ -80,6 +82,8 @@ final class MainThreadMeter {
     private var observer: CFRunLoopObserver?
     private var wokeAt = 0.0
     private(set) var busy = 0.0, longest = 0.0, over16 = 0, over50 = 0
+    /// When each stall over 16 ms began, in ms from the start, and how long it was.
+    private(set) var stalls: [(at: Double, ms: Double)] = []
     private let began = CFAbsoluteTimeGetCurrent()
     private let cpuAtStart = clock_gettime_nsec_np(CLOCK_PROCESS_CPUTIME_ID)
 
@@ -93,7 +97,10 @@ final class MainThreadMeter {
                 let ms = (now - self.wokeAt) * 1000
                 self.busy += ms
                 self.longest = max(self.longest, ms)
-                if ms > 16 { self.over16 += 1 }
+                if ms > 16 {
+                    self.over16 += 1
+                    self.stalls.append(((self.wokeAt - self.began) * 1000, ms))
+                }
                 if ms > 50 { self.over50 += 1 }
             }
         }
@@ -105,11 +112,13 @@ final class MainThreadMeter {
         let total = (CFAbsoluteTimeGetCurrent() - began) * 1000
         let cpu = Double(clock_gettime_nsec_np(CLOCK_PROCESS_CPUTIME_ID) - cpuAtStart) / 1e6
         print(String(format: "meter %-30@ cpu %5.1f%%, main %4.1f%%, longest %5.1f ms, over 16 ms %3d, over 50 ms %3d", label as NSString, cpu / total * 100, busy / total * 100, longest, over16, over50))
+        if !stalls.isEmpty { print("  stalls at " + stalls.map { String(format: "%.0f ms for %.0f", $0.at, $0.ms) }.joined(separator: ", ")) }
     }
 }
 
 enum ScriptRunner {
     @MainActor private static var meter: MainThreadMeter?
+    @MainActor private static var pacingStarted: CFTimeInterval = 0
 
     static var path: String? {
         let args = CommandLine.arguments
@@ -136,6 +145,36 @@ enum ScriptRunner {
         }
     }
 
+    /// How evenly the ring's frames reached the screen. A frame that came a refresh or more late is one you'd see as a hitch.
+    private static func pacing(_ notes: [RingDrawer.FrameNote], interval: Double, since start: CFTimeInterval, label: String) -> String {
+        func percentile(_ values: [Double], _ p: Double) -> Double {
+            let sorted = values.sorted()
+            return sorted.isEmpty ? 0 : sorted[Int(Double(sorted.count - 1) * p)]
+        }
+        var hitches = 0, missed = 0, longest = 0.0, uneven = 0
+        var when: [String] = []
+        for i in notes.indices.dropFirst() where !notes[i].restarted && notes[i].presented > 0 && notes[i - 1].presented > 0 {
+            let gap = notes[i].presented - notes[i - 1].presented
+            longest = max(longest, gap)
+            let refreshes = Int((gap / interval).rounded())
+            if refreshes > 1 {
+                hitches += 1
+                missed += refreshes - 1
+                when.append(String(format: "%.0f ms (frame %d of its run)", (notes[i].target - start) * 1000, i - (notes[...i].lastIndex(where: \.restarted) ?? 0)))
+            }
+            // The picture moved on by a different time than passed on screen: it would look uneven even with no frame missed.
+            if abs(notes[i].dt - gap) > interval * 0.5 { uneven += 1 }
+        }
+        let runs = notes.filter(\.restarted).count
+        let unseen = notes.filter { $0.presented == 0 }.count
+        let cpu = notes.map(\.cpu), gpu = notes.map(\.gpu).filter { $0 > 0 }
+        return String(format: "pacing %@: %d frames in %d runs, %d hitches (%d refreshes missed), longest gap %.1f ms, %d never shown, %d uneven; each frame cpu %.2f/%.2f/%.2f ms, gpu %.2f/%.2f/%.2f ms (median/95%%/most)",
+                      label as NSString, notes.count, runs, hitches, missed, longest * 1000, unseen, uneven,
+                      percentile(cpu, 0.5), percentile(cpu, 0.95), cpu.max() ?? 0, percentile(gpu, 0.5), percentile(gpu, 0.95), gpu.max() ?? 0)
+            + (when.isEmpty ? "" : "\n  hitches at " + when.joined(separator: ", "))
+            + "\n  runs start at " + notes.indices.filter { notes[$0].restarted }.map { String(format: "%.0f ms", (notes[$0].target - start) * 1000) }.joined(separator: ", ")
+    }
+
     @MainActor
     private static func resolve(_ path: String, _ model: AppModel) -> UInt32? {
         guard let tree = model.tree else { return nil }
@@ -153,11 +192,9 @@ enum ScriptRunner {
             while model.isScanning || model.tree == nil { try? await Task.sleep(for: .milliseconds(100)) }
             try? await Task.sleep(for: .milliseconds(400))
         case "lens":
-            switch argument {
-            case "changes": model.setLens(.changes)
-            case "freeUp": model.setLens(.freeUp)
-            default: model.setLens(.map)
-            }
+            // As a click on the switcher does it.
+            let lens: Lens = argument == "changes" ? .changes : argument == "freeUp" ? .freeUp : .map
+            withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) { model.setLens(lens) }
         case "focus":
             if let node = resolve(argument, model), let tree = model.tree { model.zoom(into: RingLayout.chainTail(tree: tree, node)) }
             else { print("no such folder: \(argument)") }
@@ -375,6 +412,19 @@ enum ScriptRunner {
                 meter?.report(argument)
                 meter = nil
             }
+        case "pacing":
+            guard let view = model.mapView else { return }
+            if argument == "start" {
+                view.drawer.beginNotes()
+                meter = MainThreadMeter()
+                pacingStarted = CACurrentMediaTime()
+                return
+            }
+            // The last frames say when they reached the screen a moment after they're drawn.
+            try? await Task.sleep(for: .milliseconds(200))
+            print(pacing(view.drawer.endNotes(), interval: mainWindow?.screen?.minimumRefreshInterval ?? 1.0 / 60, since: pacingStarted, label: argument))
+            meter?.report(argument)
+            meter = nil
         case "benchcopy":
             // benchcopy /from -> /into: the real copy and check, timed. Only ever inside the throwaway test disk.
             let parts = argument.components(separatedBy: " -> ")
@@ -482,6 +532,28 @@ enum ScriptRunner {
             let all = Wins.build(tree: tree, rules: model.rules, running: [], facts: facts)
             time("sorting them into boxes", rounds: 3) { _ = Sections.build(from: all, tree: tree, facts: facts) }
             time("changes map", rounds: 3) { _ = ChangeMap(tree: tree, window: model.changeWindow) }
+            time("untouched for a year", rounds: 3) { _ = AppModel.changeMap(tree: tree, window: .untouched(365), rules: model.rules, facts: model.facts) }
+            // What you've used lately counts as touched, so it has to be found on the map.
+            let known = model.facts
+            let since = Date().addingTimeInterval(-91 * 86_400)
+            let apps = known.apps.filter { $0.isRunning || ($0.newestSign ?? .distantPast) >= since }.count
+            let watched = known.plexFiles.values.filter { ($0.lastViewed ?? .distantPast) >= since }.count
+            let played = known.games.filter { ($0.lastPlayed ?? .distantPast) >= since }.count
+            let opened = known.lastOpened.values.filter { $0 >= since }.count
+            let found = ChangeMap.usedRecently(known, in: tree, days: 91).count
+            print("used in the last 3 months: \(apps) apps, \(watched) watched, \(played) played, \(opened) opened; \(found) of them found on the map")
+        case "refreshcheck":
+            // A refresh of the map on screen, then a full read straight after, and what differs between them. Reads only.
+            guard let tree = model.tree, let volume = model.volume, let journal = model.journal, journal.base == tree.journal else {
+                print("refreshcheck: nothing to refresh (whole \(model.tree?.isWhole ?? false), journal \(model.journal != nil))")
+                return
+            }
+            let rules = model.rules
+            let access = model.hasFullAccess, guarded = model.askPerFolder || model.forceTouchGuarded
+            let result = await Task.detached(priority: .userInitiated) { () -> String in
+                Self.compareRefresh(of: tree, volume: volume, journal: journal, rules: rules, fullAccess: access, askPerFolder: guarded)
+            }.value
+            print(result)
         case "othercopy":
             if let row = model.flatRows.first(where: { $0.title == argument }) { model.toggleOtherCopies(of: row) } else { print("no such row: \(argument)") }
         case "moveplan":
@@ -510,7 +582,8 @@ enum ScriptRunner {
         case "keys":
             for character in argument { model.handleScriptKey(character) }
         case "window":
-            if let d = Int(argument) { model.setChangeWindow(d == 0 ? .lastScan : .days(d)) }
+            // window 7 is the last week, 0 the last scan, and -365 what's been untouched for a year.
+            if let d = Int(argument) { model.setChangeWindow(d == 0 ? .lastScan : d < 0 ? .untouched(-d) : .days(d)) }
         case "search":
             model.searchActive = true
             model.searchText = argument
@@ -543,7 +616,7 @@ enum ScriptRunner {
             try? await Task.sleep(for: .milliseconds(400))
         case "gpu":
             // What the GPU holds for the ring, texture by texture.
-            print("gpu \(model.engine.renderer?.allocations() ?? "no renderer")")
+            print("gpu \(model.engine.allocations())")
         case "headroom":
             // How far above white this screen can go now, and at most: what the picture's format has to hold.
             if let screen = mainWindow?.screen {
@@ -735,7 +808,7 @@ enum ScriptRunner {
             // As in real use, where nothing is drawn while the window can't be seen.
             MapHostView.drawsWhenHidden = false
         case "frames":
-            print("frames drawn \(argument): \(model.mapView?.framesDrawn ?? -1)")
+            print("frames drawn \(argument): \(model.mapView?.framesDrawn ?? -1), ring at \(model.engine.placeNow)")
         case "frame":
             // Where the window is, whether it fills the screen, and whether it has been told to move.
             if let w = mainWindow {
@@ -853,8 +926,8 @@ enum ScriptRunner {
             collect("list", model.shownRows)
             collect("names around the ring", model.makeLabels())
         }
-        for window in [ChangeWindow.lastScan, .days(7), .days(30)] {
-            collect("changes", ChangeMap(tree: tree, window: window).rows(tree: tree, rules: model.rules))
+        for window in [ChangeWindow.lastScan, .days(7), .days(30), .untouched(365)] {
+            collect("changes", AppModel.changeMap(tree: tree, window: window, rules: model.rules, facts: model.facts).rows(tree: tree, rules: model.rules))
         }
         model.setLens(.map)
         collect("suggestions", model.flatRows)
@@ -914,12 +987,83 @@ enum ScriptRunner {
         NSApp.windows.first { $0.isVisible && $0.contentView != nil && $0.frame.width > 400 }
     }
 
+    /// What a refresh costs and whether it comes out as a full read does. Between the two, the disk carries on changing, so
+    /// what differs is listed where it starts, to tell a busy folder from a mistake.
+    nonisolated private static func compareRefresh(of tree: DiskTree, volume: VolumeFacts, journal: ChangeJournal.Watcher, rules: RuleBook,
+                                                   fullAccess: Bool, askPerFolder: Bool) -> String {
+        func seconds(_ since: DispatchTime) -> Double { Double(DispatchTime.now().uptimeNanoseconds - since.uptimeNanoseconds) / 1e9 }
+        guard let facts = VolumeFacts.read(path: volume.mountPath) else { return "refreshcheck: no disk" }
+        var out: [String] = []
+        let asked = DispatchTime.now()
+        guard let place = tree.journal, let taken = journal.take(from: place) else { return "refreshcheck: the journal lost track" }
+        let askedFor = seconds(asked)
+        let refresh = DiskScan(facts: facts, rules: rules, fullAccess: fullAccess, askPerFolder: askPerFolder)
+        guard refresh.refresh(from: tree, changes: taken.changes, place: taken.next) else { return "refreshcheck: the refresh said no" }
+        var folders = 0
+        for i in 0..<tree.count where tree.nodes[i].has(NodeFlag.directory) { folders += 1 }
+        let started = DispatchTime.now()
+        refresh.run(mode: .full)
+        out.append(String(format: "refresh %.2f s, after asking the journal for %.3f s: %d folders changed, %d with everything under; read %d of %d folders again, surprised: %@",
+                          seconds(started), askedFor, taken.changes.folders.count, taken.changes.everythingUnder.count, refresh.foldersToRead, folders,
+                          refresh.surprised ? "yes" : "no"))
+        out.append("  read again: " + refresh.whyRead)
+        guard !refresh.surprised else { return out.joined(separator: "\n") }
+        let a = refresh.tree
+        let saveStart = DispatchTime.now()
+        TreeCache.save(a, for: facts)
+        let saved = seconds(saveStart)
+        let loadStart = DispatchTime.now()
+        let loaded = TreeCache.load(for: facts)
+        let size = (try? FileManager.default.attributesOfItem(atPath: TreeCache.url(facts.name).path)[.size] as? Int) ?? 0
+        out.append(String(format: "saved map %.1f MB, saved in %.2f s, read back in %.2f s%@", Double(size) / 1e6, saved, seconds(loadStart),
+                          loaded == nil ? ", but it didn't read back" : ""))
+        let full = DiskScan(facts: facts, rules: rules, fullAccess: fullAccess, askPerFolder: askPerFolder)
+        let fullStart = DispatchTime.now()
+        full.run(mode: .full)
+        out.append(String(format: "full read %.2f s", seconds(fullStart)))
+        let b = full.tree
+
+        // The same path has the same key in both.
+        let keysA = vmAlloc(UInt64.self, max(a.count, 1)), keysB = vmAlloc(UInt64.self, max(b.count, 1))
+        defer { vmFree(keysA, max(a.count, 1)); vmFree(keysB, max(b.count, 1)) }
+        History.fillKeys(tree: a, into: keysA)
+        History.fillKeys(tree: b, into: keysB)
+        var inB = [UInt64: UInt32](minimumCapacity: b.count)
+        for i in 0..<b.count { inB[keysB[i]] = UInt32(i) }
+        let differs = Mapped<Bool>(count: a.count)
+        var differing = 0, missing = 0
+        for i in 0..<a.count {
+            guard let j = inB[keysA[i]] else { differs[i] = true; missing += 1; continue }
+            if a.totals[i] != b.totals[Int(j)] || a.totalFiles[i] != b.totalFiles[Int(j)] { differs[i] = true; differing += 1 }
+        }
+        var sources: [(id: UInt32, change: Int64)] = []
+        for i in 0..<a.count where differs[i] {
+            var inside = false
+            var c = a.nodes[i].firstChild
+            while c != 0 { if differs[Int(c)] { inside = true; break }; c = a.nodes[Int(c)].nextSibling }
+            if inside { continue }
+            let other = inB[keysA[i]].map { Int64(b.totals[Int($0)]) } ?? 0
+            sources.append((UInt32(i), Int64(a.totals[i]) - other))
+        }
+        let total = Int64(a.totals[0]) - Int64(b.totals[0])
+        out.append("differences: \(differing) nodes add up differently, \(missing) only in the refresh, \(b.count - (a.count - missing)) only in the read; whole disk \(total) bytes; \(sources.count) places they start")
+        for source in sources.sorted(by: { abs($0.change) > abs($1.change) }).prefix(12) {
+            out.append("  \(source.change > 0 ? "+" : "")\(formatBytes(UInt64(abs(source.change)))) \(source.change < 0 ? "less" : "more") in the refresh: \(a.friendlyPath(source.id))")
+        }
+        let rowA = a.statRow(0), rowB = b.statRow(0)
+        out.append("whole disk by kind and date, refresh: \((0..<DiskTree.statStride).map { String(rowA[$0]) }.joined(separator: " "))")
+        out.append("whole disk by kind and date, read:    \((0..<DiskTree.statStride).map { String(rowB[$0]) }.joined(separator: " "))")
+        out.append("links \(a.links.count) and \(a.singleLinks.count) single in the refresh, \(b.links.count) and \(b.singleLinks.count) in the read")
+        return out.joined(separator: "\n")
+    }
+
     @MainActor
     private static func report(_ model: AppModel) {
         guard let tree = model.tree else { print("no tree"); return }
         print(String(format: "scan %.2fs, %d files, %d nodes, %d link records", tree.scanSeconds, tree.totalFiles[0], tree.count, tree.links.count))
         if tree.isPartial { print("still reading \(formatBytes(tree.totals[Int(tree.hidden)])), \(model.scanFiles) files so far") }
         print(String(format: "pieces %d, labels %d, last scan loaded in %.1f ms", model.engine.layout.pieces.count, model.labels.count, model.cacheLoadMilliseconds))
+        print("last scan \(model.lastScanNote); read in full \(Int(Date().timeIntervalSince(tree.fullReadAt))) s ago, journal \(tree.journal == nil ? "none" : "kept"), whole \(tree.isWhole)")
         print("focus \(model.displayName(model.focus)), planned \(model.plan.count), you'd get back \(formatBytes(model.planBytes)), message: \(model.message ?? "none")")
         print("plan:")
         for item in model.plan.items {

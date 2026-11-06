@@ -8,8 +8,9 @@ struct RootView: View {
         GeometryReader { geometry in
             let ring = RingGeometry.make(size: geometry.size, panelOpen: model.panelOpen)
             ZStack(alignment: .topLeading) {
-                MapView(model: model, ring: ring)
+                MapView(model: model)
                     .frame(width: geometry.size.width, height: geometry.size.height)
+                RingPlace(center: ring.center, radius: ring.radius, size: geometry.size, model: model)
 
                 LabelsLayer(model: model)
                     .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)

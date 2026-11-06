@@ -162,7 +162,7 @@ final class LinksTests: XCTestCase {
         XCTAssertEqual(threePlaces.count, 5)
     }
 
-    func testASavedMapGivesTheSameAnswersWithFarFewerRecords() throws {
+    func testASavedMapGivesTheSameAnswers() throws {
         let disk = FakeDisk()
         for at in 0..<200 {
             disk.linked("/Volumes/Fake/One/folder\(at % 40)/file\(at).mov", "/Volumes/Fake/Two/folder\(at % 40)/file\(at).mov", 200_000, kind: .video)
@@ -177,8 +177,9 @@ final class LinksTests: XCTestCase {
         TreeCache.save(disk.tree, for: facts)
         defer { try? FileManager.default.removeItem(at: AppData.folder.appendingPathComponent("last-HeadroomLinksTest.scan")) }
         let loaded = try XCTUnwrap(TreeCache.load(for: facts))
-        XCTAssertEqual(loaded.links.count, 2, "All of it is between the same two folders now")
-        XCTAssertEqual(Set(loaded.links.map(\.bytes)), [40_000_000])
+        XCTAssertEqual(loaded.count, disk.tree.count, "the whole map, small files and all")
+        XCTAssertEqual(loaded.links.count, 400, "every path, so a refresh knows where each file is")
+        XCTAssertTrue(loaded.isWhole)
 
         for path in ["/Volumes/Fake/One", "/Volumes/Fake/Two", "/Volumes/Fake/Three"] {
             let before = disk.node(path), after = try XCTUnwrap(loaded.find(path: path))

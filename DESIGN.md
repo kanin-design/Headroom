@@ -22,6 +22,7 @@ They also get the numbers wrong in ways that matter:
 |---|---|---|
 | "How full am I, and what's biggest?" | One glance | The ring is already there when the window opens, with free space in the middle and the biggest things named around it |
 | "I had 41 GB yesterday. What happened?" | What changed | **Changes** lights up what grew and dims the rest, with a ranked list and a free-space history |
+| "What's just been sitting there?" | What hasn't changed | **Changes**, the other way round, lights up what nothing has changed in for a month, three months or a year |
 | "I need 20 GB now, without breaking anything" | Safe wins, ranked by risk | **Free Up** is a short stack of boxes, with what you'd miss least on top. One click selects a whole box, and the ring shows it before anything happens |
 | "Which of these do I still need?" | Evidence, not a guess | Each suggestion says what's known: last opened, watched in Plex, last commit, no sign of use for 7 months |
 | "Wait, I want to keep that" | To change my mind | Nothing happens until you press Clean. One click unticks anything, and Keep stops suggesting it. After that it's in the Trash, and Undo puts it back |
@@ -34,7 +35,8 @@ They also get the numbers wrong in ways that matter:
 1. **The map is the interface.** It fills the window. Everything else floats on top in glass, and the
    window should still look complete with the panel closed.
 2. **Colour means something.** In **Map**, it shows what belongs together. In **Changes**, it's how much of a
-   piece is new or changed, red for a little and yellow for all of it. In
+   piece is new or changed, red for a little and yellow for all of it, or how much of it is untouched, deep blue for a
+   little and pale ice for all of it. In
    **Free Up**, each box in the list has a colour and its files wear it, so the list is the legend. One geometry, three questions: changing the question recolours the
    same picture, so you never lose your place.
 3. **Name things directly.** Big things are labelled on the map, so you don't need a legend or a hover
@@ -82,6 +84,12 @@ sunburst in the reference:
   yellow for all of it, and what didn't change goes quiet. A file counts as wholly changed when its date is in the
   window, or by how much it grew since the scan compared with: which bytes inside it changed could only be found
   by reading it. The middle says how much free space changed; the panel has the month's free space, then what grew and what shrank.
+  The other way round, it shows what's gone untouched: what nothing has changed in for a month, three months or a
+  year, by file dates, which the scan sums per folder as it reads. The cold scale mirrors the warm one, as light at
+  every step, so the two read the same way. What you're known to have used in that time counts as touched, however
+  old its files: an app you opened, a film Plex says you watched, a game Steam started, a video Spotlight saw you open.
+  macOS's own parts and what Headroom leaves alone never count. Both scales in the panel are drawn from the ring's own
+  colours, starting from the quiet grey of a piece with none of it.
 - **Free Up:** a short stack of boxes, each one kind of thing, with what you'd miss least on top: the Trash, caches and
   build output, AI models, project leftovers, installers, episodes you've watched, apps you don't seem to use, and so on
   down to series you haven't watched. Biggest doesn't mean first: the order is what you'd miss least, then biggest.
@@ -214,8 +222,8 @@ opening it.
    at full power, until it's done.
 5. **Free Up and Changes want the whole disk.** Opening either one during that first scan puts it back to full
    power. Moving things to the Trash waits for the scan, because the numbers aren't final yet.
-6. **With a saved scan,** the map is there at once, and the whole refresh stays in the background. ⌘R means you
-   asked, so that runs at full power.
+6. **With a saved scan,** the map is there at once, and the refresh stays in the background and only reads what has
+   changed since. ⌘R means you asked, so that reads everything at full power.
 
 Two details keep it honest while it runs:
 
@@ -234,6 +242,11 @@ Underneath:
   folders and big files, not every file.
 - Metal draws each piece from a single analytic shape, so the frame cost doesn't depend on how complex the map is.
   Nothing is drawn when nothing moves, so it uses no power at rest.
+- The ring draws on a thread of its own, in step with the display, so it never waits for the rest of the window: a panel
+  being laid out or names being placed can take the main thread for 20 to 50 ms, and the ring doesn't miss a frame. Only
+  the ring's place in the window comes from SwiftUI. When the panel comes or goes, SwiftUI says where the ring is on each
+  frame of its own animation, and that frame of the ring is drawn in the same transaction, so the numbers in the middle
+  stay in the middle.
 - While the ring is still, its drawing memory is marked as free to take: the glow textures, and every surface but the
   one on screen. Nothing is released or made again, so the next frame costs the same as any other, and if the Mac does
   take it, the ring simply draws again. With the window covered, minimized or hidden, nothing is drawn at all and a running
@@ -245,6 +258,16 @@ Underneath:
 - A file with several paths costs one record per path, 512,000 of them here. Files in the same folders say the same
   thing, so those are merged into 67,000, with their bytes added up. Every question asked of them gets the same answer,
   with a seventh as many records to read.
+- A refresh only reads what has changed. macOS keeps a journal of the folders that change on each disk, and a map notes
+  where the journal was when its reading began. While the app is open it collects the journal as it goes, which costs next
+  to nothing. At launch it reads back what happened while it was closed, unless that's over 3 million changes: this Mac
+  logs about 7,000 a minute, and going back through a day of them would take longer than reading the disk. The refresh
+  reads again the folders the journal names, the ones holding linked files (which of a file's places counts it can change),
+  the ones with something changed in the last day, so that day stays exact to the minute, and any that couldn't be read.
+  Everything else is copied from the map. A folder found inside one that's read again only counts as the same one if it
+  hasn't been touched, moved or renamed since and holds as many things, so a folder put in another's place is read as new.
+  Everything is read once a day, and whenever you press ⌘R. A new hard link to a file in a copied folder could count that
+  file twice, so then the refresh is thrown away and everything is read.
 - What only the scan needs lives in mapped tables too, so it goes back the moment the scan ends, where a heap allocation
   would stay with the app. While a scan runs, a picture is a copy of the whole tree, so there's never a second one waiting
   behind one nobody has looked at yet.
@@ -271,18 +294,21 @@ Measured on this Mac, an M5 MacBook Air with 2.1 million files and a 494 GB disk
 | Launch to a first frame with the disk's numbers | About 200 ms |
 | First launch: half the bytes placed | 0.4 s |
 | First launch: placed after one second | 72–81% |
-| First launch: everything read | 13–14 s, on about 1.2 cores after the first look |
-| With a saved scan: the map on screen | The saved scan loads in about 11 ms |
-| With a saved scan: the refresh | 14.5 s at low priority, on about 1.2 cores |
+| First launch: everything read | 5.6 s at full power from start to end, with the disk's records already in memory. Reading the rest quietly after the first look took 7.7 s |
+| With a saved scan: the map on screen | The saved scan loads in 10–25 ms |
+| With a saved scan: the refresh | 3.3 s at low priority, reading 12% of the folders again and copying the rest, where reading them all quietly took 8.6 s. Asking the journal what changed while the app was closed took 0.02 s. With Full Disk Access, 1.4 million files |
+| A refresh at full power | 1.4 s, against 4.0 s to read everything just after, on the same 1.4 million files with Full Disk Access, and with the same disk total. The only folders that differed were ones changing between the two |
 | ⌘R, at full power | 6.9 s, against 40 s for `du` on the same data, and the scan also collects kinds, dates, links and clones |
 | At rest, window on screen or covered | 0.0% CPU, 130–150 MB of memory |
 | At rest, window hidden | 0.0% CPU, about 110 MB of memory |
 | While the ring moves | About 220–260 MB more for drawing, which goes back about a quarter of a second after it stops |
 | A refresh, while it reads | Under 150 MB of memory, about 360 MB at the very end if the ring moves |
 | First launch, at the peak | 450–480 MB of memory, with a copy of the tree for each new picture |
-| The saved scan on disk | 1 MB, read back in about 2 ms, and at most about 2 MB of snapshots |
+| The saved scan on disk | 3.2 MB for the whole map, saved in 0.08 s and read back in about 10 ms, and at most about 2 MB of snapshots |
 | The app | 6.7 MB, of which the icon is 4.4 MB |
 | Building the ring | Under 1 ms |
+| Pointing across the ring, zooming, switching tabs | No frame of the ring late at 60 Hz, where 1 to 3 in a hundred were |
+| The panel coming and going | The ring and the numbers in its middle within a pixel of each other on almost every frame, where they were up to 60 pt apart |
 
 And with Full Disk Access, for what happens after the scan:
 

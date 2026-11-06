@@ -413,11 +413,16 @@ enum Wins {
 enum ChangeWindow: Hashable, Identifiable {
     case lastScan
     case days(Int)
+    /// The other way round: what nothing inside has changed in for this many days.
+    case untouched(Int)
+
+    static let untouchedWindows: [ChangeWindow] = [.untouched(30), .untouched(91), .untouched(365)]
 
     var id: String {
         switch self {
         case .lastScan: "last"
         case .days(let d): "\(d)"
+        case .untouched(let d): "u\(d)"
         }
     }
 
@@ -426,14 +431,32 @@ enum ChangeWindow: Hashable, Identifiable {
         case .lastScan: "Last scan"
         case .days(1): "24 hours"
         case .days(let d): "\(d) days"
+        case .untouched(30): "1 month"
+        case .untouched(91): "3 months"
+        case .untouched(365): "1 year"
+        case .untouched(let d): "\(d) days"
+        }
+    }
+
+    /// How long, in a sentence: "for a year".
+    var span: String {
+        switch self {
+        case .untouched(30): "for a month"
+        case .untouched(365): "for a year"
+        default: "for \(title)"
         }
     }
 
     var seconds: TimeInterval {
         switch self {
         case .lastScan: 0
-        case .days(let d): TimeInterval(d) * 86_400
+        case .days(let d), .untouched(let d): TimeInterval(d) * 86_400
         }
+    }
+
+    var isUntouched: Bool {
+        if case .untouched = self { return true }
+        return false
     }
 }
 
@@ -446,18 +469,28 @@ struct ChangeRow: Identifiable, Equatable {
 }
 
 /// What grew. It compares with an earlier scan when there is one, and otherwise reads file dates, so the view says
-/// something useful on the very first day.
+/// something useful on the very first day. Or the other way round: what nothing has changed in for a long time.
 final class ChangeMap: @unchecked Sendable {
     private(set) var usesHistory = false
+    /// Each value is what hasn't changed in the window, rather than what has.
+    private(set) var isUntouched = false
     private(set) var caption = ""
     private(set) var shortCaption = ""
     private let capacity: Int
     private let values: UnsafeMutablePointer<Int64>
     private(set) var total: Int64 = 0
 
-    init(tree: DiskTree, window: ChangeWindow) {
+    /// `rules` and `used` matter only for what's gone untouched: what to leave out, and what you're known to have used.
+    init(tree: DiskTree, window: ChangeWindow, rules: RuleBook? = nil, used: [UInt32] = []) {
         capacity = max(tree.count, 1)
         values = vmAlloc(Int64.self, capacity)
+        if case .untouched(let days) = window {
+            isUntouched = true
+            fillUntouched(tree, days: days, rules: rules, used: used)
+            caption = "Not changed \(window.span), going by file dates." + (tree.isPartial ? " Still reading, so this may grow." : "")
+            shortCaption = "untouched \(window.span)"
+            return
+        }
         // Half-read folders would look as if they'd shrunk, so a comparison waits until the scan is done.
         let snapshot = tree.isPartial ? nil : History.snapshot(forVolume: tree.volumeName, olderThan: window.seconds, isLast: window == .lastScan, before: tree.finishedAt)
         let nodes = tree.nodes
@@ -513,6 +546,79 @@ final class ChangeMap: @unchecked Sendable {
         vmFree(values, capacity)
     }
 
+    /// For each piece, the bytes in it that haven't changed in `days`, going by file dates. Three kinds of thing don't count,
+    /// in themselves or in what holds them: macOS's own parts and what can't be read, which have no dates worth the name;
+    /// what the app leaves alone; and what you're known to have used in that time, such as an app you opened last week
+    /// whose files are years old.
+    private func fillUntouched(_ tree: DiskTree, days: Int, rules: RuleBook?, used: [UInt32]) {
+        let n = tree.count
+        guard n > 0 else { return }
+        let nodes = tree.nodes
+        // The nearest kept field at or before the window, so nothing newer than it is ever counted as untouched.
+        let field = DiskTree.recency.last { $0.days <= UInt32(days) }?.field ?? DiskTree.statRecent1
+        let cut = UInt32(Date().timeIntervalSince1970) &- UInt32(days) * 86_400
+        for i in 0..<n {
+            let total = tree.totals[i]
+            if nodes[i].has(NodeFlag.directory) {
+                let recent = UInt64(tree.statRow(i)[field]) << 14
+                if total > recent { values[i] = Int64(bitPattern: total - recent) }
+            } else if nodes[i].modTime < cut {
+                values[i] = Int64(bitPattern: total)
+            }
+        }
+        // Which pieces are left out. A parent's index is always lower than its children's, so one pass down the table
+        // marks whole branches, and one pass back up takes them out of everything that holds them.
+        let out = vmAlloc(UInt8.self, n)
+        let taken = vmAlloc(Int64.self, n)
+        defer {
+            vmFree(out, n)
+            vmFree(taken, n)
+        }
+        for id in used where Int(id) < n { out[Int(id)] = 1 }
+        for i in 1..<n {
+            let node = nodes[i]
+            var leftOut = node.has(NodeFlag.synthetic)
+            if !leftOut, node.rule != 0, let rules {
+                let rule = rules.rule(node.rule)
+                leftOut = rule.restartClears || rule.tier == .handsOff || rule.kind == .system
+            }
+            if leftOut { out[i] = 1 }
+            // Inside something left out: 2, so it isn't taken out a second time.
+            if out[Int(node.parent)] != 0 { out[i] = 2 }
+        }
+        var i = n - 1
+        while i > 0 {
+            let p = Int(nodes[i].parent)
+            switch out[i] {
+            case 1: taken[p] &+= values[i]
+            case 0: taken[p] &+= taken[i]
+            default: break
+            }
+            i -= 1
+        }
+        for i in 0..<n {
+            var left = out[i] != 0 ? 0 : max(values[i] &- taken[i], 0)
+            // A folder's sums are kept to the nearest 16 KiB, so one that has all changed can still seem to have a little
+            // left over. That much isn't worth saying.
+            if nodes[i].has(NodeFlag.directory), UInt64(left) < max(65_536, tree.totals[i] / 1000) { left = 0 }
+            values[i] = left
+        }
+        total = values[0]
+    }
+
+    /// What you're known to have used in the last `days`: apps you've opened or have open, what Plex says you watched,
+    /// games Steam started, and big videos Spotlight saw you open. Their files may be old, but they aren't forgotten.
+    static func usedRecently(_ facts: Facts, in tree: DiskTree, days: Int, now: Date = Date()) -> [UInt32] {
+        let since = now.addingTimeInterval(-Double(days) * 86_400)
+        var paths: [String] = []
+        for app in facts.apps where app.isRunning || (app.newestSign ?? .distantPast) >= since { paths.append(app.path) }
+        for (path, file) in facts.plexFiles where (file.lastViewed ?? .distantPast) >= since { paths.append(path) }
+        for game in facts.games where (game.lastPlayed ?? .distantPast) >= since { paths.append(game.folder) }
+        for (path, opened) in facts.lastOpened where opened >= since { paths.append(path) }
+        // The tree keeps the data volume's own paths, which is what a path from another app may leave out.
+        return paths.compactMap { tree.find(path: $0) ?? (tree.find(path: "/System/Volumes/Data" + $0)) }
+    }
+
     /// During a scan this map can be one picture behind, so a folder found since then has nothing to say yet.
     @inline(__always) func value(of node: UInt32) -> Int64 { Int(node) < capacity ? values[Int(node)] : 0 }
 
@@ -544,6 +650,8 @@ final class ChangeMap: @unchecked Sendable {
                 let up = nodes[Int(at)].parent
                 if up == 0 || up == tree.home || nodes[Int(up)].parent == 0 || nodes[Int(up)].parent == tree.home || nodes[Int(up)].has(NodeFlag.synthetic) { break }
                 if Double(sign * values[Int(up)]) > Double(sign * values[Int(id)]) * 1.12 { break }
+                // Named as untouched, a folder has to be nearly all untouched, not hold something you're working on too.
+                if isUntouched, Double(values[Int(up)]) < Double(tree.totals[Int(up)]) * 0.9 { break }
                 at = up
             }
             out[at] = max(sign * values[Int(at)], out[at] ?? 0)
@@ -611,6 +719,9 @@ enum Lenses {
     /// What didn't change stays quiet, and what shrank turns blue.
     static func changeColorer(tree: DiskTree, changes: ChangeMap) -> RingLayout.Colorer {
         let totals = tree.totals
+        if changes.isUntouched {
+            return { node in untouchedLab(untouched: UInt64(max(changes.value(of: node), 0)), bytes: totals[Int(node)]).linearP3 }
+        }
         return { node in changeLab(delta: changes.value(of: node), bytes: totals[Int(node)]).linearP3 }
     }
 
@@ -628,6 +739,13 @@ enum Lenses {
             return Lab.mix(Palette.quiet, Palette.cool, min(share.squareRoot() * 1.2, 0.9))
         }
         return Palette.quiet
+    }
+
+    /// Looking back instead: how much of each piece hasn't changed in the window, from slate for a little to ice for all of it.
+    static func untouchedLab(untouched: UInt64, bytes: UInt64) -> Lab {
+        guard untouched > 0 else { return Palette.quiet }
+        let share = min(Float(Double(untouched) / Double(max(bytes, 1))), 1)
+        return Lab.mix(Palette.quiet, Palette.frost(share), min(share / 0.01, 1))
     }
 
     /// Each thing wears its box's colour. What isn't part of the question stays quiet.

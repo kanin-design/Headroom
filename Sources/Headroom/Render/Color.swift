@@ -139,6 +139,18 @@ enum Palette {
 
     /// What grew, in the panel and the middle of Changes. On the ring, the light runs the whole heat scale, by how much.
     static let grew = heat(0.62)
+
+    /// The other end of Changes, what's gone untouched: from a deep blue for a piece that's a little untouched, through azure,
+    /// up to pale ice for one that's all untouched. Heat mirrored, as light as it at every step, and cold where it's warm, so
+    /// the two read the same way and never look alike.
+    static func frost(_ t: Float) -> Lab {
+        let x = max(0, min(1, t))
+        if x < 0.5 { return Lab.mix(Lab(lch: 0.45, 0.10, 268), Lab(lch: 0.71, 0.145, 238), x * 2) }
+        return Lab.mix(Lab(lch: 0.71, 0.145, 238), Lab(lch: 0.93, 0.065, 205), (x - 0.5) * 2)
+    }
+
+    /// What's gone untouched, in the panel and the middle of Changes.
+    static let untouched = frost(0.62)
     /// Something that shrank.
     static let cool = Lab(lch: 0.62, 0.15, 240)
     /// For pieces that aren't part of the question being asked.

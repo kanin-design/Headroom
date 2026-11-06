@@ -30,10 +30,13 @@ struct ZoomMapping {
 
 /// Everything that moves. Each transition stores where every piece starts and ends, and each frame only advances one
 /// number, so a zoom costs the same however many pieces it moves, and nothing is drawn once it's done.
-@MainActor
-final class MapEngine {
+///
+/// The window changes what's shown from the main thread, and the ring is drawn on a thread of its own, so everything that
+/// moves is changed and read while holding `lock`. The picture itself, `layout`, only ever changes on the main thread.
+final class MapEngine: @unchecked Sendable {
     let renderer: MapRenderer?
     private(set) var layout = RingLayout()
+    private let lock = NSLock()
 
     private var instances: [SegmentGPU] = []
     private var keys: [UInt64] = []
@@ -54,8 +57,10 @@ final class MapEngine {
     // In points, so the ring is right on any display, and when a window moves between displays.
     private var centerNow = SIMD2<Float>(0, 0)
     private var radiusNow: Float = 0
-    private var centerGoal = SIMD2<Float>(0, 0)
-    private var radiusGoal: Float = 0
+    /// The window moved the ring since the last frame.
+    private var placeChanged = false
+    /// For a check: where the ring is drawn now, in points.
+    var placeNow: (center: SIMD2<Float>, radius: Float) { lock.withLock { (centerNow, radiusNow) } }
     private var ghostNow: Float = 0
     private var ghostGoal: Float = 0
     private var ghostSlices: [(end: Float, color: SIMD3<Float>)] = []
@@ -85,6 +90,11 @@ final class MapEngine {
     // MARK: Pictures
 
     func apply(_ new: RingLayout, _ transition: RingTransition) {
+        lock.withLock { applyLocked(new, transition) }
+        requestFrame()
+    }
+
+    private func applyLocked(_ new: RingLayout, _ transition: RingTransition) {
         let t = x
         let colorT = min(max(x, 0), 1)
         var currentIndex = [UInt64: Int](minimumCapacity: keys.count)
@@ -217,7 +227,6 @@ final class MapEngine {
         case .settle: setSpring(stiffness: 80, dampingRatio: 1)
         }
         velocity = min(carried, stiffness.squareRoot())
-        requestFrame()
     }
 
     private func setSpring(stiffness k: Float, dampingRatio: Float) {
@@ -229,7 +238,8 @@ final class MapEngine {
 
     /// Lifts these pieces and lets the rest step back. Pass nothing to bring everything back.
     func setEmphasis(primary: Int?, related: [Range<Int>], ancestors: [Int] = []) {
-        guard !emphasisGoal.isEmpty else { return }
+        lock.lock()
+        guard !emphasisGoal.isEmpty else { lock.unlock(); return }
         for i in emphasisGoal.indices { emphasisGoal[i] = 0 }
         for range in related {
             for i in range where i < pieceCount { emphasisGoal[i] = 1 }
@@ -237,56 +247,95 @@ final class MapEngine {
         for i in ancestors where i < pieceCount { emphasisGoal[i] = max(emphasisGoal[i], 0.62) }
         if let primary, primary < pieceCount { emphasisGoal[primary] = 2 }
         dimGoal = (primary != nil || !related.isEmpty) ? 0.62 : 0
+        lock.unlock()
         requestFrame()
     }
 
     /// How far colour and glow hold back until you point at something, from none to all.
     func setCalm(_ amount: Float) {
-        calmGoal = amount
+        lock.withLock { calmGoal = amount }
         requestFrame()
     }
 
     /// How much the ring glows. Changes keeps it low, so what's lit reads as a shape.
     func setGlow(_ amount: Float) {
-        glowGoal = amount
+        lock.withLock { glowGoal = amount }
         requestFrame()
     }
 
     /// The bytes a cleanup would free, shown as a ghost growing out of the free wedge.
     func setGhost(_ share: Float) {
-        ghostGoal = share
+        lock.withLock { ghostGoal = share }
         requestFrame()
     }
 
     /// Its colours: where each one ends, as a share of the whole.
     func setGhostColours(_ slices: [(end: Float, color: SIMD3<Float>)]) {
-        ghostSlices = Array(slices.prefix(Self.ghostSliceLimit))
+        lock.withLock { ghostSlices = Array(slices.prefix(Self.ghostSliceLimit)) }
         requestFrame()
     }
 
     /// What the thing you're pointing at would add to it.
     func setPreview(_ share: Float, color: SIMD3<Float>) {
-        previewGoal = share
-        if share > 0 { previewColor = color }
+        lock.withLock {
+            previewGoal = share
+            if share > 0 { previewColor = color }
+        }
         requestFrame()
     }
 
     // MARK: Geometry on screen
 
-    func setGoal(center: CGPoint, radius: CGFloat, animated: Bool) {
-        centerGoal = SIMD2(Float(center.x), Float(center.y))
-        radiusGoal = Float(radius)
-        if !animated || radiusNow == 0 {
-            centerNow = centerGoal
-            radiusNow = radiusGoal
+    /// Where the ring is in the window now. SwiftUI says so on every frame of an animation that moves it, so the ring moves
+    /// exactly as everything drawn over it does. The last half second of a spring moves by hundredths of a point, which
+    /// nobody can see, so that isn't drawn.
+    @discardableResult
+    func setPlace(center: CGPoint, radius: CGFloat) -> Bool {
+        let changed = lock.withLock {
+            let place = SIMD2(Float(center.x), Float(center.y)), size = Float(radius)
+            let moved = max(abs(place.x - centerNow.x), abs(place.y - centerNow.y), abs(size - radiusNow))
+            guard moved > 0.02 || (radiusNow == 0 && size > 0) else { return false }
+            centerNow = place
+            radiusNow = size
+            placeChanged = true
+            return true
         }
-        requestFrame()
+        if changed { requestFrame() }
+        return changed
     }
 
     // MARK: Frames
 
+    /// One frame, on the ring's thread: everything moves on by `dt` seconds, and `encode` gets what the shaders need to draw
+    /// it, while nothing else can change it. Returns true while anything is still moving.
+    func frame(dt: Float, viewport: CGSize, scale: CGFloat, headroom: CGFloat, encode: ((UniformsGPU) -> Void)?) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let moving = advance(dt: dt)
+        encode?(uniforms(viewport: viewport, scale: scale, headroom: headroom))
+        return moving
+    }
+
+    /// While the ring is still, the memory its drawing used may be taken back.
+    func restDrawing() {
+        lock.withLock { renderer?.rest() }
+    }
+
+    /// For a check: as if the Mac had taken that memory.
+    func loseDrawing() {
+        lock.withLock {
+            renderer?.rest()
+            renderer?.loseTargets()
+        }
+    }
+
+    /// For a check: what the GPU holds for the ring.
+    func allocations() -> String {
+        lock.withLock { renderer?.allocations() ?? "no renderer" }
+    }
+
     /// Moves everything on by `dt` seconds. Returns true while anything is still moving.
-    func advance(dt rawDT: Float) -> Bool {
+    private func advance(dt rawDT: Float) -> Bool {
         let dt = min(rawDT, 1 / 30) * timeScale
         var moving = false
 
@@ -340,17 +389,13 @@ final class MapEngine {
             moving = true
         }
 
-        let ease = 1 - exp(-dt * 13)
-        if abs(radiusGoal - radiusNow) > 0.03 || simd_length(centerGoal - centerNow) > 0.03 {
-            radiusNow += (radiusGoal - radiusNow) * ease
-            centerNow += (centerGoal - centerNow) * ease
-            moving = true
-        } else if radiusNow != radiusGoal || centerNow != centerGoal {
-            radiusNow = radiusGoal
-            centerNow = centerGoal
+        // The window keeps saying where the ring is while it moves it, so there's a next frame.
+        if placeChanged {
+            placeChanged = false
             moving = true
         }
 
+        let ease = 1 - exp(-dt * 13)
         if abs(calmGoal - calmNow) > 0.002 {
             calmNow += (calmGoal - calmNow) * ease
             moving = true
@@ -384,7 +429,7 @@ final class MapEngine {
         return moving
     }
 
-    func uniforms(viewport: CGSize, scale: CGFloat, headroom: CGFloat) -> UniformsGPU {
+    private func uniforms(viewport: CGSize, scale: CGFloat, headroom: CGFloat) -> UniformsGPU {
         var u = UniformsGPU()
         u.viewport = SIMD2(Float(viewport.width), Float(viewport.height))
         u.center = centerNow * Float(scale)

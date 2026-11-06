@@ -8,7 +8,7 @@ let attrError: UInt32 = 0x2000_0000
 let attrName: UInt32 = 0x0000_0001
 let attrObjType: UInt32 = 0x0000_0008
 let attrModTime: UInt32 = 0x0000_0400
-private let attrFlags: UInt32 = 0x0004_0000
+private let attrChangeTime: UInt32 = 0x0000_0800
 private let attrFileID: UInt32 = 0x0200_0000
 private let attrAddedTime: UInt32 = 0x1000_0000
 private let attrDirEntryCount: UInt32 = 0x0000_0002
@@ -28,7 +28,8 @@ private let optionExtended: UInt64 = 0x20
 
 /// Reads a volume in the order that gets the picture right soonest. On a typical disk, under 1% of the files hold 90% of
 /// the bytes, and a folder holding big files has few entries, so folders are read fewest entries first, with build folders
-/// and caches last. After the first look the rest is read quietly: a few threads, at low priority.
+/// and caches last. With no map on screen yet, the rest follows at full power, because you're waiting for it. Behind a saved
+/// map it's read quietly: a few threads, at low priority.
 ///
 /// Every worker asks for whole directories' metadata in one system call (`getattrlistbulk`), adds small files to their
 /// folder without making a String, and keeps a node only for folders and for files of at least `promoteBytes`.
@@ -56,17 +57,46 @@ final class Scanner: @unchecked Sendable {
     private let nextName = Atomic<UInt64>(0)
     private let nextLink = Atomic<UInt64>(0)
     private let filesSeen = Atomic<UInt64>(0)
+    private let bytesSeen = Atomic<UInt64>(0)
     private let cancelled = Atomic<Bool>(false)
 
-    private let now = UInt32(Date().timeIntervalSince1970)
+    /// When this scan started, which is what file dates are measured from.
+    let now = UInt32(Date().timeIntervalSince1970)
     private let extensions = ExtensionTable.shared
 
     /// One folder waiting to be read. The lowest key goes first: what you're looking at, then what's cheap, then the rest.
     private struct Job {
         var key: UInt64
         var id: UInt32
+        /// The same folder in the map being refreshed, or `none`.
+        var old: UInt32 = Scanner.none
         var isUrgent: Bool { key >> 48 == 0 }
     }
+
+    /// A folder found inside the one being read, and the same folder in the map being refreshed, or `none`.
+    private struct Child {
+        var id: UInt32
+        var old: UInt32
+    }
+
+    static let none = UInt32.max
+
+    /// What a refresh does with each folder of the map it starts from.
+    enum Refresh {
+        /// Nothing in it has changed, so it's copied, and so is everything in it that hasn't changed either.
+        static let copy: UInt8 = 0
+        /// It's read again, and the folders found in it are matched with the ones it had.
+        static let read: UInt8 = 1
+        /// It and everything in it is read as if for the first time.
+        static let readAll: UInt8 = 2
+    }
+
+    // A refresh's map and what to do with each of its folders, set before the scan runs.
+    private var base: DiskTree?
+    private var marks: Mapped<UInt8>?
+    /// What's on the disk with no change since this, in seconds since 1970, is as the map has it.
+    private var unchangedSince: UInt32 = 0
+    private var seedOld: [UInt32: UInt32] = [:]
 
     /// The folders waiting, which can be hundreds of thousands. Mapped, like the tree's own tables: it never copies itself to
     /// grow, and all of it goes back the moment the scan is done.
@@ -208,6 +238,8 @@ final class Scanner: @unchecked Sendable {
     }
 
     var filesSoFar: UInt64 { filesSeen.load(ordering: .relaxed) }
+    /// Bytes counted so far, kept as they're read so nobody has to add up the table to know.
+    var bytesSoFar: UInt64 { bytesSeen.load(ordering: .relaxed) }
     /// Nodes in use. The counter itself can pass the table's size when a disk has more folders than the table holds.
     var nodesSoFar: Int { min(Int(nextNode.load(ordering: .relaxed)), DiskTree.capacity) }
     func cancel() {
@@ -255,13 +287,30 @@ final class Scanner: @unchecked Sendable {
 
     func setHome(_ id: UInt32) { homeID = id }
 
+    /// Makes this scan a refresh of `base`, doing with each of its folders what `marks` says.
+    func refresh(from base: DiskTree, marks: Mapped<UInt8>, unchangedSince: UInt32) {
+        self.base = base
+        self.marks = marks
+        self.unchangedSince = unchangedSince
+    }
+
+    /// A folder this scan starts from was this one in the map being refreshed.
+    func seed(_ id: UInt32, was old: UInt32) { seedOld[id] = old }
+
+    /// Lets go of the map that was refreshed.
+    func endRefresh() {
+        base = nil
+        marks = nil
+        seedOld = [:]
+    }
+
     // MARK: Running
 
     /// Blocks until the whole volume has been read.
     func run(threads: Int) {
         workerCount = max(1, threads)
         pthread_mutex_lock(lock)
-        for id in seeds { push(Job(key: key(tree.nodes[Int(id)], urgent: false), id: id)) }
+        for id in seeds { push(Job(key: key(tree.nodes[Int(id)], urgent: false), id: id, old: seedOld[id] ?? Self.none)) }
         seeds = []
         pthread_mutex_unlock(lock)
         let group = DispatchGroup()
@@ -415,7 +464,7 @@ final class Scanner: @unchecked Sendable {
         let pathBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 8192)
         var opened = OpenFolders()
         defer { buffer.deallocate(); pathBuffer.deallocate(); opened.closeAll() }
-        var local: [UInt32] = []
+        var local: [Child] = []
         local.reserveCapacity(4096)
         var batch: [Job] = []
         var found: [Job] = []
@@ -467,10 +516,10 @@ final class Scanner: @unchecked Sendable {
             found.removeAll(keepingCapacity: true)
             var read = 0
             while let job = batch.popLast() {
-                scan(job.id, buffer, bufferSize, pathBuffer, &local, &linkCursor, &linkEnd, &cursor, &cursorEnd, &opened)
+                scan(job.id, job.old, buffer, bufferSize, pathBuffer, &local, &linkCursor, &linkEnd, &cursor, &cursorEnd, &opened)
                 read += 1
                 for child in local {
-                    let next = Job(key: key(tree.nodes[Int(child)], urgent: job.isUrgent), id: child)
+                    let next = Job(key: key(tree.nodes[Int(child.id)], urgent: job.isUrgent), id: child.id, old: child.old)
                     // Carry on down this branch, but not for long, or the lock's list stops meaning anything. A build folder
                     // inside it still waits its turn.
                     if !keepOrder && read < 48 && batch.count < 64 && next.key >> 48 <= job.key >> 48 {
@@ -599,10 +648,24 @@ final class Scanner: @unchecked Sendable {
         return fd
     }
 
-    private func scan(_ id: UInt32, _ buffer: UnsafeMutableRawPointer, _ bufferSize: Int, _ pathBuffer: UnsafeMutablePointer<UInt8>,
-                      _ local: inout [UInt32], _ linkCursor: inout Int, _ linkEnd: inout Int, _ cursor: inout UInt64, _ cursorEnd: inout UInt64,
+    private func scan(_ id: UInt32, _ given: UInt32, _ buffer: UnsafeMutableRawPointer, _ bufferSize: Int, _ pathBuffer: UnsafeMutablePointer<UInt8>,
+                      _ local: inout [Child], _ linkCursor: inout Int, _ linkEnd: inout Int, _ cursor: inout UInt64, _ cursorEnd: inout UInt64,
                       _ opened: inout OpenFolders) {
         if cancelled.load(ordering: .relaxed) { return }
+        // A refresh copies what hasn't changed, and reads the rest.
+        var old = given
+        var earlier = EarlierFolders()
+        if old != Self.none, let base, let marks {
+            switch marks[Int(old)] {
+            case Refresh.copy:
+                copy(id, from: old, in: base, &local, &cursor, &cursorEnd)
+                return
+            case Refresh.read:
+                earlier = EarlierFolders(of: old, in: base)
+            default:
+                old = Self.none
+            }
+        }
         let nodes = tree.nodes
         let fd = openFolderPatiently(id, pathBuffer, &opened)
         if fd < 0 {
@@ -611,10 +674,11 @@ final class Scanner: @unchecked Sendable {
             return
         }
         opened.keep(id, fd)
+        if base != nil, nodes[Int(id)].modTime == 0, nodes[Int(id)].flags & NodeFlag.anchor == 0 { nodes[Int(id)].modTime = folderDate(fd) }
 
         var list = attrlist()
         list.bitmapcount = u_short(ATTR_BIT_MAP_COUNT)
-        list.commonattr = attrReturned | attrError | attrName | attrObjType | attrModTime | attrFlags | attrFileID | attrAddedTime
+        list.commonattr = attrReturned | attrError | attrName | attrObjType | attrModTime | attrFileID | attrAddedTime | (old != Self.none ? attrChangeTime : 0)
         list.dirattr = attrDirEntryCount | attrDirMountStatus
         list.fileattr = attrFileLinkCount | attrFileAllocSize
         list.forkattr = attrExtCloneID | attrExtFlags
@@ -629,14 +693,17 @@ final class Scanner: @unchecked Sendable {
         let isLibrary = !isHome && parent.parent == homeID && nameHash(id) == libraryName
 
         var bytes: UInt64 = 0
+        var found: UInt64 = 0
         var aliasBytes: UInt64 = 0
         var fileCount: UInt32 = 0
         var newest: UInt32 = 0
         var firstChild = parent.firstChild
         var kindBytes = (UInt64(0), UInt64(0), UInt64(0), UInt64(0), UInt64(0), UInt64(0), UInt64(0), UInt64(0), UInt64(0), UInt64(0), UInt64(0))
         var recent1: UInt64 = 0, recent7: UInt64 = 0, recent14: UInt64 = 0, recent30: UInt64 = 0
+        var recent91: UInt64 = 0, recent365: UInt64 = 0
         let day: UInt32 = 86_400
         let cut1 = now &- day, cut7 = now &- 7 * day, cut14 = now &- 14 * day, cut30 = now &- 30 * day
+        let cut91 = now &- 91 * day, cut365 = now &- 365 * day
 
         while true {
             let count = getattrlistbulk(fd, &list, buffer, bufferSize, optionNoFollow | optionExtended)
@@ -669,7 +736,8 @@ final class Scanner: @unchecked Sendable {
                 if common & attrObjType != 0 { type = p.loadUnaligned(as: UInt32.self); p += 4 }
                 var mod: UInt32 = 0
                 if common & attrModTime != 0 { mod = UInt32(truncatingIfNeeded: p.loadUnaligned(as: Int.self)); p += 16 }
-                if common & attrFlags != 0 { p += 4 }
+                var changed: UInt32 = 0
+                if common & attrChangeTime != 0 { changed = UInt32(truncatingIfNeeded: p.loadUnaligned(as: Int.self)); p += 16 }
                 var fileID: UInt64 = 0
                 if common & attrFileID != 0 { fileID = p.loadUnaligned(as: UInt64.self); p += 8 }
                 if common & attrAddedTime != 0 {
@@ -747,7 +815,11 @@ final class Scanner: @unchecked Sendable {
                     node.nextSibling = firstChild
                     nodes[Int(child)] = node
                     firstChild = child
-                    if toRead { local.append(child) }
+                    if toRead {
+                        let was = old == Self.none ? Self.none
+                            : sameFolder(earlier, name, nameLength, changed: changed, mod: mod, entries: dirAttrs & attrDirEntryCount != 0 ? entries : nil)
+                        local.append(Child(id: child, old: was))
+                    }
                     continue
                 }
 
@@ -813,17 +885,23 @@ final class Scanner: @unchecked Sendable {
                 }
 
                 if linkKey != 0 {
-                    addLink(LinkRecord(key: linkKey, bytes: alloc, dir: id, file: fileNode, when: mod, kind: kind, counted: counted), &linkCursor, &linkEnd)
+                    let paths: UInt16 = linkKey >> 63 == 0 ? UInt16(min(links32, 65_535)) : 0
+                    addLink(LinkRecord(key: linkKey, bytes: alloc, dir: id, file: fileNode, when: mod, kind: kind, counted: counted, paths: paths), &linkCursor, &linkEnd)
                 }
 
                 if share != 0 {
+                    found &+= share
                     withUnsafeMutableBytes(of: &kindBytes) { $0.assumingMemoryBound(to: UInt64.self)[Int(kind)] &+= share }
-                    if mod >= cut30 {
-                        recent30 &+= share
-                        if mod >= cut14 { recent14 &+= share }
-                        if mod >= cut7 {
-                            recent7 &+= share
-                            if mod >= cut1 { recent1 &+= share }
+                    if mod >= cut365 {
+                        recent365 &+= share
+                        if mod >= cut91 { recent91 &+= share }
+                        if mod >= cut30 {
+                            recent30 &+= share
+                            if mod >= cut14 { recent14 &+= share }
+                            if mod >= cut7 {
+                                recent7 &+= share
+                                if mod >= cut1 { recent1 &+= share }
+                            }
                         }
                     }
                 }
@@ -832,6 +910,7 @@ final class Scanner: @unchecked Sendable {
         }
 
         filesSeen.add(UInt64(fileCount), ordering: .relaxed)
+        bytesSeen.add(found, ordering: .relaxed)
 
         let s = tree.statTable + Int(id) * DiskTree.statStride
         withUnsafeBytes(of: &kindBytes) { raw in
@@ -842,6 +921,8 @@ final class Scanner: @unchecked Sendable {
         s[DiskTree.statRecent7] = Self.units(recent7)
         s[DiskTree.statRecent30] = Self.units(recent30)
         s[DiskTree.statRecent14] = Self.units(recent14)
+        s[DiskTree.statRecent91] = Self.units(recent91)
+        s[DiskTree.statRecent365] = Self.units(recent365)
 
         nodes[Int(id)].fileCount = fileCount
         if newest > nodes[Int(id)].modTime || nodes[Int(id)].modTime == 0 { nodes[Int(id)].modTime = newest }
@@ -849,6 +930,146 @@ final class Scanner: @unchecked Sendable {
         nodes[Int(id)].firstChild = firstChild
         nodes[Int(id)].bytes = bytes
         nodes[Int(id)].flags &= ~NodeFlag.unread
+        tree.count = max(tree.count, nodesSoFar)
+    }
+
+    // MARK: Refreshing
+
+    /// The folders a folder had in the map being refreshed, to match with the ones it has now. Looked up by name in a table
+    /// when there are many.
+    private struct EarlierFolders {
+        var base: DiskTree?
+        var folders: [UInt32] = []
+        var table: [UInt32] = []
+
+        init() {}
+
+        init(of old: UInt32, in base: DiskTree) {
+            self.base = base
+            let nodes = base.nodes
+            var c = nodes[Int(old)].firstChild
+            while c != 0 {
+                if nodes[Int(c)].flags & NodeFlag.directory != 0 { folders.append(c) }
+                c = nodes[Int(c)].nextSibling
+            }
+            guard folders.count > 16 else { return }
+            var size = 64
+            while size < folders.count * 2 { size <<= 1 }
+            table = [UInt32](repeating: 0, count: size)
+            for c in folders {
+                let n = nodes[Int(c)]
+                var at = Int(truncatingIfNeeded: RuleBook.hash(UnsafePointer(base.names + Int(n.nameOffset)), Int(n.nameLength))) & (size - 1)
+                while table[at] != 0 { at = (at + 1) & (size - 1) }
+                table[at] = c
+            }
+        }
+
+        func named(_ name: UnsafePointer<UInt8>, _ length: Int) -> UInt32? {
+            guard let base else { return nil }
+            let nodes = base.nodes, names = base.names
+            func matches(_ c: UInt32) -> Bool {
+                let n = nodes[Int(c)]
+                return Int(n.nameLength) == length && memcmp(names + Int(n.nameOffset), name, length) == 0
+            }
+            if table.isEmpty { return folders.first(where: matches) }
+            var at = Int(truncatingIfNeeded: RuleBook.hash(name, length)) & (table.count - 1)
+            while table[at] != 0 {
+                if matches(table[at]) { return table[at] }
+                at = (at + 1) & (table.count - 1)
+            }
+            return nil
+        }
+    }
+
+    /// A folder's own date, the later of when what's in it last changed and when it was put where it is.
+    private func folderDate(_ fd: Int32) -> UInt32 {
+        var list = attrlist()
+        list.bitmapcount = u_short(ATTR_BIT_MAP_COUNT)
+        list.commonattr = attrReturned | attrModTime | attrAddedTime
+        var buffer = [UInt8](repeating: 0, count: 64)
+        // Packed, so each one is where it would be even if the disk doesn't keep it.
+        guard fgetattrlist(fd, &list, &buffer, buffer.count, UInt32(FSOPT_PACK_INVAL_ATTRS)) == 0 else { return 0 }
+        return buffer.withUnsafeBytes { raw in
+            let modified = UInt32(truncatingIfNeeded: raw.loadUnaligned(fromByteOffset: 24, as: Int.self))
+            let added = UInt32(truncatingIfNeeded: raw.loadUnaligned(fromByteOffset: 40, as: Int.self))
+            return max(modified, added)
+        }
+    }
+
+    /// The folder the map had under this name, if it's still the same one. Either the journal says it changed, so it's read
+    /// again anyway, or it hasn't been touched, moved or renamed since the map was made and holds as many things as it did.
+    /// A folder put in its place since was made or renamed since, so its change date is too new.
+    private func sameFolder(_ earlier: EarlierFolders, _ name: UnsafePointer<UInt8>, _ length: Int, changed: UInt32, mod: UInt32, entries: UInt32?) -> UInt32 {
+        guard let base, let marks, let found = earlier.named(name, length) else { return Self.none }
+        if marks[Int(found)] != Refresh.copy { return found }
+        let nodes = base.nodes
+        let was = nodes[Int(found)]
+        guard changed <= unchangedSince, mod <= was.modTime else { return Self.none }
+        if let entries {
+            var held = was.fileCount
+            var c = was.firstChild
+            while c != 0 {
+                if nodes[Int(c)].flags & NodeFlag.directory != 0 { held &+= 1 }
+                c = nodes[Int(c)].nextSibling
+            }
+            guard held == entries else { return Self.none }
+        }
+        return found
+    }
+
+    /// A folder that hasn't changed since the map being refreshed. What it holds is copied from there, and of the folders
+    /// in it, only those that did change are read.
+    private func copy(_ id: UInt32, from old: UInt32, in base: DiskTree, _ local: inout [Child], _ cursor: inout UInt64, _ cursorEnd: inout UInt64) {
+        let nodes = tree.nodes, was = base.nodes
+        let source = was[Int(old)]
+        let width = DiskTree.statStride
+        let s = tree.statTable + Int(id) * width
+        let all = base.statRow(old)
+        for f in 0..<width { s[f] = all[f] }
+        var firstChild = nodes[Int(id)].firstChild
+        var found: UInt64 = source.bytes
+        var c = source.firstChild
+        while c != 0 {
+            let from = c
+            let child = was[Int(from)]
+            c = child.nextSibling
+            // What a folder holds itself is what it holds in all, less what's in the folders and named files inside.
+            let row = base.statRow(from)
+            for f in 0..<width { s[f] &-= row[f] }
+            let new = nextNode.add(1, ordering: .relaxed).oldValue
+            guard Int(new) < DiskTree.capacity else { continue }
+            var node = child
+            node.parent = id
+            node.firstChild = 0
+            node.flags &= ~(NodeFlag.incomplete | NodeFlag.unread | NodeFlag.gone | NodeFlag.denied)
+            storeName(&node, UnsafePointer(base.names + Int(child.nameOffset)), Int(child.nameLength), &cursor, &cursorEnd)
+            let isFolder = child.flags & NodeFlag.directory != 0
+            let descends = isFolder && child.flags & (NodeFlag.mount | NodeFlag.locked) == 0
+            // Until a folder is read, its file count is how many entries to expect, and an old count could stop the
+            // reading short. Copying puts the count back.
+            if descends {
+                node.flags |= NodeFlag.unread
+                node.fileCount = 0
+                // A folder that's read again needs its own date as it is now, which a listing of this one would have had.
+                if marks?[Int(from)] != Refresh.copy { node.modTime = 0 }
+            }
+            if !isFolder { found &+= child.bytes }
+            node.nextSibling = firstChild
+            nodes[Int(new)] = node
+            firstChild = new
+            if descends { local.append(Child(id: new, old: from)) }
+        }
+        // Its dates were measured when it was read. What's since grown older than a window reaches back has left it.
+        let newest = max(nodes[Int(id)].modTime, source.modTime)
+        for (field, days) in DiskTree.recency where newest < now &- days * 86_400 { s[field] = 0 }
+        nodes[Int(id)].modTime = newest
+        nodes[Int(id)].bytes = source.bytes
+        nodes[Int(id)].aliasBytes = source.aliasBytes
+        nodes[Int(id)].fileCount = source.fileCount
+        nodes[Int(id)].firstChild = firstChild
+        nodes[Int(id)].flags &= ~(NodeFlag.unread | NodeFlag.denied)
+        filesSeen.add(UInt64(source.fileCount), ordering: .relaxed)
+        bytesSeen.add(found, ordering: .relaxed)
         tree.count = max(tree.count, nodesSoFar)
     }
 

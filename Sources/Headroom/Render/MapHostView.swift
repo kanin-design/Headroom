@@ -4,12 +4,13 @@ import Metal
 import QuartzCore
 import SwiftUI
 
-/// The ring's window into the display. It draws only while something is moving.
+/// The ring's window into the display. It draws only while something is moving, and it draws on a thread of its own, so
+/// the ring keeps moving whatever the rest of the window is doing.
 final class MapHostView: NSView {
     weak var model: AppModel?
     private var metalLayer: CAMetalLayer { layer as! CAMetalLayer }
-    private var link: CADisplayLink?
-    private var lastFrame: CFTimeInterval = 0
+    /// Everything about drawing the ring.
+    private(set) var drawer: RingDrawer!
     private var trackingArea: NSTrackingArea?
     private var downPoint: NSPoint?
     /// A press on empty background, which moves the window if the pointer moves.
@@ -20,15 +21,7 @@ final class MapHostView: NSView {
     /// For a check: how many times the window has been told to follow the pointer.
     private(set) var windowMovesStarted = 0
     private var pinch: CGFloat = 0
-    private(set) var framesDrawn = 0
-    private var surfaces: [IOSurfaceRef] = []
-    private var surfaceOnScreen: IOSurfaceRef?
-    /// Surfaces of the size or format the picture had before, until the new picture is on screen.
-    private var retired: [IOSurfaceRef] = []
-    private var surfacesAreResting = false
-    // kIOSurfacePurgeableNonVolatile, Volatile and Empty, which Swift doesn't get by name.
-    private static let mustBeKept: UInt32 = 0, mayBePurged: UInt32 = 1, isEmptied: UInt32 = 2
-    private var engine: MapEngine? { model?.engine }
+    var framesDrawn: Int { drawer.framesDrawn }
     /// A scripted check takes pictures of the window wherever it is, so it keeps drawing.
     static var drawsWhenHidden = ScriptRunner.path != nil
     private var canBeSeen: Bool { Self.drawsWhenHidden || window?.occlusionState.contains(.visible) == true }
@@ -54,10 +47,14 @@ final class MapHostView: NSView {
         l.maximumDrawableCount = 3
         l.isOpaque = true
         l.backgroundColor = CGColor(gray: 0.02, alpha: 1)
+        drawer = RingDrawer(engine: model.engine, layer: l)
+        drawer.stopped = { [weak self] frame in self?.rest(after: frame) }
         model.engine.requestFrame = { [weak self] in self?.startAnimating() }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    deinit { drawer?.end() }
 
     private var contentScale: CGFloat { window?.backingScaleFactor ?? 2 }
 
@@ -65,8 +62,7 @@ final class MapHostView: NSView {
         super.viewDidMoveToWindow()
         NotificationCenter.default.removeObserver(self)
         guard let window else {
-            link?.invalidate()
-            link = nil
+            drawer.detach()
             return
         }
         watchForDoubleClicksOnTop()
@@ -74,11 +70,7 @@ final class MapHostView: NSView {
         center.addObserver(self, selector: #selector(windowCameOrWent(_:)), name: NSWindow.didChangeOcclusionStateNotification, object: window)
         center.addObserver(self, selector: #selector(windowCameOrWent(_:)), name: NSWindow.didMiniaturizeNotification, object: window)
         center.addObserver(self, selector: #selector(windowCameOrWent(_:)), name: NSApplication.didHideNotification, object: nil)
-        link?.invalidate()
-        let l = displayLink(target: self, selector: #selector(step(_:)))
-        l.add(to: .main, forMode: .common)
-        l.isPaused = true
-        link = l
+        drawer.attach(to: self)
         updateDrawableSize()
         startAnimating()
         // The map has the keyboard from the start, so Esc and Space simply work.
@@ -99,9 +91,8 @@ final class MapHostView: NSView {
         updateDrawableSize()
         if inLiveResize {
             // Keep the ring and the window in step while dragging the edge.
-            metalLayer.presentsWithTransaction = true
-            drawFrame()
-            metalLayer.presentsWithTransaction = false
+            tellDrawer()
+            drawer.drawWithWindow()
         } else {
             startAnimating()
         }
@@ -115,138 +106,44 @@ final class MapHostView: NSView {
     private func updateDrawableSize() {
         let scale = contentScale
         metalLayer.contentsScale = scale
-        let size = CGSize(width: max(bounds.width * scale, 1), height: max(bounds.height * scale, 1))
-        guard size != metalLayer.drawableSize else { return }
-        metalLayer.drawableSize = size
-        retireSurfaces()
+        drawer.resize(to: CGSize(width: max(bounds.width * scale, 1), height: max(bounds.height * scale, 1)))
+    }
+
+    /// What drawing needs to know that only the main thread may ask: the screen's scale and how far past white it can go,
+    /// and the format of the picture that follows from that.
+    private func tellDrawer() {
+        let headroom = window?.screen?.maximumExtendedDynamicRangeColorComponentValue ?? 1
+        drawer.screen(scale: contentScale, headroom: headroom, hasRoom: bounds.width > 1)
+        if let renderer = model?.engine.renderer { drawer.use(Self.forcedFormat ?? renderer.screenFormat(headroom: headroom)) }
     }
 
     func startAnimating() {
         // It starts again when the window can be seen, from where it had got to.
-        guard let link, canBeSeen else { return }
-        if link.isPaused {
-            lastFrame = 0
-            link.isPaused = false
-        }
-    }
-
-    @objc private func step(_ link: CADisplayLink) {
-        guard let engine else { return }
-        let now = link.timestamp
-        let dt = lastFrame == 0 ? 1.0 / 60 : now - lastFrame
-        lastFrame = now
-        let moving = engine.advance(dt: Float(dt))
-        drawFrame(isLast: !moving)
-        if !moving { link.isPaused = true }
-    }
-
-    private func drawFrame(isLast: Bool = false) {
-        guard let engine, let renderer = engine.renderer, bounds.width > 1 else { return }
-        let headroom = window?.screen?.maximumExtendedDynamicRangeColorComponentValue ?? 1
-        useFormat(Self.forcedFormat ?? renderer.screenFormat(headroom: headroom))
-        guard let drawable = metalLayer.nextDrawable(), let commands = renderer.commandQueue.makeCommandBuffer() else { return }
-        framesDrawn &+= 1
-        wakeSurfaces()
-        if let surface = drawable.texture.iosurface { note(surface) }
-        if !retired.isEmpty { emptyRetired(once: drawable) }
-        if isLast {
-            let frame = framesDrawn
-            // A moment after it's on screen, so moving the pointer from piece to piece doesn't keep going back and forth.
-            commands.addCompletedHandler { [weak self] _ in
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { self?.restAfter(frame) }
-            }
-        }
-        let u = engine.uniforms(viewport: metalLayer.drawableSize, scale: contentScale, headroom: headroom)
-        renderer.encode(into: commands, target: drawable.texture, uniforms: u)
-        if metalLayer.presentsWithTransaction {
-            commands.commit()
-            commands.waitUntilScheduled()
-            drawable.present()
-        } else {
-            commands.present(drawable)
-            commands.commit()
-        }
+        guard window != nil, canBeSeen else { return }
+        tellDrawer()
+        drawer.start()
     }
 
     /// For a check: the picture in one format, whatever the screen can do.
     nonisolated(unsafe) static var forcedFormat: MTLPixelFormat?
 
-    /// The picture on screen takes half the memory while the screen can show at most 1.5 times white. When it can show more,
-    /// it goes back to the format that holds the brighter glow.
-    private func useFormat(_ format: MTLPixelFormat) {
-        guard metalLayer.pixelFormat != format else { return }
-        if ScriptRunner.path != nil { print("format now \(format == MapRenderer.outputFormat ? "wide" : "narrow")") }
-        metalLayer.pixelFormat = format
-        metalLayer.colorspace = CGColorSpace(name: format == MapRenderer.outputFormat ? CGColorSpace.extendedLinearDisplayP3 : CGColorSpace.extendedDisplayP3)
-        retireSurfaces()
-    }
-
-    /// A new size or format means new surfaces. The layer lets most of the old ones go, but the last one on screen stays in
-    /// memory behind the new picture for as long as nothing else is drawn, which can be for good. So once the new picture is
-    /// on screen, the old ones are emptied.
-    private func retireSurfaces() {
-        retired += surfaces
-        surfaces = []
-        surfaceOnScreen = nil
-    }
-
-    private func emptyRetired(once drawable: CAMetalDrawable) {
-        let old = retired
-        retired = []
-        drawable.addPresentedHandler { _ in
-            DispatchQueue.main.async { [weak self] in
-                // One the layer has started to use again keeps what's drawn in it.
-                let inUse = self?.surfaces ?? []
-                for surface in old where !inUse.contains(where: { $0 === surface }) {
-                    IOSurfaceSetPurgeable(surface, MapHostView.isEmptied, nil)
-                }
-            }
-        }
-    }
-
     /// Once the ring has stopped and its last frame is done, it holds on to nothing but what's on screen.
-    private func restAfter(_ frame: Int) {
-        guard frame == framesDrawn, link?.isPaused ?? true, !inLiveResize else { return }
-        engine?.renderer?.rest()
-        restSurfaces()
-    }
-
-    /// The drawing surfaces behind the one on screen. Their memory can go and they stay where they are, so there's nothing to
-    /// make again when the ring next moves. The picture on screen stays while the window is only covered, because it can come
-    /// to the front at any moment and has to be there. Minimized or hidden, it can go too.
-    private func restSurfaces() {
-        surfacesAreResting = true
-        let isPutAway = window?.isMiniaturized == true || NSApp.isHidden
-        for surface in surfaces where surface !== surfaceOnScreen || isPutAway {
-            IOSurfaceSetPurgeable(surface, Self.mayBePurged, nil)
-        }
-    }
-
-    private func wakeSurfaces() {
-        guard surfacesAreResting else { return }
-        surfacesAreResting = false
-        for surface in surfaces { IOSurfaceSetPurgeable(surface, Self.mustBeKept, nil) }
-    }
-
-    /// The layer doesn't say which surfaces it has, so they're noted as they come. It uses them in turn, and never more than this.
-    private func note(_ surface: IOSurfaceRef) {
-        surfaceOnScreen = surface
-        if let at = surfaces.firstIndex(where: { $0 === surface }) {
-            surfaces.remove(at: at)
-        } else {
-            // New, or one that was emptied: either way, what's drawn in it now has to stay.
-            IOSurfaceSetPurgeable(surface, Self.mustBeKept, nil)
-            if surfaces.count > metalLayer.maximumDrawableCount { IOSurfaceSetPurgeable(surfaces.removeFirst(), Self.mustBeKept, nil) }
-        }
-        surfaces.append(surface)
+    private func rest(after frame: Int) {
+        guard !inLiveResize else { return }
+        drawer.rest(after: frame, putAway: window?.isMiniaturized == true || NSApp.isHidden)
     }
 
     /// For a check: what happens when the Mac is short of memory and really takes what it's allowed to.
     func loseWhatItMayLose() {
-        engine?.renderer?.rest()
-        engine?.renderer?.loseTargets()
-        for surface in surfaces where surface !== surfaceOnScreen { IOSurfaceSetPurgeable(surface, Self.isEmptied, nil) }
-        surfacesAreResting = true
+        drawer.loseWhatItMayLose()
+    }
+
+    /// The ring moved with the rest of the window: this frame of it reaches the screen with theirs. While the window is
+    /// being resized, each new size draws its own frame.
+    func drawWithWindow() {
+        guard window != nil, canBeSeen, !inLiveResize else { return }
+        tellDrawer()
+        drawer.drawWithWindow()
     }
 
     @objc private func windowCameOrWent(_ note: Notification) {
@@ -254,15 +151,15 @@ final class MapHostView: NSView {
         model?.windowCameOrWent(isVisible: isVisible || Self.drawsWhenHidden)
         if isVisible {
             // What was on screen may be gone, so the ring is always drawn again.
-            wakeSurfaces()
+            drawer.wakeSurfaces()
             startAnimating()
             return
         }
         // Nobody can see it, so nothing is drawn. Whatever's still drawing gets a moment to finish.
-        if !Self.drawsWhenHidden { link?.isPaused = true }
-        guard link?.isPaused ?? true, framesDrawn > 0 else { return }
-        let frame = framesDrawn
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in self?.restAfter(frame) }
+        if !Self.drawsWhenHidden { drawer.stop() }
+        let frame = drawer.framesDrawn
+        guard frame > 0 else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in self?.rest(after: frame) }
     }
 
     // MARK: Pointer
@@ -401,7 +298,6 @@ final class MapHostView: NSView {
 
 struct MapView: NSViewRepresentable {
     let model: AppModel
-    let ring: RingGeometry
 
     func makeNSView(context: Context) -> MapHostView {
         let view = MapHostView(model: model)
@@ -409,7 +305,31 @@ struct MapView: NSViewRepresentable {
         return view
     }
 
-    func updateNSView(_ view: MapHostView, context: Context) {
-        model.engine.setGoal(center: ring.center, radius: ring.radius, animated: !view.inLiveResize)
+    func updateNSView(_ view: MapHostView, context: Context) {}
+}
+
+/// The ring's place in the window, handed to the ring on every frame of whatever animation SwiftUI moves it with, as the
+/// panel comes and goes, and at once when nothing animates it, as while the window is resized. So the ring and everything
+/// drawn over it, such as the numbers in its middle, move as one. It shows nothing itself.
+struct RingPlace: View, Animatable {
+    var center: CGPoint
+    var radius: CGFloat
+    /// The window's size. When it changes, the picture changes size too, and that draws a frame of its own.
+    let size: CGSize
+    let model: AppModel
+
+    var animatableData: AnimatablePair<CGPoint.AnimatableData, CGFloat> {
+        get { AnimatablePair(center.animatableData, radius) }
+        set {
+            center.animatableData = newValue.first
+            radius = newValue.second
+        }
+    }
+
+    var body: some View {
+        if model.engine.setPlace(center: center, radius: radius), let view = model.mapView, view.bounds.size == size { view.drawWithWindow() }
+        return Color.clear
+            .frame(width: 0, height: 0)
+            .allowsHitTesting(false)
     }
 }

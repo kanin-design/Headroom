@@ -464,11 +464,24 @@ struct ChangesPanel: View {
 
     private var windows: [ChangeWindow] { [.lastScan, .days(1), .days(7), .days(30)] }
 
+    private var untouched: Bool { model.changeWindow.isUntouched }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                picker
-                if recent.count >= 2 { chart }
+                VStack(alignment: .leading, spacing: 6) {
+                    picker(windows)
+                    // The other way round: what nothing has changed in for that long.
+                    HStack(spacing: 8) {
+                        Text("Untouched")
+                            .font(.system(size: 11.5, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.5))
+                            .fixedSize()
+                            .padding(.leading, 10)
+                        picker(ChangeWindow.untouchedWindows)
+                    }
+                }
+                if recent.count >= 2, !untouched { chart }
                 rows
             }
             .padding(16)
@@ -477,7 +490,7 @@ struct ChangesPanel: View {
         .scrollIndicators(.never)
     }
 
-    private var picker: some View {
+    private func picker(_ windows: [ChangeWindow]) -> some View {
         HStack(spacing: 2) {
             ForEach(windows) { window in
                 Button {
@@ -498,13 +511,26 @@ struct ChangesPanel: View {
         .background(Capsule().fill(.white.opacity(0.05)))
     }
 
-    /// The ring's colours as a scale: how much of each piece is new or changed.
+    /// The ring's colours as a scale, taken from the ring itself: how much of each piece is new or changed, or untouched. None
+    /// of it stays quiet, as on the ring, and the first sliver fades in from there; the bar gives that its own short stretch
+    /// at the start, because on the ring it all happens in the first percent.
     private var scale: some View {
-        HStack(spacing: 6) {
+        let colour: (Double) -> Color = untouched
+            ? { Lenses.untouchedLab(untouched: UInt64($0 * 1e9), bytes: 1_000_000_000).swiftUI }
+            : { Lenses.changeLab(delta: Int64($0 * 1e9), bytes: 1_000_000_000).swiftUI }
+        let fade = 0.08
+        let stops = (0...24).map { i -> Gradient.Stop in
+            let at = Double(i) / 24
+            let share = at < fade ? at / fade * 0.01 : 0.01 + (at - fade) / (1 - fade) * 0.99
+            return Gradient.Stop(color: colour(share), location: at)
+        }
+        return HStack(spacing: 6) {
             Text("0%")
-            LinearGradient(colors: [Palette.heat(0).swiftUI, Palette.heat(0.5).swiftUI, Palette.heat(1).swiftUI], startPoint: .leading, endPoint: .trailing)
-                .frame(width: 56, height: 6)
+            LinearGradient(stops: stops, startPoint: .leading, endPoint: .trailing)
+                .frame(width: 112, height: 6)
                 .clipShape(Capsule())
+                // The ring's colours give off light, and so does their scale.
+                .shadow(color: colour(0.8).opacity(0.4), radius: 3)
             Text("100%")
         }
         .font(.system(size: 10.5, weight: .medium).monospacedDigit())
@@ -557,11 +583,11 @@ struct ChangesPanel: View {
     private var rows: some View {
         if model.tree != nil {
             HStack(alignment: .center) {
-                SectionHeading(text: model.changeUsesHistory ? "Grew" : "Touched")
+                SectionHeading(text: untouched ? "Untouched" : model.changeUsesHistory ? "Grew" : "Touched")
                 if !model.changeRows.isEmpty { scale }
             }
             if model.changeRows.isEmpty {
-                Text(model.changeUsesHistory ? "Nothing grew by much." : "Nothing much was touched.")
+                Text(untouched ? "Nothing big has been left that long." : model.changeUsesHistory ? "Nothing grew by much." : "Nothing much was touched.")
                     .font(.system(size: 12.5))
                     .foregroundStyle(.white.opacity(0.55))
             } else {
@@ -581,9 +607,11 @@ struct ChangesPanel: View {
             ForEach(rows) { row in
                 let share = Double(abs(row.delta)) / biggest
                 let size = model.tree.map { $0.totals[Int(row.node)] } ?? 0
-                let colour = row.delta < 0 ? Palette.cool.swiftUI : Lenses.changeLab(delta: row.delta, bytes: size).swiftUI
-                NodeRow(title: row.title, subtitle: row.subtitle, value: (row.delta < 0 ? "−" : "+") + formatBytes(UInt64(abs(row.delta))),
-                        share: share, color: colour, valueColor: row.delta < 0 ? Palette.cool.swiftUI : Palette.grew.swiftUI,
+                let colour = untouched ? Lenses.untouchedLab(untouched: UInt64(max(row.delta, 0)), bytes: size).swiftUI
+                    : row.delta < 0 ? Palette.cool.swiftUI : Lenses.changeLab(delta: row.delta, bytes: size).swiftUI
+                let value = untouched ? formatBytes(UInt64(max(row.delta, 0))) : (row.delta < 0 ? "−" : "+") + formatBytes(UInt64(abs(row.delta)))
+                NodeRow(title: row.title, subtitle: row.subtitle, value: value,
+                        share: share, color: colour, valueColor: untouched ? Palette.untouched.swiftUI : row.delta < 0 ? Palette.cool.swiftUI : Palette.grew.swiftUI,
                         onHover: { inside in model.highlight(node: inside ? row.node : nil) },
                         onTap: { open(row.node) })
                     .named(NamedThing(row.node), in: model)
