@@ -389,6 +389,8 @@ struct CenterReadout: View {
                 hoverContent(hover, size: size)
             } else if model.focus != 0, let tree = model.tree {
                 folderContent(tree, size: size)
+            } else if model.lens == .changes, model.changeUsesHistory || model.changeTotal > 0 {
+                changesContent(size: size)
             } else {
                 diskContent(size: size)
             }
@@ -399,15 +401,50 @@ struct CenterReadout: View {
         .allowsHitTesting(false)
     }
 
-    private func bigNumber(_ bytes: UInt64, size: CGFloat, color: Color = .white) -> some View {
+    /// Every state puts its parts in the same places, so nothing moves with the pointer: the number at the very middle, a
+    /// line's room above it for a name, and two lines' room below. A part with nothing to say keeps its room, and text
+    /// that's too long shrinks a little, then is cut short.
+    private func slots<Above: View, Below: View>(_ size: CGFloat, number: some View, @ViewBuilder above: () -> Above,
+                                                 @ViewBuilder below: () -> Below) -> some View {
+        let room = size * 0.18
+        // Each room is held open by something clear, because an empty one would otherwise fold away.
+        return VStack(spacing: 0) {
+            ZStack(alignment: .bottom) {
+                Color.clear
+                above()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+            .frame(width: size * 0.9, height: room)
+            number
+                .frame(height: size * 0.28)
+            ZStack(alignment: .top) {
+                Color.clear
+                below()
+            }
+            .frame(width: size * 0.9, height: room)
+        }
+    }
+
+    private func bigNumber(_ bytes: UInt64, size: CGFloat, color: Color = .white, sign: String = "") -> some View {
         let (value, unit) = splitBytes(bytes)
+        let digits = Font.system(size: size * 0.235, weight: .semibold, design: .rounded).monospacedDigit()
+        let units = Font.system(size: size * 0.105, weight: .semibold, design: .rounded)
+        // Each in a box as wide as it ever gets, so the digits' right edge and the unit stay put whatever the value.
         return HStack(alignment: .firstTextBaseline, spacing: size * 0.016) {
-            Text(value)
-                .font(.system(size: size * 0.235, weight: .semibold, design: .rounded).monospacedDigit())
-                .contentTransition(.numericText(value: Double(bytes)))
-            Text(unit)
-                .font(.system(size: size * 0.105, weight: .semibold, design: .rounded))
-                .foregroundStyle(color.opacity(0.62))
+            ZStack(alignment: .trailing) {
+                // Changes has a sign in front, so its box makes room for one in every number it shows.
+                Text(model.lens == .changes ? "−8.88" : "8.88").font(digits).hidden()
+                Text(sign + value)
+                    .font(digits)
+                    .contentTransition(.numericText(value: Double(bytes)))
+            }
+            ZStack(alignment: .leading) {
+                Text("MB").font(units).hidden()
+                Text(unit)
+                    .font(units)
+                    .foregroundStyle(color.opacity(0.62))
+            }
         }
         .foregroundStyle(color)
         .animation(.snappy(duration: 0.32), value: bytes)
@@ -422,25 +459,58 @@ struct CenterReadout: View {
             let planning = model.planBytes >= 1_000_000 && model.lens == .freeUp
             let preview = free &+ model.planBytes
             let usedShare = 1 - Double(free) / Double(max(capacity, 1))
+            slots(size, number: bigNumber(planning ? preview : free, size: size, color: planning ? Color(red: 0.45, green: 1, blue: 0.68) : .white)) {
+                EmptyView()
+            } below: {
+                VStack(spacing: size * 0.012) {
+                    Text(planning ? "free after this" : "free of \(formatBytes(capacity))")
+                        .font(.system(size: size * 0.058, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.55))
+                    if let pointing = model.pointing, model.lens == .freeUp {
+                        pointingLine(pointing, size: size)
+                    } else if planning {
+                        Text("+\(formatBytes(model.planBytes))")
+                            .font(.system(size: size * 0.05, weight: .semibold).monospacedDigit())
+                            .foregroundStyle(Color(red: 0.45, green: 1, blue: 0.68).opacity(0.8))
+                    } else if let delta = sinceLast(free) {
+                        deltaCapsule(delta, size: size)
+                    } else {
+                        Text(String(format: "%.0f%% full", usedShare * 100))
+                            .font(.system(size: size * 0.05, weight: .medium).monospacedDigit())
+                            .foregroundStyle(.white.opacity(0.36))
+                    }
+                }
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            }
+        }
+    }
+
+    /// In Changes the middle says how much free space changed, from the scan it compares with, or else how much was
+    /// touched, going by file dates.
+    private func changesContent(size: CGFloat) -> some View {
+        let window = model.changeWindow
+        let when = window == .lastScan ? "since the last scan" : "in the last \(window.title)"
+        let history = model.changeUsesHistory
+        // `changeTotal` counts down from free space when comparing with history, and up from what was touched otherwise.
+        let change = history ? -model.changeTotal : model.changeTotal
+        let colour = history ? (change < 0 ? Palette.grew.swiftUI : (change > 0 ? Palette.cool.swiftUI : .white)) : .white
+        let sign = history ? (change < 0 ? "−" : (change > 0 ? "+" : "")) : ""
+        return slots(size, number: bigNumber(UInt64(abs(change)), size: size, color: colour, sign: sign)) {
+            EmptyView()
+        } below: {
             VStack(spacing: size * 0.012) {
-                bigNumber(planning ? preview : free, size: size, color: planning ? Color(red: 0.45, green: 1, blue: 0.68) : .white)
-                Text(planning ? "free after this" : "free of \(formatBytes(capacity))")
+                Text(history ? "free space \(when)" : "touched \(when)")
                     .font(.system(size: size * 0.058, weight: .medium))
                     .foregroundStyle(.white.opacity(0.55))
-                if let pointing = model.pointing, model.lens == .freeUp {
-                    pointingLine(pointing, size: size)
-                } else if planning {
-                    Text("+\(formatBytes(model.planBytes))")
-                        .font(.system(size: size * 0.05, weight: .semibold).monospacedDigit())
-                        .foregroundStyle(Color(red: 0.45, green: 1, blue: 0.68).opacity(0.8))
-                } else if let delta = sinceLast(free) {
-                    deltaCapsule(delta, size: size)
-                } else {
-                    Text(String(format: "%.0f%% full", usedShare * 100))
-                        .font(.system(size: size * 0.05, weight: .medium).monospacedDigit())
+                if !history {
+                    Text("going by file dates")
+                        .font(.system(size: size * 0.05, weight: .medium))
                         .foregroundStyle(.white.opacity(0.36))
                 }
             }
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
         }
     }
 
@@ -480,21 +550,22 @@ struct CenterReadout: View {
     }
 
     private func folderContent(_ tree: DiskTree, size: CGFloat) -> some View {
-        VStack(spacing: size * 0.012) {
+        slots(size, number: bigNumber(tree.totals[Int(model.focus)], size: size)) {
             HStack(spacing: 2) {
                 Image(systemName: "chevron.left")
                     .font(.system(size: size * 0.05, weight: .bold))
                     .foregroundStyle(.white.opacity(0.42))
                 Text(model.displayName(model.focus))
                     .font(.system(size: size * 0.072, weight: .semibold))
-                    .lineLimit(1)
                     .truncationMode(.middle)
             }
             .foregroundStyle(.white.opacity(0.92))
-            bigNumber(tree.totals[Int(model.focus)], size: size)
+        } below: {
             Text(tree.isStillGrowing(model.focus) ? "so far" : shareOfDisk(tree))
                 .font(.system(size: size * 0.052, weight: .medium))
                 .foregroundStyle(.white.opacity(0.5))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
         }
     }
 
@@ -504,30 +575,31 @@ struct CenterReadout: View {
     }
 
     private func hoverContent(_ hover: HoverInfo, size: CGFloat) -> some View {
-        VStack(spacing: size * 0.008) {
+        slots(size, number: bigNumber(hover.bytes, size: size)) {
             Text(hover.title)
                 .font(.system(size: size * 0.072, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.95))
-                .lineLimit(2)
                 .truncationMode(.middle)
-            bigNumber(hover.bytes, size: size)
+        } below: {
             if let links = hover.links {
                 Text(links)
                     .font(.system(size: size * 0.072, weight: .semibold))
                     .foregroundStyle(Color(red: 1, green: 0.74, blue: 0.42))
                     .lineLimit(2)
+                    .minimumScaleFactor(0.85)
                     .truncationMode(.middle)
             } else if !hover.note.isEmpty {
                 Text(hover.note)
                     .font(.system(size: size * 0.072, weight: model.lens == .changes ? .semibold : .medium))
-                    .foregroundStyle(model.lens == .changes ? Color(red: 0.5, green: 0.95, blue: 0.68) : .white.opacity(0.72))
+                    .foregroundStyle(model.lens == .changes ? (hover.note.hasPrefix("−") ? Palette.cool.swiftUI : Palette.grew.swiftUI) : .white.opacity(0.72))
                     .lineLimit(1)
-            } else {
-                // Kept when empty too, so the name and size don't jump when the line arrives.
-                Text(hover.share.isEmpty ? " " : hover.share)
+                    .minimumScaleFactor(0.8)
+            } else if !hover.share.isEmpty {
+                Text(hover.share)
                     .font(.system(size: size * 0.072, weight: .medium))
                     .foregroundStyle(.white.opacity(0.5))
                     .lineLimit(1)
+                    .minimumScaleFactor(0.8)
                     .truncationMode(.middle)
             }
         }

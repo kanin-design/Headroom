@@ -6,7 +6,7 @@ struct RootView: View {
 
     var body: some View {
         GeometryReader { geometry in
-            let ring = RingGeometry.make(size: geometry.size, panelOpen: model.panelOpen, lens: model.lens)
+            let ring = RingGeometry.make(size: geometry.size, panelOpen: model.panelOpen)
             ZStack(alignment: .topLeading) {
                 MapView(model: model, ring: ring)
                     .frame(width: geometry.size.width, height: geometry.size.height)
@@ -38,7 +38,7 @@ struct RootView: View {
                     HStack {
                         Spacer()
                         SidePanel(model: model)
-                            .frame(width: RingGeometry.panelWidth(for: model.lens))
+                            .frame(width: RingGeometry.panelWidth)
                             .padding(.trailing, 14)
                             .padding(.top, 60)
                             .padding(.bottom, 14)

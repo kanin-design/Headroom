@@ -22,6 +22,14 @@ final class LastUseTests: XCTestCase {
         XCTAssertEqual(LastUse.line(disk.node("/Volumes/Fake/Old"), in: disk.tree, now: now, home: "/nonexistent"), "Changed 3 days ago")
     }
 
+    func testTheTrashIsSaidFirst() {
+        XCTAssertTrue(LastUse.isInTrash("/Users/me/.Trash/old.zip", home: "/Users/me"))
+        XCTAssertTrue(LastUse.isInTrash("/Volumes/Spare/.Trashes/501/old.zip", home: "/Users/me"))
+        XCTAssertFalse(LastUse.isInTrash("/Users/me/.Trash", home: "/Users/me"))
+        XCTAssertFalse(LastUse.isInTrash("/Volumes/Spare/.Trashes/501", home: "/Users/me"))
+        XCTAssertFalse(LastUse.isInTrash("/Users/me/Trash notes/a.txt", home: "/Users/me"))
+    }
+
     func testGitsOwnLogGivesTheLastCommit() throws {
         let repo = try scratch()
         try FileManager.default.createDirectory(at: repo.appendingPathComponent(".git/logs"), withIntermediateDirectories: true)

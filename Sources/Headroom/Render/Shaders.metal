@@ -31,6 +31,7 @@ struct Uniforms {
     float ghostCount;       // how many colours the new free space has
     float freeOuter;        // how far out the free wedge reaches, as a share of the radius
     float4 previewColor;
+    float4 quietColor;      // in Changes, the part of a piece that didn't grow
     float4 ghostSlices[12]; // each colour, and in w where it ends, as a share of the whole
 };
 
@@ -49,6 +50,7 @@ struct SegmentOut {
     float calm [[flat]];
     float emphasis [[flat]];
     float planned [[flat]];
+    float fill [[flat]];            // in Changes: how much of it, from where it starts, is what grew
 };
 
 static float2 onCircle(float a, float r) { return float2(sin(a), -cos(a)) * r; }
@@ -92,6 +94,7 @@ vertex SegmentOut segment_vertex(uint vid [[vertex_id]],
     o.calm = s.params.z;
     o.emphasis = e;
     o.planned = mix(s.plan.x, s.plan.y, saturate(u.t));
+    o.fill = mix(s.plan.z, s.plan.w, saturate(u.t));
     return o;
 }
 
@@ -138,6 +141,14 @@ fragment PieceOut segment_fragment(SegmentOut in [[stage_in]], constant Uniforms
     float recede = (1.0 - e) * u.dim;
     float radial = saturate((r - in.r0) / max(width, 1.0));
     float3 base = in.color.rgb;
+    // In Changes, the part of a piece that grew keeps its heat, from where the piece starts, and the rest goes quiet, so the
+    // light adds up to the growth.
+    if (in.fill > 0.0005 && in.style != StyleFree && in.style != StyleHidden && in.style != StyleMark) {
+        float into = theta - in.a0;
+        into -= 2.0 * M_PI_F * floor(into / (2.0 * M_PI_F));
+        float edgePx = (in.fill * (in.a1 - in.a0) - into) * r;
+        base = mix(u.quietColor.rgb, base, saturate(0.5 + edgePx));
+    }
     float3 color;
     float alpha = in.color.a;
 

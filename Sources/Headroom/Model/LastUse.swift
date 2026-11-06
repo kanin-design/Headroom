@@ -28,6 +28,18 @@ enum LastUse {
         return "Changed " + ago(Date(timeIntervalSince1970: TimeInterval(newest)), now: now)
     }
 
+    // MARK: The Trash
+
+    static let trashLine = "In the Trash"
+
+    /// Inside a Trash, yours or a disk's. The Trash folder itself isn't.
+    static func isInTrash(_ path: String, home: String) -> Bool {
+        if path.hasPrefix(home + "/.Trash/") { return true }
+        // A disk's Trash keeps a folder for each user: /.Trashes/501/thing
+        guard let trashes = path.range(of: "/.Trashes/") else { return false }
+        return path[trashes.upperBound...].contains("/")
+    }
+
     // MARK: Plex
 
     static let plexDatabase = "/Library/Application Support/Plex Media Server/Plug-in Support/Databases/com.plexapp.plugins.library.db"

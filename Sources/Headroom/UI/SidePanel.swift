@@ -467,10 +467,8 @@ struct ChangesPanel: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                PanelTitle(title: "What changed")
                 picker
-                if model.history.count >= 2 { chart }
-                caption
+                if recent.count >= 2 { chart }
                 rows
             }
             .padding(16)
@@ -500,18 +498,45 @@ struct ChangesPanel: View {
         .background(Capsule().fill(.white.opacity(0.05)))
     }
 
+    /// The ring's colours as a scale, from nothing to the most that grew in one place.
+    private var scale: some View {
+        HStack(spacing: 6) {
+            Text("0")
+            LinearGradient(colors: [Palette.heat(0).swiftUI, Palette.heat(0.5).swiftUI, Palette.heat(1).swiftUI], startPoint: .leading, endPoint: .trailing)
+                .frame(width: 56, height: 6)
+                .clipShape(Capsule())
+            Text(formatBytes(UInt64(max(model.changeMost, 0))))
+        }
+        .font(.system(size: 10.5, weight: .medium).monospacedDigit())
+        .foregroundStyle(.white.opacity(0.5))
+    }
+
+    /// The free-space record for the last month.
+    private var recent: [HistoryPoint] {
+        let start = Date().addingTimeInterval(-30 * 86_400)
+        return model.history.filter { $0.date >= start }
+    }
+
+    /// When it happened: free space over the last month, with the window you're looking at shaded.
     private var chart: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            SectionHeading(text: "Free space over time")
-            Chart(model.history) { point in
-                AreaMark(x: .value("When", point.date), y: .value("Free", Double(point.free) / 1e9))
-                    .foregroundStyle(LinearGradient(colors: [Color(red: 0.4, green: 0.95, blue: 0.7).opacity(0.28), .clear], startPoint: .top, endPoint: .bottom))
-                    .interpolationMethod(.monotone)
-                LineMark(x: .value("When", point.date), y: .value("Free", Double(point.free) / 1e9))
-                    .foregroundStyle(Color(red: 0.45, green: 0.98, blue: 0.72))
-                    .lineStyle(StrokeStyle(lineWidth: 1.5))
-                    .interpolationMethod(.monotone)
+        let points = recent
+        let now = Date()
+        let first = points.first?.date ?? now
+        let start = model.changeWindow == .lastScan ? (points.dropLast().last?.date ?? first) : max(first, now.addingTimeInterval(-model.changeWindow.seconds))
+        return VStack(alignment: .leading, spacing: 6) {
+            SectionHeading(text: "Free space")
+            Chart {
+                RectangleMark(xStart: .value("From", start), xEnd: .value("To", now))
+                    .foregroundStyle(Palette.grew.swiftUI.opacity(0.14))
+                ForEach(points) { point in
+                    LineMark(x: .value("When", point.date), y: .value("Free", Double(point.free) / 1e9))
+                        .foregroundStyle(.white.opacity(0.72))
+                        .lineStyle(StrokeStyle(lineWidth: 1.5))
+                        .interpolationMethod(.monotone)
+                }
             }
+            // Its own range rather than from zero, so a drop of a few GB shows.
+            .chartYScale(domain: .automatic(includesZero: false))
             .chartXAxis(.hidden)
             .chartYAxis {
                 AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) { value in
@@ -527,48 +552,45 @@ struct ChangesPanel: View {
         }
     }
 
-    private var caption: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            if model.changeTotal != 0 {
-                let grew = model.changeTotal > 0
-                HStack(alignment: .firstTextBaseline, spacing: 5) {
-                    Text(formatBytes(UInt64(abs(model.changeTotal))))
-                        .font(.system(size: 26, weight: .semibold, design: .rounded).monospacedDigit())
-                        .foregroundStyle(grew ? Palette.heat(0.62).swiftUI : Palette.reclaim(.rebuilds).swiftUI)
-                        .contentTransition(.numericText(value: Double(model.changeTotal)))
-                    Text(model.changeCaption.hasPrefix("Compared") ? (grew ? "less free" : "more free") : "new or changed")
-                        .font(.system(size: 12.5, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.6))
-                }
-            }
-            Text(model.changeCaption)
-                .font(.system(size: 11.5))
-                .foregroundStyle(.white.opacity(0.5))
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
 
     @ViewBuilder
     private var rows: some View {
         if model.tree != nil {
-            let biggest = Double(max(model.changeRows.first?.delta ?? 1, 1))
-            LazyVStack(spacing: 0) {
-                ForEach(model.changeRows) { row in
-                    NodeRow(title: row.title, subtitle: row.subtitle, value: "+" + formatBytes(UInt64(max(row.delta, 0))), share: Double(row.delta) / biggest,
-                            color: Palette.heat(0.3 + 0.6 * Float(Double(row.delta) / biggest)).swiftUI,
-                            valueColor: Palette.heat(0.68).swiftUI,
-                            onHover: { inside in model.highlight(node: inside ? row.node : nil) },
-                            onTap: { open(row.node) })
-                        .named(NamedThing(row.node), in: model)
-                }
+            HStack(alignment: .center) {
+                SectionHeading(text: model.changeUsesHistory ? "Grew" : "Touched")
+                if model.changeMost > 0 { scale }
             }
-            .padding(.horizontal, -8)
             if model.changeRows.isEmpty {
-                Text("Nothing has grown by much in this window.")
+                Text(model.changeUsesHistory ? "Nothing grew by much." : "Nothing much was touched.")
                     .font(.system(size: 12.5))
                     .foregroundStyle(.white.opacity(0.55))
+            } else {
+                list(model.changeRows)
+            }
+            if !model.changeShrank.isEmpty {
+                SectionHeading(text: "Shrank")
+                list(model.changeShrank)
             }
         }
+    }
+
+    /// What grew wears the ring's own scale, so a row is the colour its growth has on the ring and the scale beside the
+    /// heading reads for both. What shrank is blue.
+    private func list(_ rows: [ChangeRow]) -> some View {
+        let biggest = Double(max(rows.map { abs($0.delta) }.max() ?? 1, 1))
+        return LazyVStack(spacing: 0) {
+            ForEach(rows) { row in
+                let share = Double(abs(row.delta)) / biggest
+                let onScale = min(Double(abs(row.delta)) / Double(max(model.changeMost, 1)), 1)
+                let colour = row.delta < 0 ? Palette.cool.swiftUI : Palette.heat(Float(onScale.squareRoot())).swiftUI
+                NodeRow(title: row.title, subtitle: row.subtitle, value: (row.delta < 0 ? "−" : "+") + formatBytes(UInt64(abs(row.delta))),
+                        share: share, color: colour, valueColor: row.delta < 0 ? Palette.cool.swiftUI : Palette.grew.swiftUI,
+                        onHover: { inside in model.highlight(node: inside ? row.node : nil) },
+                        onTap: { open(row.node) })
+                    .named(NamedThing(row.node), in: model)
+            }
+        }
+        .padding(.horizontal, -8)
     }
 
     private func open(_ node: UInt32) {

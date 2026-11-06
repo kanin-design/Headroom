@@ -518,7 +518,9 @@ final class ChangeMap: @unchecked Sendable {
 
     /// The folders that explain the growth. Not "your files grew", but which folder did, and no deeper than is
     /// useful: a season that grew is one row, not eight episodes.
-    func rows(tree: DiskTree, rules: RuleBook) -> [ChangeRow] {
+    /// With `shrinking`, the same for what got smaller, with negative deltas.
+    func rows(tree: DiskTree, rules: RuleBook, shrinking: Bool = false) -> [ChangeRow] {
+        let sign: Int64 = shrinking ? -1 : 1
         var out: [UInt32: Int64] = [:]
         let minimum: Int64 = 100_000_000
         let nodes = tree.nodes
@@ -541,13 +543,13 @@ final class ChangeMap: @unchecked Sendable {
             while true {
                 let up = nodes[Int(at)].parent
                 if up == 0 || up == tree.home || nodes[Int(up)].parent == 0 || nodes[Int(up)].parent == tree.home || nodes[Int(up)].has(NodeFlag.synthetic) { break }
-                if Double(values[Int(up)]) > Double(values[Int(id)]) * 1.12 { break }
+                if Double(sign * values[Int(up)]) > Double(sign * values[Int(id)]) * 1.12 { break }
                 at = up
             }
-            out[at] = max(values[Int(at)], out[at] ?? 0)
+            out[at] = max(sign * values[Int(at)], out[at] ?? 0)
         }
         func walk(_ id: UInt32, _ depth: Int) {
-            let d = values[Int(id)]
+            let d = sign * values[Int(id)]
             guard d >= minimum, !isNoise(id) else { return }
             let name = tree.name(id)
             if bundles.contains(where: { name.hasSuffix($0) }) { emit(id); return }
@@ -555,7 +557,7 @@ final class ChangeMap: @unchecked Sendable {
             var top: Int64 = 0
             var c = nodes[Int(id)].firstChild
             while c != 0 {
-                let v = values[Int(c)]
+                let v = sign * values[Int(c)]
                 if v >= minimum && !isNoise(c) {
                     big.append(c)
                     top = max(top, v)
@@ -581,7 +583,7 @@ final class ChangeMap: @unchecked Sendable {
             // A name like "final" or "8.14" only makes sense next to the folder it's in.
             let generic = name.count <= 8 && nodes[Int(id)].has(NodeFlag.directory) && (name.first?.isNumber == true || name == name.lowercased())
             return ChangeRow(node: id, title: generic ? "\(tree.name(parent)) › \(name)" : name,
-                             subtitle: tree.path(parent).map(DiskTree.friendly) ?? tree.name(parent), delta: delta)
+                             subtitle: tree.path(parent).map(DiskTree.friendly) ?? tree.name(parent), delta: sign * delta)
         }
     }
 }
@@ -605,22 +607,10 @@ enum Lenses {
         }
     }
 
-    static func changeColorer(tree: DiskTree, changes: ChangeMap) -> RingLayout.Colorer {
-        let totals = tree.totals
-        return { node in
-            let delta = changes.value(of: node)
-            let bytes = max(totals[Int(node)], 1)
-            if delta > 0 {
-                let ratio = min(Float(delta) / Float(bytes), 1)
-                let strength = min(ratio.squareRoot() * 1.45, 1)
-                return Lab.mix(Palette.quiet, Palette.heat(0.22 + 0.78 * ratio), max(strength, 0.14)).linearP3
-            }
-            if delta < 0 {
-                let ratio = min(Float(-delta) / Float(bytes), 1)
-                return Lab.mix(Palette.quiet, Palette.cool, min(ratio.squareRoot() * 1.2, 0.9)).linearP3
-            }
-            return Palette.quiet.linearP3
-        }
+    /// In Changes the whole ring is quiet. What grew is lit by `RingLayout`, so the light adds up to the growth.
+    static func changeColorer() -> RingLayout.Colorer {
+        let quiet = Palette.quiet.linearP3
+        return { _ in quiet }
     }
 
     /// Each thing wears its box's colour. What isn't part of the question stays quiet.

@@ -31,14 +31,11 @@ struct RingGeometry: Equatable {
     var mapWidth: CGFloat
     var windowHeight: CGFloat
 
-    static let panelWidth: CGFloat = 348
-    /// Free Up holds more: evidence, ticks and the plan.
-    static let wideWidth: CGFloat = 420
+    /// The same in every tab, so switching tabs never moves the ring. Wide enough for Free Up's evidence, ticks and plan.
+    static let panelWidth: CGFloat = 384
 
-    static func panelWidth(for lens: Lens) -> CGFloat { lens == .freeUp ? wideWidth : panelWidth }
-
-    static func make(size: CGSize, panelOpen: Bool, lens: Lens = .map) -> RingGeometry {
-        let panel = panelOpen ? panelWidth(for: lens) + 28 : 0
+    static func make(size: CGSize, panelOpen: Bool) -> RingGeometry {
+        let panel = panelOpen ? panelWidth + 28 : 0
         let usable = max(size.width - panel, 320)
         let top: CGFloat = 60, bottom: CGFloat = 46
         let height = max(size.height - top - bottom, 240)
@@ -58,8 +55,10 @@ struct HoverInfo: Equatable {
     var note: String
     /// What it is, if its files also have another path.
     var links: String?
-    /// Whether the line under the size says when it was last used, once the pointer rests.
+    /// Whether the line under the size says when it was last used, once that's worked out.
     var tellsUse = false
+    /// It's in the Trash, which is all the line says.
+    var inTrash = false
 }
 
 @MainActor
@@ -195,6 +194,12 @@ final class AppModel {
     var changeRows: [ChangeRow] = []
     var changeTotal: Int64 = 0
     var changeCaption = ""
+    /// What got smaller, when there's an earlier scan to compare with.
+    var changeShrank: [ChangeRow] = []
+    /// Whether Changes compares with an earlier scan, or goes by file dates.
+    var changeUsesHistory = false
+    /// The most that grew in one lit piece of the ring, for the scale in the panel.
+    var changeMost: Int64 = 0
     var history: [HistoryPoint] = []
 
     // Names around the ring
@@ -505,6 +510,8 @@ final class AppModel {
         changeRows = rows
         changeTotal = change.usesHistory ? change.total : rows.reduce(0) { $0 + $1.delta }
         changeCaption = change.caption
+        changeUsesHistory = change.usesHistory
+        changeShrank = change.usesHistory ? tree.map { change.rows(tree: $0, rules: rules, shrinking: true) } ?? [] : []
         refreshShownRows()
         tickTheTrash()
         refreshPlanNumbers()
@@ -558,6 +565,7 @@ final class AppModel {
         boxes = []
         shownRows = []
         changeRows = []
+        changeShrank = []
         labels = []
         engine.apply(RingLayout(), .settle)
         history = History.points(for: facts)
@@ -623,6 +631,8 @@ final class AppModel {
         changeRows = change.rows(tree: tree, rules: rules)
         changeTotal = change.usesHistory ? change.total : changeRows.reduce(0) { $0 + $1.delta }
         changeCaption = change.caption
+        changeUsesHistory = change.usesHistory
+        changeShrank = change.usesHistory ? change.rows(tree: tree, rules: rules, shrinking: true) : []
         if lens == .changes { relayout(.recolor) }
     }
 
@@ -642,8 +652,11 @@ final class AppModel {
     /// The picture for the folder in view.
     func drawing(_ tree: DiskTree, after: AfterPlan? = nil) -> RingLayout {
         let planned = plannedTest()
-        var layout = RingLayout.build(tree: tree, focus: focus, colorer: colorer(tree), planned: after == nil ? planned : nil, after: after)
+        let change = lens == .changes ? changes : nil
+        var layout = RingLayout.build(tree: tree, focus: focus, colorer: colorer(tree), planned: after == nil ? planned : nil, after: after,
+                                      grown: change.map { change in { change.value(of: $0) } })
         if lens == .map { layout.calmTinyPieces(viewBytes: tree.totals[Int(focus)]) }
+        if lens == .changes { changeMost = layout.mostGrowth }
         if after == nil { layout.addMarks(ringMarks(), tree: tree) }
         return layout
     }
@@ -655,8 +668,8 @@ final class AppModel {
             ringColours = colours
             return { colours.lab($0).linearP3 }
         case .changes:
-            guard let changes else { return Lenses.kindColorer(tree: tree) }
-            return Lenses.changeColorer(tree: tree, changes: changes)
+            guard changes != nil else { return Lenses.kindColorer(tree: tree) }
+            return Lenses.changeColorer()
         case .freeUp:
             guard let reclaim else { return Lenses.kindColorer(tree: tree) }
             return Lenses.reclaimColorer(map: reclaim, colours: mapColours, planned: plannedTest())
@@ -808,7 +821,7 @@ final class AppModel {
         hover = info
         // Whether its files also have another path, and when it was last used, are worked out off the main thread from
         // the moment the pointer arrives, and the line shows them when they're ready. Pointing at something else stops it.
-        let wantsLinks = !p.isSmaller && p.style != 1 && p.style != 2 && !tree.links.isEmpty && tree.nodes[Int(p.node)].flags & NodeFlag.synthetic == 0
+        let wantsLinks = !info.inTrash && !p.isSmaller && p.style != 1 && p.style != 2 && !tree.links.isEmpty && tree.nodes[Int(p.node)].flags & NodeFlag.synthetic == 0
         if wantsLinks || info.tellsUse {
             let node = p.node, bytes = p.bytes, tellsUse = info.tellsUse
             linksTask = Task { [weak self] in
@@ -846,6 +859,10 @@ final class AppModel {
             // The ring already shows its share. Once the pointer rests, the line says when it was last used, except on
             // macOS's own parts, which have nothing to add.
             share = ""
+            if let path = tree.path(p.node), LastUse.isInTrash(Facts.visible(path), home: NSHomeDirectory()) {
+                return HoverInfo(pieceIndex: index, node: p.node, title: displayName(piece: p), bytes: p.bytes,
+                                 share: "", note: LastUse.trashLine, links: nil, inTrash: true)
+            }
             let leftAlone = n.has(NodeFlag.synthetic) || (n.rule != 0 && rules.rule(n.rule).tier == .handsOff)
             tellsUse = !leftAlone
         }
@@ -1062,6 +1079,7 @@ final class AppModel {
         hotBox = nil
         hotRow = nil
         engine.setCalm(new == .map ? 1 : (new == .freeUp ? 0.55 : 0))
+        engine.setGlow(new == .changes ? 0.35 : 1)
         engine.setPreview(0, color: .zero)
         refreshGhost()
         if new == .freeUp, !plan.isEmpty { runChecks() }

@@ -137,6 +137,8 @@ enum Palette {
         return Lab.mix(Lab(lch: 0.71, 0.225, 38), Lab(lch: 0.93, 0.13, 92), (x - 0.5) * 2)
     }
 
+    /// What grew, in the panel and the middle of Changes. On the ring, the light runs the whole heat scale, by how much.
+    static let grew = heat(0.62)
     /// Something that shrank.
     static let cool = Lab(lch: 0.62, 0.15, 240)
     /// For pieces that aren't part of the question being asked.

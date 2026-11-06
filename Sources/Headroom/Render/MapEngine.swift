@@ -68,6 +68,8 @@ final class MapEngine {
     /// In the Map view, colour and glow hold back until you point at something. The other views use both to say something.
     private var calmNow: Float = 1
     private var calmGoal: Float = 1
+    private var glowNow: Float = 1
+    private var glowGoal: Float = 1
     private static let colourAtRest: Float = 0.86
     private static let glowAtRest: Float = 0.25
 
@@ -116,10 +118,12 @@ final class MapEngine {
             var from = to
             var colorFrom = SIMD4<Float>(p.color.x, p.color.y, p.color.z, 0)
             var plannedFrom = p.planned
+            var litFrom: Float = 0
             if let i = currentIndex[p.key], !appearing {
                 from = geometryNow(i)
                 colorFrom = colorNow(i)
                 plannedFrom = instances[i].plan.x + (instances[i].plan.y - instances[i].plan.x) * colorT
+                litFrom = instances[i].plan.z + (instances[i].plan.w - instances[i].plan.z) * colorT
                 used[i] = true
             } else if appearing {
                 // Unfurls out of the middle, like something opening.
@@ -138,7 +142,7 @@ final class MapEngine {
             }
             newIndex[p.key] = index
             out.append(SegmentGPU(from: from, to: to, colorFrom: colorFrom, colorTo: colorTo, params: SIMD4(p.style, p.seed, p.calm, 0),
-                                  plan: SIMD4(plannedFrom, p.planned, 0, 0)))
+                                  plan: SIMD4(plannedFrom, p.planned, litFrom, p.lit)))
             outKeys.append(p.key)
             outParents.append(p.parent)
         }
@@ -170,8 +174,9 @@ final class MapEngine {
                     to = m.apply(g)
                 }
                 let leaving = instances[i].plan.x + (instances[i].plan.y - instances[i].plan.x) * colorT
+                let litLeaving = instances[i].plan.z + (instances[i].plan.w - instances[i].plan.z) * colorT
                 out.append(SegmentGPU(from: g, to: to, colorFrom: nowColor, colorTo: SIMD4(nowColor.x, nowColor.y, nowColor.z, 0), params: instances[i].params,
-                                      plan: SIMD4(leaving, leaving, 0, 0)))
+                                      plan: SIMD4(leaving, leaving, litLeaving, litLeaving)))
                 outKeys.append(keys[i])
                 outParents.append(-1)
             }
@@ -241,6 +246,12 @@ final class MapEngine {
     /// How far colour and glow hold back until you point at something, from none to all.
     func setCalm(_ amount: Float) {
         calmGoal = amount
+        requestFrame()
+    }
+
+    /// How much the ring glows. Changes keeps it low, so what's lit reads as a shape.
+    func setGlow(_ amount: Float) {
+        glowGoal = amount
         requestFrame()
     }
 
@@ -351,6 +362,14 @@ final class MapEngine {
             moving = true
         }
 
+        if abs(glowGoal - glowNow) > 0.002 {
+            glowNow += (glowGoal - glowNow) * ease
+            moving = true
+        } else if glowNow != glowGoal {
+            glowNow = glowGoal
+            moving = true
+        }
+
         if abs(previewGoal - previewNow) > 0.0002 {
             previewNow += (previewGoal - previewNow) * ease
             moving = true
@@ -377,7 +396,8 @@ final class MapEngine {
         u.scale = Float(scale)
         u.dim = dimNow
         u.liftPixels = Float(scale) * 5
-        u.bloom = 1
+        u.bloom = glowNow
+        u.quietColor = SIMD4(Palette.quiet.linearP3, 1)
         u.restSaturation = 1 - calmNow * (1 - Self.colourAtRest)
         u.glowAtRest = 1 - calmNow * (1 - Self.glowAtRest)
         u.headroom = Float(headroom)
