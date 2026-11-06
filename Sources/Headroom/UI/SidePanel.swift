@@ -498,14 +498,14 @@ struct ChangesPanel: View {
         .background(Capsule().fill(.white.opacity(0.05)))
     }
 
-    /// The ring's colours as a scale, from nothing to the most that grew in one place.
+    /// The ring's colours as a scale: how much of each piece is new or changed.
     private var scale: some View {
         HStack(spacing: 6) {
-            Text("0")
+            Text("0%")
             LinearGradient(colors: [Palette.heat(0).swiftUI, Palette.heat(0.5).swiftUI, Palette.heat(1).swiftUI], startPoint: .leading, endPoint: .trailing)
                 .frame(width: 56, height: 6)
                 .clipShape(Capsule())
-            Text(formatBytes(UInt64(max(model.changeMost, 0))))
+            Text("100%")
         }
         .font(.system(size: 10.5, weight: .medium).monospacedDigit())
         .foregroundStyle(.white.opacity(0.5))
@@ -558,7 +558,7 @@ struct ChangesPanel: View {
         if model.tree != nil {
             HStack(alignment: .center) {
                 SectionHeading(text: model.changeUsesHistory ? "Grew" : "Touched")
-                if model.changeMost > 0 { scale }
+                if !model.changeRows.isEmpty { scale }
             }
             if model.changeRows.isEmpty {
                 Text(model.changeUsesHistory ? "Nothing grew by much." : "Nothing much was touched.")
@@ -574,15 +574,14 @@ struct ChangesPanel: View {
         }
     }
 
-    /// What grew wears the ring's own scale, so a row is the colour its growth has on the ring and the scale beside the
-    /// heading reads for both. What shrank is blue.
+    /// Each row is the colour its folder has on the ring: how much of it is new or changed. What shrank is blue.
     private func list(_ rows: [ChangeRow]) -> some View {
         let biggest = Double(max(rows.map { abs($0.delta) }.max() ?? 1, 1))
         return LazyVStack(spacing: 0) {
             ForEach(rows) { row in
                 let share = Double(abs(row.delta)) / biggest
-                let onScale = min(Double(abs(row.delta)) / Double(max(model.changeMost, 1)), 1)
-                let colour = row.delta < 0 ? Palette.cool.swiftUI : Palette.heat(Float(onScale.squareRoot())).swiftUI
+                let size = model.tree.map { $0.totals[Int(row.node)] } ?? 0
+                let colour = row.delta < 0 ? Palette.cool.swiftUI : Lenses.changeLab(delta: row.delta, bytes: size).swiftUI
                 NodeRow(title: row.title, subtitle: row.subtitle, value: (row.delta < 0 ? "−" : "+") + formatBytes(UInt64(abs(row.delta))),
                         share: share, color: colour, valueColor: row.delta < 0 ? Palette.cool.swiftUI : Palette.grew.swiftUI,
                         onHover: { inside in model.highlight(node: inside ? row.node : nil) },

@@ -33,8 +33,8 @@ They also get the numbers wrong in ways that matter:
 
 1. **The map is the interface.** It fills the window. Everything else floats on top in glass, and the
    window should still look complete with the panel closed.
-2. **Colour means something.** In **Map**, it shows what belongs together. In **Changes**, what grew is lit,
-   red for a little and yellow for the most. In
+2. **Colour means something.** In **Map**, it shows what belongs together. In **Changes**, it's how much of a
+   piece is new or changed, red for a little and yellow for all of it. In
    **Free Up**, each box in the list has a colour and its files wear it, so the list is the legend. One geometry, three questions: changing the question recolours the
    same picture, so you never lose your place.
 3. **Name things directly.** Big things are labelled on the map, so you don't need a legend or a hover
@@ -78,9 +78,10 @@ sunburst in the reference:
   pointing at one lights it up.
 - **Changes:** what grew. Uses scan history when there is any, and file dates on the first run, so it's
   useful on day one. Keeps a free-space history, including system volumes, which is how a downloaded
-  update gets caught. The rest of the ring goes quiet and only what grew is lit, on the outermost pieces that
-  hold it, so the light adds up to the growth with each byte counted once. The middle says how much free space
-  changed; the panel has the month's free space, then what grew and what shrank.
+  update gets caught. Each piece is coloured by how much of it is new or changed, from red for a little to
+  yellow for all of it, and what didn't change goes quiet. A file counts as wholly changed when its date is in the
+  window, or by how much it grew since the scan compared with: which bytes inside it changed could only be found
+  by reading it. The middle says how much free space changed; the panel has the month's free space, then what grew and what shrank.
 - **Free Up:** a short stack of boxes, each one kind of thing, with what you'd miss least on top: the Trash, caches and
   build output, AI models, project leftovers, installers, episodes you've watched, apps you don't seem to use, and so on
   down to series you haven't watched. Biggest doesn't mean first: the order is what you'd miss least, then biggest.

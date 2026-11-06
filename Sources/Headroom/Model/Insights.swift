@@ -607,10 +607,27 @@ enum Lenses {
         }
     }
 
-    /// In Changes the whole ring is quiet. What grew is lit by `RingLayout`, so the light adds up to the growth.
-    static func changeColorer() -> RingLayout.Colorer {
-        let quiet = Palette.quiet.linearP3
-        return { _ in quiet }
+    /// In Changes each piece wears how much of it is new or changed, from deep red for a little to yellow for all of it.
+    /// What didn't change stays quiet, and what shrank turns blue.
+    static func changeColorer(tree: DiskTree, changes: ChangeMap) -> RingLayout.Colorer {
+        let totals = tree.totals
+        return { node in changeLab(delta: changes.value(of: node), bytes: totals[Int(node)]).linearP3 }
+    }
+
+    /// `delta` is what's new or changed in a piece of `bytes`. A file counts as wholly changed once its date is in the window,
+    /// because which bytes inside it changed could only be found by reading it.
+    static func changeLab(delta: Int64, bytes: UInt64) -> Lab {
+        if delta > 0 {
+            let share = min(Float(Double(delta) / Double(max(bytes, 1))), 1)
+            // Below one percent it fades toward quiet, so a big folder with a few new files doesn't glow.
+            return Lab.mix(Palette.quiet, Palette.heat(share), min(share / 0.01, 1))
+        }
+        if delta < 0 {
+            let lost = Double(-delta)
+            let share = Float(lost / (Double(bytes) + lost))
+            return Lab.mix(Palette.quiet, Palette.cool, min(share.squareRoot() * 1.2, 0.9))
+        }
+        return Palette.quiet
     }
 
     /// Each thing wears its box's colour. What isn't part of the question stays quiet.

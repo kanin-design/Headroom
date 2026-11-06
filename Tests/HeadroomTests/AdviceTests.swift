@@ -669,22 +669,6 @@ final class LayoutTests: XCTestCase {
         XCTAssertEqual(free?.bytes, 200_000_000_000)
     }
 
-    func testGrowthLightsEachByteOnce() {
-        // In Changes, the light is what grew: on the outermost pieces only, so nothing is counted twice.
-        let disk = FakeDisk(capacity: 400_000_000_000, free: 100_000_000_000)
-        disk.file("/Volumes/Fake/A/old.bin", 100_000_000_000)
-        let new = disk.file("/Volumes/Fake/A/new.bin", 50_000_000_000)
-        disk.file("/Volumes/Fake/B/other.bin", 100_000_000_000)
-        disk.finish()
-        let folder = disk.node("/Volumes/Fake/A")
-        let grown: [UInt32: Int64] = [new: 50_000_000_000, folder: 50_000_000_000, disk.node("/Volumes/Fake"): 50_000_000_000]
-        let layout = RingLayout.build(tree: disk.tree, focus: 0, colorer: { _ in .zero }, grown: { grown[$0] ?? 0 })
-        let lit = layout.pieces.reduce(0.0) { $0 + Double($1.lit) * Double($1.bytes) }
-        XCTAssertEqual(lit, 50_000_000_000, accuracy: 1_000_000)
-        XCTAssertEqual(layout.pieces.first { $0.node == new }?.lit, 1)
-        XCTAssertEqual(layout.pieces.first { $0.node == folder }?.lit, 0)
-    }
-
     func testFreeAndHiddenCoverTheirShareOfTheRing() {
         // Nothing inside Free or Hidden is drawn, so how far out they reach decides how big they look.
         let disk = FakeDisk(capacity: 400_000_000_000, free: 100_000_000_000)

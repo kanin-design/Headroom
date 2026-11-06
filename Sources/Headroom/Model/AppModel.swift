@@ -198,8 +198,6 @@ final class AppModel {
     var changeShrank: [ChangeRow] = []
     /// Whether Changes compares with an earlier scan, or goes by file dates.
     var changeUsesHistory = false
-    /// The most that grew in one lit piece of the ring, for the scale in the panel.
-    var changeMost: Int64 = 0
     var history: [HistoryPoint] = []
 
     // Names around the ring
@@ -652,11 +650,8 @@ final class AppModel {
     /// The picture for the folder in view.
     func drawing(_ tree: DiskTree, after: AfterPlan? = nil) -> RingLayout {
         let planned = plannedTest()
-        let change = lens == .changes ? changes : nil
-        var layout = RingLayout.build(tree: tree, focus: focus, colorer: colorer(tree), planned: after == nil ? planned : nil, after: after,
-                                      grown: change.map { change in { change.value(of: $0) } })
+        var layout = RingLayout.build(tree: tree, focus: focus, colorer: colorer(tree), planned: after == nil ? planned : nil, after: after)
         if lens == .map { layout.calmTinyPieces(viewBytes: tree.totals[Int(focus)]) }
-        if lens == .changes { changeMost = layout.mostGrowth }
         if after == nil { layout.addMarks(ringMarks(), tree: tree) }
         return layout
     }
@@ -668,8 +663,8 @@ final class AppModel {
             ringColours = colours
             return { colours.lab($0).linearP3 }
         case .changes:
-            guard changes != nil else { return Lenses.kindColorer(tree: tree) }
-            return Lenses.changeColorer()
+            guard let changes else { return Lenses.kindColorer(tree: tree) }
+            return Lenses.changeColorer(tree: tree, changes: changes)
         case .freeUp:
             guard let reclaim else { return Lenses.kindColorer(tree: tree) }
             return Lenses.reclaimColorer(map: reclaim, colours: mapColours, planned: plannedTest())

@@ -20,7 +20,6 @@ struct Piece {
     var calm: Float = 0           // how far it steps back until you point at it
     var planned: Float = 0        // 1 when it goes at the next clean
     var isMark = false            // a tick outside the ring, not a piece of it
-    var lit: Float = 0            // in Changes: how much of it, from where it starts, is what grew
 
     var sweep: Float { a1 - a0 }
     var midAngle: Float { (a0 + a1) * 0.5 }
@@ -41,8 +40,6 @@ struct RingLayout {
 
     var pieces: [Piece] = []
     var focus: UInt32 = 0
-    /// In Changes, the most that grew in one lit piece: the yellow end of the scale.
-    var mostGrowth: Int64 = 0
 
     /// What sets a piece's colour. The geometry is the same in every view, so you keep your place.
     typealias Colorer = (_ node: UInt32) -> SIMD3<Float>
@@ -53,9 +50,7 @@ struct RingLayout {
     private var after: AfterPlan?
 
     /// `after` draws the picture as it will be once the plan has run.
-    /// `grown` lights what grew, for Changes.
-    static func build(tree: DiskTree, focus: UInt32, colorer: Colorer, planned: Planner? = nil, after: AfterPlan? = nil,
-                      grown: ((UInt32) -> Int64)? = nil) -> RingLayout {
+    static func build(tree: DiskTree, focus: UInt32, colorer: Colorer, planned: Planner? = nil, after: AfterPlan? = nil) -> RingLayout {
         var layout = RingLayout()
         layout.focus = focus
         layout.planner = planned
@@ -80,40 +75,7 @@ struct RingLayout {
             layout.pieces.removeAll(keepingCapacity: true)
             layout.place(tree, parentNode: focus, parentPiece: -1, a0: 0, a1: 2 * .pi, ring: 0, edges: edges, colorer: colorer)
         }
-        if let grown { layout.lightGrowth(grown) }
         return layout
-    }
-
-    /// How much of each outermost piece is what grew, so the light on the ring adds up to the growth and counts each byte
-    /// once. A piece with pieces of its own drawn outside it stays dark: they show its growth, and its "smaller items"
-    /// piece shows what's left of it.
-    private mutating func lightGrowth(_ grown: (UInt32) -> Int64) {
-        var lit: [(index: Int, delta: Int64)] = []
-        for i in pieces.indices {
-            let p = pieces[i]
-            guard !p.isMark, p.style != 1, p.style != 2, Int(p.end) <= i + 1, p.bytes > 0 else { continue }
-            var delta = grown(p.node)
-            if p.isSmaller, p.parent >= 0 {
-                // The folder's own growth, less what its pieces on this ring already show.
-                var j = Int(p.parent) + 1
-                while j < i {
-                    let q = pieces[j]
-                    if q.parent == p.parent, !q.isSmaller { delta -= grown(q.node) }
-                    j = max(Int(q.end), j + 1)
-                }
-            }
-            if delta > 0 {
-                pieces[i].lit = min(Float(Double(delta) / Double(p.bytes)), 1)
-                lit.append((i, delta))
-            }
-        }
-        // The most growth in view glows yellow and a little stays deep red, so the colour says how much as the light does.
-        // The square root spreads the small ones, which are most of them, across the scale.
-        guard let most = lit.map(\.delta).max() else { return }
-        mostGrowth = most
-        for (i, delta) in lit {
-            pieces[i].color = Palette.heat(Float(Double(delta) / Double(most)).squareRoot()).linearP3
-        }
     }
 
     /// What lights up for these things. Whatever has a piece of its own lights that piece, with everything inside it. What's too

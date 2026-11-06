@@ -118,12 +118,10 @@ final class MapEngine {
             var from = to
             var colorFrom = SIMD4<Float>(p.color.x, p.color.y, p.color.z, 0)
             var plannedFrom = p.planned
-            var litFrom: Float = 0
             if let i = currentIndex[p.key], !appearing {
                 from = geometryNow(i)
                 colorFrom = colorNow(i)
                 plannedFrom = instances[i].plan.x + (instances[i].plan.y - instances[i].plan.x) * colorT
-                litFrom = instances[i].plan.z + (instances[i].plan.w - instances[i].plan.z) * colorT
                 used[i] = true
             } else if appearing {
                 // Unfurls out of the middle, like something opening.
@@ -142,7 +140,7 @@ final class MapEngine {
             }
             newIndex[p.key] = index
             out.append(SegmentGPU(from: from, to: to, colorFrom: colorFrom, colorTo: colorTo, params: SIMD4(p.style, p.seed, p.calm, 0),
-                                  plan: SIMD4(plannedFrom, p.planned, litFrom, p.lit)))
+                                  plan: SIMD4(plannedFrom, p.planned, 0, 0)))
             outKeys.append(p.key)
             outParents.append(p.parent)
         }
@@ -174,9 +172,8 @@ final class MapEngine {
                     to = m.apply(g)
                 }
                 let leaving = instances[i].plan.x + (instances[i].plan.y - instances[i].plan.x) * colorT
-                let litLeaving = instances[i].plan.z + (instances[i].plan.w - instances[i].plan.z) * colorT
                 out.append(SegmentGPU(from: g, to: to, colorFrom: nowColor, colorTo: SIMD4(nowColor.x, nowColor.y, nowColor.z, 0), params: instances[i].params,
-                                      plan: SIMD4(leaving, leaving, litLeaving, litLeaving)))
+                                      plan: SIMD4(leaving, leaving, 0, 0)))
                 outKeys.append(keys[i])
                 outParents.append(-1)
             }
@@ -397,7 +394,6 @@ final class MapEngine {
         u.dim = dimNow
         u.liftPixels = Float(scale) * 5
         u.bloom = glowNow
-        u.quietColor = SIMD4(Palette.quiet.linearP3, 1)
         u.restSaturation = 1 - calmNow * (1 - Self.colourAtRest)
         u.glowAtRest = 1 - calmNow * (1 - Self.glowAtRest)
         u.headroom = Float(headroom)
