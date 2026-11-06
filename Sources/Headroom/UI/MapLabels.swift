@@ -513,17 +513,19 @@ struct CenterReadout: View {
             bigNumber(hover.bytes, size: size)
             if let links = hover.links {
                 Text(links)
-                    .font(.system(size: size * 0.052, weight: .semibold))
+                    .font(.system(size: size * 0.072, weight: .semibold))
                     .foregroundStyle(Color(red: 1, green: 0.74, blue: 0.42))
                     .lineLimit(2)
                     .truncationMode(.middle)
             } else if !hover.note.isEmpty {
                 Text(hover.note)
-                    .font(.system(size: size * 0.052, weight: .semibold))
-                    .foregroundStyle(Color(red: 0.5, green: 0.95, blue: 0.68))
+                    .font(.system(size: size * 0.072, weight: model.lens == .changes ? .semibold : .medium))
+                    .foregroundStyle(model.lens == .changes ? Color(red: 0.5, green: 0.95, blue: 0.68) : .white.opacity(0.72))
+                    .lineLimit(1)
             } else {
-                Text(hover.share)
-                    .font(.system(size: size * 0.052, weight: .medium))
+                // Kept when empty too, so the name and size don't jump when the line arrives.
+                Text(hover.share.isEmpty ? " " : hover.share)
+                    .font(.system(size: size * 0.072, weight: .medium))
                     .foregroundStyle(.white.opacity(0.5))
                     .lineLimit(1)
                     .truncationMode(.middle)

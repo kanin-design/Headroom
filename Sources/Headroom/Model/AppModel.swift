@@ -58,6 +58,8 @@ struct HoverInfo: Equatable {
     var note: String
     /// What it is, if its files also have another path.
     var links: String?
+    /// Whether the line under the size says when it was last used, once the pointer rests.
+    var tellsUse = false
 }
 
 @MainActor
@@ -804,15 +806,19 @@ final class AppModel {
         engine.setEmphasis(primary: index, related: [index..<Int(p.end)], ancestors: chain)
         var info = describe(p, index: index, tree: tree)
         hover = info
-        // Whether its files also have another path takes a moment to work out, so it waits until the pointer rests.
-        if !p.isSmaller, p.style != 1, p.style != 2, !tree.links.isEmpty, tree.nodes[Int(p.node)].flags & NodeFlag.synthetic == 0 {
-            let node = p.node, bytes = p.bytes
+        // Whether its files also have another path, and when it was last used, are worked out off the main thread from
+        // the moment the pointer arrives, and the line shows them when they're ready. Pointing at something else stops it.
+        let wantsLinks = !p.isSmaller && p.style != 1 && p.style != 2 && !tree.links.isEmpty && tree.nodes[Int(p.node)].flags & NodeFlag.synthetic == 0
+        if wantsLinks || info.tellsUse {
+            let node = p.node, bytes = p.bytes, tellsUse = info.tellsUse
             linksTask = Task { [weak self] in
-                try? await Task.sleep(for: .milliseconds(90))
-                guard let self, !Task.isCancelled else { return }
-                let line = await Task.detached(priority: .userInitiated) { Accounting.hoverLine(node, bytes: bytes, in: tree) }.value
-                guard line != nil, !Task.isCancelled, self.lastHoverIndex == index else { return }
-                info.links = line
+                let work = Task.detached(priority: .userInitiated) {
+                    LastUse.find(node, bytes: bytes, links: wantsLinks, use: tellsUse, in: tree)
+                }
+                let found = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
+                guard let self, found.links != nil || found.use != nil, !Task.isCancelled, self.lastHoverIndex == index else { return }
+                info.links = found.links
+                if let use = found.use { info.note = use }
                 self.hover = info
             }
         }
@@ -830,18 +836,21 @@ final class AppModel {
             else if tree.isStillGrowing(p.node) { share = "so far" }
         }
         var note = ""
-        if lens == .freeUp, !p.isSmaller, !p.isMark, !n.has(NodeFlag.free), tree.path(p.node) != nil {
-            note = isPlanned(p.node) ? "Selected. Click to unselect." : "Click to select. Double-click to open."
-        } else if lens == .changes, let changes {
+        var tellsUse = false
+        let ownShape = p.node == tree.free || p.node == tree.hidden
+        if lens == .changes, let changes {
             let delta = changes.value(of: p.node)
             if delta > 0 { note = "+\(formatBytes(UInt64(delta))) \(changes.shortCaption)" }
             else if delta < 0 { note = "−\(formatBytes(UInt64(-delta))) \(changes.shortCaption)" }
-        } else if n.rule != 0, !p.isSmaller {
-            let rule = rules.rule(n.rule)
-            if rule.tier != .none && rule.tier != .handsOff { note = rule.tier.title }
+        } else if !ownShape, !p.isSmaller, !p.isMark, p.style != 2, !(tree.isPartial && tree.isStillGrowing(p.node)) {
+            // The ring already shows its share. Once the pointer rests, the line says when it was last used, except on
+            // macOS's own parts, which have nothing to add.
+            share = ""
+            let leftAlone = n.has(NodeFlag.synthetic) || (n.rule != 0 && rules.rule(n.rule).tier == .handsOff)
+            tellsUse = !leftAlone
         }
         return HoverInfo(pieceIndex: index, node: p.node, title: displayName(piece: p), bytes: p.bytes,
-                         share: share, note: note, links: nil)
+                         share: share, note: note, links: nil, tellsUse: tellsUse)
     }
 
     /// Lights up one thing from the panel or a label, as if the pointer were on it.

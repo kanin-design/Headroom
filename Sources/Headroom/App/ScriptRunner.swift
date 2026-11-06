@@ -21,6 +21,7 @@ import SwiftUI
 ///     select ~/some/file       as if it had been clicked: the panel shows it
 ///     hover ~/some/folder
 ///     links ~/some/folder      what the middle of the ring says about its hard links or clones, and how long that takes
+///     lastuse ~/some/folder    what the middle of the ring says about when it was last used, and how long that takes
 ///     pointname ~/some/folder  as if the pointer were on a row with this name. Nothing after it: the pointer leaves
 ///     moveto x y               tell the window the pointer is here, without moving your real one
 ///     rightclick x y           right-click here, say what the menu offers, and close it
@@ -139,7 +140,7 @@ enum ScriptRunner {
         guard let tree = model.tree else { return nil }
         var p = path
         if p.hasPrefix("~") { p = "/System/Volumes/Data" + NSHomeDirectory() + p.dropFirst() }
-        return tree.find(path: p)
+        return tree.find(path: p) ?? (p.hasPrefix("/System/Volumes/Data/") ? nil : tree.find(path: "/System/Volumes/Data" + p))
     }
 
     @MainActor
@@ -171,6 +172,13 @@ enum ScriptRunner {
                 let line = Accounting.hoverLine(node, bytes: tree.totals[Int(node)], in: tree)
                 let ms = (CFAbsoluteTimeGetCurrent() - started) * 1000
                 print("links \(argument): \(formatBytes(tree.totals[Int(node)])), \(line ?? "says nothing"), \(String(format: "%.1f", ms)) ms")
+            } else { print("no such folder: \(argument)") }
+        case "lastuse":
+            if let node = resolve(argument, model), let tree = model.tree {
+                let started = CFAbsoluteTimeGetCurrent()
+                let line = LastUse.line(node, in: tree)
+                let ms = (CFAbsoluteTimeGetCurrent() - started) * 1000
+                print("last use \(argument): \(line ?? "says nothing"), \(String(format: "%.3f", ms)) ms")
             } else { print("no such folder: \(argument)") }
         case "pointname":
             model.pointedThing = resolve(argument, model).map { NamedThing($0) }

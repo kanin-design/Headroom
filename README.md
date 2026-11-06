@@ -60,7 +60,7 @@ Plex's watched state, Transmission's torrents, Steam's last played dates and git
 ### Map
 
 Every folder is a piece of the ring, sized by the space it takes and coloured by what it belongs to, so whatever belongs
-together stays together. Point at anything to see its name, its size and what you'd really get back. Click a folder to go
+together stays together. Point at anything to see its name, its size and when you last used it. Click a folder to go
 into it, and click the middle to go back up.
 
 ### Free Up
