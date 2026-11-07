@@ -32,9 +32,12 @@ import SwiftUI
 ///     menu ~/some/folder       what a right-click offers for it, or for what an action would apply to now
 ///     action Copy Path         do this from that list, to what an action would apply to now
 ///     clipboard                what's been copied, on a clipboard of its own, and what the pill says
-///     menubar                  what's in the File and Edit menus
+///     menubar                  what's in every menu, with ✓ by what's ticked
 ///     key c cmd opt            give the menu bar this shortcut
-///     menuitem Edit Copy List  choose this from the menu bar
+///     menuitem Edit Copy List  choose this from the menu bar. `menuitem View Rings > 8` goes into a submenu
+///     rings                    how many rings were asked for, can be filled and are drawn, the pieces in each, and the time
+///     ringbench name           each way of sizing the rings, laid out 20 times for the folder in view: the time, the pieces
+///     changeinfo ~/some/folder over the last day, how it changed and what grew and shrank inside it, and in each thing in it
 ///     copyroute                what ⌘C would copy now
 ///     tick 0                 tick the nth row in Free Up, or the row with this title
 ///     plan ~/some/folder       add it to the planned actions, or take it out
@@ -300,7 +303,8 @@ enum ScriptRunner {
                         if item.keyEquivalentModifierMask.contains(.option) { keys += "⌥" }
                         if item.keyEquivalentModifierMask.contains(.command) { keys += "⌘" }
                         let key = item.keyEquivalent.isEmpty ? "" : " [\(keys)\(item.keyEquivalent == "\u{7F}" || item.keyEquivalent == "\u{8}" ? "⌫" : item.keyEquivalent)]"
-                        return item.title + (item.isEnabled ? "" : " (off)") + key + (item.submenu.map { " > (" + words($0.items) + ")" } ?? "")
+                        return (item.state == .on ? "✓" : "") + item.title + (item.isEnabled ? "" : " (off)") + key
+                            + (item.submenu.map { " > (" + words($0.items) + ")" } ?? "")
                     }.joined(separator: ", ")
                 }
                 print("\(title): " + words(items))
@@ -320,13 +324,80 @@ enum ScriptRunner {
             try? await Task.sleep(for: .milliseconds(60))
         case "menuitem":
             let parts = argument.split(separator: " ", maxSplits: 1).map(String.init)
-            guard parts.count == 2, let menu = NSApp.mainMenu?.items.first(where: { $0.title == parts[0] })?.submenu,
-                  let at = menu.items.firstIndex(where: { $0.title == parts[1] }) else {
+            guard parts.count == 2, var menu = NSApp.mainMenu?.items.first(where: { $0.title == parts[0] })?.submenu else {
                 print("no such menu item: \(argument)")
                 return
             }
-            menu.performActionForItem(at: at)
+            let path = parts[1].components(separatedBy: " > ")
+            for (step, title) in path.enumerated() {
+                menu.delegate?.menuNeedsUpdate?(menu)
+                menu.update()
+                guard let at = menu.items.firstIndex(where: { $0.title == title }) else {
+                    print("no such menu item: \(argument)")
+                    return
+                }
+                if step == path.count - 1 {
+                    menu.performActionForItem(at: at)
+                } else if let submenu = menu.items[at].submenu {
+                    menu = submenu
+                } else {
+                    print("no submenu at \(title)")
+                    return
+                }
+            }
             try? await Task.sleep(for: .milliseconds(60))
+        case "rings":
+            guard let tree = model.tree else { print("rings: no map"); return }
+            let start = DispatchTime.now()
+            let layout = RingLayout.build(tree: tree, focus: model.focus, colorer: { _ in .zero }, sizes: model.ringSizes)
+            let took = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1e6
+            // Around the whole disk, ring 0 is the band, and the rings of folders are 1 to n.
+            let first: Int32 = model.focus == 0 ? 1 : 0
+            let rings = (0..<Int32(layout.rings)).map { k in layout.pieces.filter { !$0.isMark && $0.ring == first + k } }
+            let widths = rings.map { ring in ring.first.map { String(format: "%.0f", ($0.r1 - $0.r0) * RingLayout.typicalRadius) } ?? "-" }
+            let edge = rings.last?.map(\.r1).max() ?? 0
+            print(String(format: "rings: asked %d %@, drawn %d, could fill %d, menu ticks %d and offers up to %d, pieces per ring %@, widths in points %@, outer edge %.4f, %d lips, %.1f ms",
+                         model.ringSizes.depth, model.ringSizes.style.rawValue, layout.rings, layout.reach, model.ringsDrawn, model.ringReach,
+                         rings.map { String($0.count) }.joined(separator: " "), widths.joined(separator: " "), edge,
+                         layout.pieces.filter { $0.deeper > 0 }.count, took))
+            // Where the lips are: the middle of each piece, in degrees clockwise from 12 o'clock, and how strong it is.
+            let lipped = layout.pieces.filter { $0.deeper > 0 }.sorted { $0.sweep > $1.sweep }.prefix(12)
+            if !lipped.isEmpty {
+                print("rings: lips at " + lipped.map { String(format: "%.0f° %.0f%%", $0.midAngle * 180 / .pi, $0.deeper * 100) }.joined(separator: ", "))
+            }
+            // How far around each ring goes with the most rings there can be, as a share of the first ring.
+            let fill = RingLayout.measure(tree: tree, focus: model.focus, style: model.ringSizes.style).fill
+            print("rings: at \(RingSizes.most), how far around each goes: " + fill.map { String(format: "%.1f%%", $0 * 100) }.joined(separator: " "))
+        case "changeinfo":
+            // changeinfo ~/some/folder: over the last day, how it changed, and what grew and shrank inside it, then the
+            // same for each thing in it, with each one's place in the tree.
+            guard let tree = model.tree, let node = resolve(argument, model) else { print("no such folder: \(argument)"); return }
+            let map = AppModel.changeMap(tree: tree, window: .days(1), rules: model.rules, facts: model.facts)
+            func line(_ id: UInt32) -> String {
+                String(format: "#%u in #%u %@: %+.2f GB, grew %.2f, shrank %.2f", id, tree.nodes[Int(id)].parent, tree.name(id) as NSString,
+                       Double(map.value(of: id)) / 1e9, Double(map.amount(id, shrinking: false)) / 1e9, Double(map.amount(id, shrinking: true)) / 1e9)
+            }
+            print("changeinfo " + line(node))
+            var child = tree.nodes[Int(node)].firstChild
+            while child != 0 {
+                print("  " + line(child))
+                child = tree.nodes[Int(child)].nextSibling
+            }
+        case "ringbench":
+            guard let tree = model.tree else { print("ringbench: no map"); return }
+            for style in RingStyle.allCases {
+                let sizes = RingSizes(depth: model.ringSizes.depth, style: style)
+                var times: [Double] = []
+                var layout = RingLayout()
+                for _ in 0..<20 {
+                    let start = DispatchTime.now()
+                    layout = RingLayout.build(tree: tree, focus: model.focus, colorer: { _ in .zero }, sizes: sizes)
+                    times.append(Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1e6)
+                }
+                times.sort()
+                print(String(format: "ringbench %@, %@: %.2f ms median, %.2f slowest, %d pieces in %d rings", argument as NSString,
+                             style.rawValue as NSString, times[times.count / 2], times.last ?? 0, layout.pieces.count, layout.rings))
+            }
         case "copyroute":
             print("⌘C \(argument): \(model.wouldCopySelectedText ? "selected text" : "the name of \(model.actionTarget.nodes.map { model.realName(of: $0) })"), first responder \(mainWindow?.firstResponder.map { String(describing: type(of: $0)) } ?? "none")")
         case "tick":
@@ -1103,5 +1174,6 @@ enum ScriptRunner {
         }
         print("changes (\(model.changeCaption)):")
         for row in model.changeRows.prefix(12) { print("  +\(formatBytes(UInt64(max(row.delta, 0)))) \(row.title)  \(row.subtitle)") }
+        for row in model.changeShrank.prefix(12) { print("  -\(formatBytes(UInt64(max(-row.delta, 0)))) \(row.title)  \(row.subtitle)") }
     }
 }

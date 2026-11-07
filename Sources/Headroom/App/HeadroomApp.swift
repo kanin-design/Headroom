@@ -50,6 +50,33 @@ private struct SendToTrashCommand: View {
     }
 }
 
+/// How many rings the map draws, and how wide each is. More rings reach deeper into folders. The tick is on how many the
+/// picture has now, and numbers it couldn't fill are off.
+private struct RingsCommand: View {
+    let model = AppModel.shared
+
+    var body: some View {
+        Menu("Rings") {
+            ForEach(1...RingSizes.most, id: \.self) { count in
+                Toggle("\(count)", isOn: Binding(get: { model.ringsDrawn == count }, set: { _ in model.ringSizes.depth = count }))
+                    .disabled(count > model.ringReach)
+            }
+            Divider()
+            ForEach(RingStyle.allCases, id: \.self) { style in
+                Toggle(Self.title(style), isOn: Binding(get: { model.ringSizes.style == style }, set: { _ in model.ringSizes.style = style }))
+            }
+        }
+    }
+
+    private static func title(_ style: RingStyle) -> String {
+        switch style {
+        case .standard: "Standard Widths"
+        case .tapered: "Tapered Widths"
+        case .adaptive: "Adaptive Widths"
+        }
+    }
+}
+
 private struct AboutCommand: View {
     @Environment(\.openWindow) private var openWindow
 
@@ -142,6 +169,7 @@ struct HeadroomApp: App {
                     .keyboardShortcut(.upArrow, modifiers: [.command, .shift])
                 Button("Show or Hide Panel") { AppModel.shared.panelOpen.toggle() }
                     .keyboardShortcut("p", modifiers: [.command, .shift])
+                RingsCommand()
                 Divider()
             }
             // Help is the README, where everything is explained. There's no sidebar to toggle.

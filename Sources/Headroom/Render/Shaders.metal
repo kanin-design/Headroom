@@ -8,7 +8,7 @@ struct Segment {
     float4 to;
     float4 colorFrom;   // alpha fades pieces in and out
     float4 colorTo;
-    float4 params;      // style, seed, how far it steps back until pointed at, unused
+    float4 params;      // style, seed, how far it steps back until pointed at, how much of it goes on past the last ring
     float4 plan;        // planned at the start of the transition, planned at the end
 };
 
@@ -47,11 +47,15 @@ struct SegmentOut {
     float style [[flat]];
     float seed [[flat]];
     float calm [[flat]];
+    float deeper [[flat]];
     float emphasis [[flat]];
     float planned [[flat]];
 };
 
 static float2 onCircle(float a, float r) { return float2(sin(a), -cos(a)) * r; }
+
+// How far, in points, a folder that goes on past the outermost ring fades out beyond its edge.
+constant float tailPoints = 10.0;
 
 vertex SegmentOut segment_vertex(uint vid [[vertex_id]],
                                  uint iid [[instance_id]],
@@ -65,14 +69,16 @@ vertex SegmentOut segment_vertex(uint vid [[vertex_id]],
     float a0 = g.x, a1 = g.y;
     float r0 = max(g.z * u.radius, 0.0);
     float r1 = max(g.w * u.radius, r0) + lift;
+    // Its fade past the edge, if it goes on, is part of what's drawn.
+    float reach = r1 + (s.params.w > 0.0 ? u.scale * tailPoints : 0.0);
 
     // The smallest box around the arc: its four corners, and the circle's extremes where the arc crosses an axis.
-    float2 lo = min(min(onCircle(a0, r0), onCircle(a1, r0)), min(onCircle(a0, r1), onCircle(a1, r1)));
-    float2 hi = max(max(onCircle(a0, r0), onCircle(a1, r0)), max(onCircle(a0, r1), onCircle(a1, r1)));
+    float2 lo = min(min(onCircle(a0, r0), onCircle(a1, r0)), min(onCircle(a0, reach), onCircle(a1, reach)));
+    float2 hi = max(max(onCircle(a0, r0), onCircle(a1, r0)), max(onCircle(a0, reach), onCircle(a1, reach)));
     float quarter = M_PI_2_F;
     int k0 = int(ceil(a0 / quarter)), k1 = int(floor(a1 / quarter));
     for (int k = k0; k <= k1 && k < k0 + 5; k++) {
-        float2 c = onCircle(float(k) * quarter, r1);
+        float2 c = onCircle(float(k) * quarter, reach);
         lo = min(lo, c);
         hi = max(hi, c);
     }
@@ -90,6 +96,7 @@ vertex SegmentOut segment_vertex(uint vid [[vertex_id]],
     o.style = s.params.x;
     o.seed = s.params.y;
     o.calm = s.params.z;
+    o.deeper = s.params.w;
     o.emphasis = e;
     o.planned = mix(s.plan.x, s.plan.y, saturate(u.t));
     return o;
@@ -132,7 +139,15 @@ fragment PieceOut segment_fragment(SegmentOut in [[stage_in]], constant Uniforms
     float2 q = float2(x, y) + corner;
     float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - corner;
     float coverage = saturate(0.5 - d);
-    if (coverage <= 0.0) discard_fragment();
+    // A folder in the outermost ring that goes on doesn't stop at its edge: it fades out past it, stronger the more of it
+    // is in folders. One that ends keeps its clean edge.
+    float tail = 0.0;
+    if (in.deeper > 0.0) {
+        float beyond = r - (in.r1 - radialGap);
+        float fade = saturate(1.0 - beyond / (u.scale * tailPoints)) * step(0.0, beyond);
+        tail = saturate(0.5 - x) * fade * fade * in.deeper;
+    }
+    if (coverage <= 0.0 && tail <= 0.0) discard_fragment();
 
     float e = saturate(in.emphasis);
     float recede = (1.0 - e) * u.dim;
@@ -200,7 +215,8 @@ fragment PieceOut segment_fragment(SegmentOut in [[stage_in]], constant Uniforms
     color = mix(color, float3(dot(color, float3(0.3, 0.6, 0.1))), desat);
     color *= 1.0 + 0.30 * e * u.dim;
 
-    alpha *= coverage;
+    // Past the edge, the fade carries the colour of the edge outward.
+    alpha *= max(coverage, tail * 0.6);
     // Each piece gives off its own glow. Only what you're pointing at, and what's inside it, gets the full amount. The
     // folders it sits in get none of that, and everything else keeps its faint glow, which fades as it dims.
     PieceOut out;

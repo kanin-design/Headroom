@@ -20,18 +20,92 @@ struct Piece {
     var calm: Float = 0           // how far it steps back until you point at it
     var planned: Float = 0        // 1 when it goes at the next clean
     var isMark = false            // a tick outside the ring, not a piece of it
+    var deeper: Float = 0         // in the outermost ring, how much of it is in folders that aren't drawn, 0 to 1
 
     var sweep: Float { a1 - a0 }
     var midAngle: Float { (a0 + a1) * 0.5 }
 }
 
+/// How many rings the map draws and how thick they are, picked in View › Rings and kept for the next launch. For one run
+/// only: `--args -ringDepth 8 -ringStyle adaptive`.
+struct RingSizes: Equatable {
+    /// The most rings of folders the map draws, not counting the thin band around the whole disk. A picture never gets more
+    /// than it can fill.
+    var depth = 6
+    var style = RingStyle.tapered
+
+    /// The most rings there can be.
+    static let most = 12
+
+    static var saved: RingSizes {
+        let defaults = UserDefaults.standard
+        let depth = defaults.integer(forKey: depthKey)
+        let style = defaults.string(forKey: styleKey).flatMap(RingStyle.init(rawValue:))
+        return RingSizes(depth: depth == 0 ? RingSizes().depth : min(max(depth, 1), most), style: style ?? RingSizes().style)
+    }
+
+    /// Only what changed, so a setting given for one run isn't kept.
+    func save(changedFrom old: RingSizes) {
+        if depth != old.depth { UserDefaults.standard.set(depth, forKey: Self.depthKey) }
+        if style != old.style { UserDefaults.standard.set(style.rawValue, forKey: Self.styleKey) }
+    }
+
+    private static let depthKey = "ringDepth", styleKey = "ringStyle"
+}
+
+/// How thick each ring is, and which rings a picture can fill. Rings always get thinner going out, so far-out folders don't
+/// look bigger than they are.
+enum RingStyle: String, CaseIterable {
+    /// The curve six rings have always had, stretched or squeezed to however many there are.
+    case standard
+    /// Each ring a fifth thinner than the one inside it, so the rings near the middle keep more of their room as rings are
+    /// added. With many rings it eases off, so the outermost is never thinner than `thinnestTip` of the first.
+    case tapered
+    /// Each ring as thick as it's full, every ring with something in it, and a lip on folders in the outermost ring that go on.
+    case adaptive
+
+    /// Each ring's share of the room, from the middle out. `fill` is how far around each ring goes, as a share of the first.
+    func shares(count: Int, fill: [Float]) -> [Float] {
+        switch self {
+        case .standard:
+            let last = Float(Self.sixRings.count - 1)
+            return (0..<count).map { k in
+                let x = count > 1 ? Float(k) * last / Float(count - 1) : 0
+                let i = min(Int(x), Self.sixRings.count - 2)
+                return Self.sixRings[i] + (Self.sixRings[i + 1] - Self.sixRings[i]) * (x - Float(i))
+            }
+        case .tapered:
+            let step = count > 1 ? max(Self.taper, pow(Self.thinnestTip, 1 / Float(count - 1))) : 1
+            return (0..<count).map { pow(step, Float($0)) }
+        case .adaptive:
+            return (0..<count).map { $0 < fill.count ? fill[$0] : 1 }
+        }
+    }
+
+    /// The least a ring has to go around, as a share of the first, to be drawn. Less is a sliver or two in an empty ring,
+    /// though a few thin spokes count: they show which folders go deeper. Adaptive rings draw every ring with something in
+    /// it, since one that's nearly empty is thin.
+    var leastFill: Float { self == .adaptive ? 0 : 0.03 }
+
+    /// Whether folders in the outermost ring show that they go on.
+    var marksDeeper: Bool { self == .adaptive }
+
+    /// A fifth thinner each time keeps five and six rings practically as they are in the standard curve. What changes is
+    /// what more rings cost: the first ring keeps more of its room than in the standard curve, and the tips less.
+    static let taper: Float = 0.8
+    /// The thinnest the outermost tapered ring gets, as a share of the first: about halfway between the standard curve and
+    /// a fifth thinner all the way out, so the tips stay easy to read.
+    static let thinnestTip: Float = 0.3
+    private static let sixRings: [Float] = [0.150, 0.128, 0.108, 0.090, 0.074, 0.060]
+}
+
 /// Turns part of the tree into pieces of a ring, sorted clockwise from 12 o'clock with the biggest first.
 struct RingLayout {
-    /// Radial position of each ring. They get thinner going out, so a slice covers the same area on any ring and
-    /// far-out folders don't look bigger than they are.
+    /// The middle, where the numbers go, as a share of the ring's radius.
     static let hole: Float = 0.34
-    static let bandWidth: Float = 0.028
-    static let ringWidths: [Float] = [0.150, 0.128, 0.108, 0.090, 0.074, 0.060]
+    /// The thin ring around the middle of the whole disk, which splits it into what's on it, what's hidden and what's
+    /// free. It keeps its width however many rings there are, and the rings of folders share out the rest.
+    static let band: Float = 0.029
     /// Pieces shorter than this at their ring's middle, in points on a typical window, merge into "smaller items".
     static let minimumArc: Float = 2.2
     static let typicalRadius: Float = 400
@@ -40,6 +114,9 @@ struct RingLayout {
 
     var pieces: [Piece] = []
     var focus: UInt32 = 0
+    /// How many rings of folders are drawn, and how many this picture could fill, up to the most there can be.
+    private(set) var rings = 0
+    private(set) var reach = 0
 
     /// What sets a piece's colour. The geometry is the same in every view, so you keep your place.
     typealias Colorer = (_ node: UInt32) -> SIMD3<Float>
@@ -48,33 +125,77 @@ struct RingLayout {
 
     private var planner: Planner?
     private var after: AfterPlan?
+    private var marksDeeper = false
 
-    /// `after` draws the picture as it will be once the plan has run.
-    static func build(tree: DiskTree, focus: UInt32, colorer: Colorer, planned: Planner? = nil, after: AfterPlan? = nil) -> RingLayout {
+    /// `after` draws the picture as it will be once the plan has run. It gets as many rings as asked for, but never more
+    /// than it can fill, so there's no empty ring around the edge.
+    static func build(tree: DiskTree, focus: UInt32, colorer: Colorer, planned: Planner? = nil, after: AfterPlan? = nil,
+                      sizes: RingSizes = .saved) -> RingLayout {
+        let style = sizes.style
+        let fill = measure(tree: tree, focus: focus, after: after, style: style).fill
+        let reach = fill.prefix { $0 > 0 && $0 >= style.leastFill }.count
+        let count = max(min(sizes.depth, reach), 1)
+        var layout = draw(tree: tree, focus: focus, colorer: colorer, planned: planned, after: after,
+                          shares: style.shares(count: count, fill: fill), marksDeeper: style.marksDeeper)
+        layout.rings = count
+        layout.reach = reach
+        return layout
+    }
+
+    /// The picture with the most rings there can be, for measuring how far around each ring goes. With fewer rings, every
+    /// ring sits further out, so each goes at least as far around then as it does here.
+    static func measure(tree: DiskTree, focus: UInt32, after: AfterPlan? = nil, style: RingStyle) -> RingLayout {
+        // Adaptive rings are measured on the taper, the fixed curve nearest to them.
+        let measuring: RingStyle = style == .standard ? .standard : .tapered
+        return draw(tree: tree, focus: focus, colorer: { _ in .zero }, planned: nil, after: after,
+                    shares: measuring.shares(count: RingSizes.most, fill: []), marksDeeper: false)
+    }
+
+    /// The thinnest a ring gets: five points on a typical window, so it stays easy to see and to point at.
+    static let thinnest: Float = 5 / typicalRadius
+
+    /// Shares of the room turned into widths that fill it, none thinner than `thinnest`.
+    static func widths(_ shares: [Float], filling room: Float) -> [Float] {
+        var thin = [Bool](repeating: false, count: shares.count)
+        while true {
+            let rest = zip(shares, thin).filter { !$0.1 }.map(\.0).reduce(0, +)
+            let scale = (room - thinnest * Float(thin.filter { $0 }.count)) / max(rest, .leastNonzeroMagnitude)
+            let widths = zip(shares, thin).map { $0.1 ? thinnest : $0.0 * scale }
+            let tooThin = widths.indices.filter { !thin[$0] && widths[$0] < thinnest }
+            if tooThin.isEmpty || tooThin.count == thin.filter({ !$0 }).count { return widths }
+            for i in tooThin { thin[i] = true }
+        }
+    }
+
+    /// How far around each ring of folders goes, from the first ring out, as a share of how far the first one goes. Around
+    /// the whole disk the band isn't counted.
+    var fill: [Float] {
+        let first: Int32 = focus == 0 ? 1 : 0
+        var around: [Float] = []
+        for p in pieces where !p.isMark && p.ring >= first {
+            let i = Int(p.ring - first)
+            if i >= around.count { around += [Float](repeating: 0, count: i + 1 - around.count) }
+            around[i] += p.sweep
+        }
+        guard let whole = around.first, whole > 0 else { return [] }
+        return around.map { $0 / whole }
+    }
+
+    private static func draw(tree: DiskTree, focus: UInt32, colorer: Colorer, planned: Planner?, after: AfterPlan?,
+                             shares: [Float], marksDeeper: Bool) -> RingLayout {
         var layout = RingLayout()
         layout.focus = focus
         layout.planner = planned
         layout.after = after
+        layout.marksDeeper = marksDeeper
         layout.pieces.reserveCapacity(4096)
         let isRoot = focus == 0
         guard (after?.size(focus) ?? tree.totals[Int(focus)]) > 0 else { return layout }
         var edges: [Float] = [hole]
-        if isRoot { edges.append(hole + bandWidth) }
-        for w in ringWidths { edges.append(edges[edges.count - 1] + w) }
-        let scale = (1.0 - hole) / (edges[edges.count - 1] - hole)
-        edges = edges.map { hole + ($0 - hole) * scale }
+        if isRoot { edges.append(hole + band) }
+        for width in widths(shares, filling: 1 - edges[edges.count - 1]) { edges.append(edges[edges.count - 1] + width) }
         layout.place(tree, parentNode: focus, parentPiece: -1, a0: 0, a1: 2 * .pi, ring: 0, edges: edges, colorer: colorer)
         if isRoot { layout.reachLikeTheRest(free: tree.free, hidden: tree.hidden, atLeast: edges[2]) }
-
-        // A shallow folder gets thicker rings, so the picture fills the same space and every level is easier to see.
-        if !isRoot, let deepest = layout.pieces.map(\.ring).max(), Int(deepest) + 2 < edges.count {
-            let used = Int(deepest) + 1
-            let current = edges[used] - hole
-            let stretch = min((1 - hole) / current, 1.9)
-            edges = edges.prefix(used + 1).map { hole + ($0 - hole) * stretch }
-            layout.pieces.removeAll(keepingCapacity: true)
-            layout.place(tree, parentNode: focus, parentPiece: -1, a0: 0, a1: 2 * .pi, ring: 0, edges: edges, colorer: colorer)
-        }
         return layout
     }
 
@@ -235,6 +356,15 @@ struct RingLayout {
         for i in pieces.indices where isOwnShape(pieces[i]) { pieces[i].r1 = reach }
     }
 
+    /// How much of a folder is in folders inside it, rather than in files of its own.
+    private static func folderShare(_ tree: DiskTree, of id: UInt32, after: AfterPlan?) -> Float {
+        @inline(__always) func total(_ node: UInt32) -> UInt64 { after?.size(node) ?? tree.totals[Int(node)] }
+        let inFolders = visibleChildren(tree: tree, of: id, after: after).kids
+            .filter { tree.nodes[Int($0)].has(NodeFlag.directory) }
+            .reduce(UInt64(0)) { $0 &+ total($1) }
+        return Float(Double(inFolders) / Double(max(total(id), 1)))
+    }
+
     private mutating func place(_ tree: DiskTree, parentNode: UInt32, parentPiece: Int32,
                                 a0: Float, a1: Float, ring: Int, edges: [Float], colorer: Colorer) {
         guard ring + 1 < edges.count else { return }
@@ -296,8 +426,12 @@ struct RingLayout {
                                 ring: Int32(ring), parent: parentPiece, end: index + 1, isSmaller: false, smallerCount: 0,
                                 color: color, style: style, seed: seed, bytes: bytes, planned: plannerNow?(id) == true ? 1 : 0))
             if n.firstChild != 0 {
-                place(tree, parentNode: id, parentPiece: index, a0: angle, a1: angle + sweep, ring: ring + 1, edges: edges, colorer: colorer)
-                pieces[Int(index)].end = Int32(pieces.count)
+                if ring + 2 < edges.count {
+                    place(tree, parentNode: id, parentPiece: index, a0: angle, a1: angle + sweep, ring: ring + 1, edges: edges, colorer: colorer)
+                    pieces[Int(index)].end = Int32(pieces.count)
+                } else if marksDeeper {
+                    pieces[Int(index)].deeper = Self.folderShare(tree, of: id, after: after)
+                }
             }
             angle += sweep
         }

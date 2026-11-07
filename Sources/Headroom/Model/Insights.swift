@@ -478,6 +478,10 @@ final class ChangeMap: @unchecked Sendable {
     private(set) var shortCaption = ""
     private let capacity: Int
     private let values: UnsafeMutablePointer<Int64>
+    /// In a comparison with an earlier scan, how much grew and how much shrank inside each piece, counted apart. A folder
+    /// that shrank overall can still hold one that grew, and the list of what grew has to find it.
+    private var grown: UnsafeMutablePointer<Int64>?
+    private var shrunk: UnsafeMutablePointer<Int64>?
     private(set) var total: Int64 = 0
 
     /// `rules` and `used` matter only for what's gone untouched: what to leave out, and what you're known to have used.
@@ -496,28 +500,7 @@ final class ChangeMap: @unchecked Sendable {
         let nodes = tree.nodes
         let n = tree.count
         if let snapshot {
-            usesHistory = true
-            let keys = vmAlloc(UInt64.self, capacity)
-            defer { vmFree(keys, capacity) }
-            History.fillKeys(tree: tree, into: keys)
-            let table = snapshot.table
-            let resolution = History.smallestEntry
-            for i in 0..<n {
-                let now = tree.totals[i]
-                if let before = table[keys[i]] {
-                    values[i] = Int64(bitPattern: now) &- Int64(bitPattern: before)
-                } else if now >= resolution {
-                    values[i] = Int64(bitPattern: now)
-                }
-            }
-            let formatter = DateFormatter()
-            formatter.doesRelativeDateFormatting = true
-            formatter.dateStyle = .medium
-            formatter.timeStyle = .short
-            caption = "Compared with the scan from \(formatter.string(from: snapshot.date))."
-            shortCaption = "since then"
-            // The disk's own free space is the honest total.
-            total = Int64(bitPattern: snapshot.free) &- Int64(bitPattern: tree.freeBytes)
+            compare(tree, with: snapshot)
         } else if window == .lastScan {
             caption = tree.isPartial ? "This can compare once the scan has finished."
                 : "There's no earlier scan to compare with yet. Come back after your next scan."
@@ -542,8 +525,78 @@ final class ChangeMap: @unchecked Sendable {
         }
     }
 
+    /// A comparison with this earlier scan, rather than one History finds.
+    init(tree: DiskTree, comparingWith snapshot: ScanSnapshot) {
+        capacity = max(tree.count, 1)
+        values = vmAlloc(Int64.self, capacity)
+        compare(tree, with: snapshot)
+    }
+
     deinit {
         vmFree(values, capacity)
+        if let grown { vmFree(grown, capacity) }
+        if let shrunk { vmFree(shrunk, capacity) }
+    }
+
+    /// Each piece's size now against the earlier scan's. What that scan didn't record, being too small then, counts as new.
+    private func compare(_ tree: DiskTree, with snapshot: ScanSnapshot) {
+        usesHistory = true
+        let n = tree.count
+        let keys = vmAlloc(UInt64.self, capacity)
+        defer { vmFree(keys, capacity) }
+        History.fillKeys(tree: tree, into: keys)
+        let table = snapshot.table
+        let resolution = History.smallestEntry
+        for i in 0..<n {
+            let now = tree.totals[i]
+            if let before = table[keys[i]] {
+                values[i] = Int64(bitPattern: now) &- Int64(bitPattern: before)
+            } else if now >= resolution {
+                values[i] = Int64(bitPattern: now)
+            }
+        }
+        countGrowthAndShrinkage(tree)
+        let formatter = DateFormatter()
+        formatter.doesRelativeDateFormatting = true
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        caption = "Compared with the scan from \(formatter.string(from: snapshot.date))."
+        shortCaption = "since then"
+        // The disk's own free space is the honest total.
+        total = Int64(bitPattern: snapshot.free) &- Int64(bitPattern: tree.freeBytes)
+    }
+
+    /// How much grew and how much shrank inside each piece, counted apart: its own change, the part its pieces don't
+    /// explain, plus what grew or shrank in each of them. A parent's index is always lower than its children's, so one
+    /// pass back up the table adds each piece into the one that holds it. Only what changed is written, so the rest of
+    /// the table takes no memory.
+    private func countGrowthAndShrinkage(_ tree: DiskTree) {
+        let n = tree.count
+        guard n > 0 else { return }
+        let nodes = tree.nodes
+        let grown = vmAlloc(Int64.self, capacity), shrunk = vmAlloc(Int64.self, capacity)
+        let inPieces = vmAlloc(Int64.self, capacity)
+        defer { vmFree(inPieces, capacity) }
+        for i in stride(from: n - 1, through: 0, by: -1) {
+            let own = values[i] &- inPieces[i]
+            if own > 0 { grown[i] &+= own } else if own < 0 { shrunk[i] &-= own }
+            guard i > 0 else { break }
+            let parent = Int(nodes[i].parent)
+            if values[i] != 0 { inPieces[parent] &+= values[i] }
+            if grown[i] != 0 { grown[parent] &+= grown[i] }
+            if shrunk[i] != 0 { shrunk[parent] &+= shrunk[i] }
+        }
+        self.grown = grown
+        self.shrunk = shrunk
+    }
+
+    /// How much grew inside a piece, or with `shrinking`, how much shrank. Going by file dates, nothing shrinks, so what
+    /// grew is the piece's own value.
+    func amount(_ node: UInt32, shrinking: Bool) -> Int64 {
+        let i = Int(node)
+        guard i < capacity else { return 0 }
+        if shrinking { return shrunk?[i] ?? max(-values[i], 0) }
+        return grown?[i] ?? max(values[i], 0)
     }
 
     /// For each piece, the bytes in it that haven't changed in `days`, going by file dates. Three kinds of thing don't count,
@@ -623,10 +676,12 @@ final class ChangeMap: @unchecked Sendable {
     @inline(__always) func value(of node: UInt32) -> Int64 { Int(node) < capacity ? values[Int(node)] : 0 }
 
     /// The folders that explain the growth. Not "your files grew", but which folder did, and no deeper than is
-    /// useful: a season that grew is one row, not eight episodes.
+    /// useful: a season that grew is one row, not eight episodes. It follows what grew, not what each folder came to in
+    /// the end, so growth inside a folder that shrank overall is still found.
     /// With `shrinking`, the same for what got smaller, with negative deltas.
     func rows(tree: DiskTree, rules: RuleBook, shrinking: Bool = false) -> [ChangeRow] {
         let sign: Int64 = shrinking ? -1 : 1
+        @inline(__always) func changed(_ id: UInt32) -> Int64 { amount(id, shrinking: shrinking) }
         var out: [UInt32: Int64] = [:]
         let minimum: Int64 = 100_000_000
         let nodes = tree.nodes
@@ -649,15 +704,17 @@ final class ChangeMap: @unchecked Sendable {
             while true {
                 let up = nodes[Int(at)].parent
                 if up == 0 || up == tree.home || nodes[Int(up)].parent == 0 || nodes[Int(up)].parent == tree.home || nodes[Int(up)].has(NodeFlag.synthetic) { break }
-                if Double(sign * values[Int(up)]) > Double(sign * values[Int(id)]) * 1.12 { break }
+                if Double(changed(up)) > Double(changed(id)) * 1.12 { break }
+                // Nor when it also went the other way: a folder that shrank overall isn't one that grew.
+                if Double(sign * values[Int(up)]) < Double(changed(id)) * 0.9 { break }
                 // Named as untouched, a folder has to be nearly all untouched, not hold something you're working on too.
                 if isUntouched, Double(values[Int(up)]) < Double(tree.totals[Int(up)]) * 0.9 { break }
                 at = up
             }
-            out[at] = max(sign * values[Int(at)], out[at] ?? 0)
+            out[at] = max(changed(at), out[at] ?? 0)
         }
         func walk(_ id: UInt32, _ depth: Int) {
-            let d = sign * values[Int(id)]
+            let d = changed(id)
             guard d >= minimum, !isNoise(id) else { return }
             let name = tree.name(id)
             if bundles.contains(where: { name.hasSuffix($0) }) { emit(id); return }
@@ -665,7 +722,7 @@ final class ChangeMap: @unchecked Sendable {
             var top: Int64 = 0
             var c = nodes[Int(id)].firstChild
             while c != 0 {
-                let v = sign * values[Int(c)]
+                let v = changed(c)
                 if v >= minimum && !isNoise(c) {
                     big.append(c)
                     top = max(top, v)

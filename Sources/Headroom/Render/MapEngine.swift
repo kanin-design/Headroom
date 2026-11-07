@@ -149,7 +149,7 @@ final class MapEngine: @unchecked Sendable {
                 from = m.apply(to)
             }
             newIndex[p.key] = index
-            out.append(SegmentGPU(from: from, to: to, colorFrom: colorFrom, colorTo: colorTo, params: SIMD4(p.style, p.seed, p.calm, 0),
+            out.append(SegmentGPU(from: from, to: to, colorFrom: colorFrom, colorTo: colorTo, params: SIMD4(p.style, p.seed, p.calm, p.deeper),
                                   plan: SIMD4(plannedFrom, p.planned, 0, 0)))
             outKeys.append(p.key)
             outParents.append(p.parent)

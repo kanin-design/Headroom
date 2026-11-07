@@ -101,6 +101,17 @@ final class AppModel {
     @ObservationIgnored var trail: [UInt32] = []
     var lens: Lens = .map
     var panelOpen = true
+    /// How the rings are sized, picked in View › Rings and kept for the next launch.
+    var ringSizes = RingSizes.saved {
+        didSet {
+            guard ringSizes != oldValue else { return }
+            ringSizes.save(changedFrom: oldValue)
+            relayout(.settle)
+        }
+    }
+    /// How many rings the picture has now, and how many it could fill. The menu offers no more than that.
+    var ringsDrawn = RingSizes.saved.depth
+    var ringReach = RingSizes.most
     var hover: HoverInfo?
     var selected: UInt32? { didSet { if oldValue != selected { refreshStory(); visitChanged() } } }
     var ring = RingGeometry(center: .zero, radius: 0, mapWidth: 0, windowHeight: 0)
@@ -756,7 +767,13 @@ final class AppModel {
     /// The picture for the folder in view.
     func drawing(_ tree: DiskTree, after: AfterPlan? = nil) -> RingLayout {
         let planned = plannedTest()
-        var layout = RingLayout.build(tree: tree, focus: focus, colorer: colorer(tree), planned: after == nil ? planned : nil, after: after)
+        var layout = RingLayout.build(tree: tree, focus: focus, colorer: colorer(tree), planned: after == nil ? planned : nil, after: after,
+                                      sizes: ringSizes)
+        // The picture on screen, rather than the one while ⌥ is held, sets what the Rings menu offers.
+        if after == nil {
+            if ringsDrawn != layout.rings { ringsDrawn = layout.rings }
+            if ringReach != layout.reach { ringReach = layout.reach }
+        }
         if lens == .map { layout.calmTinyPieces(viewBytes: tree.totals[Int(focus)]) }
         if after == nil { layout.addMarks(ringMarks(), tree: tree) }
         return layout
