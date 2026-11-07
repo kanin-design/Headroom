@@ -20,6 +20,20 @@ final class UpdaterTests: XCTestCase {
         XCTAssertFalse(Updater.shouldOffer([0, 0, 2], current: [0, 0, 2], skipped: nil), "the one you have")
     }
 
+    func testALookThatCantGetThroughKeepsTheVersionItHadFound() {
+        let found = Updater.Release(version: [9, 9, 9], stage: "beta", notes: "", download: URL(string: "https://example.com/9.dmg")!,
+                                    size: 1, page: URL(string: "https://example.com/9")!)
+        let offline: Result<Updater.Release?, Error> = .failure(URLError(.notConnectedToInternet))
+        let current = [0, 0, 5]
+        XCTAssertEqual(Updater.answer(offline, had: found, current: current), .available(found), "what was found is still there to install")
+        guard case .couldNotCheck = Updater.answer(offline, had: nil, current: current) else {
+            return XCTFail("with nothing found before, it says it couldn't look")
+        }
+        XCTAssertEqual(Updater.answer(.success(found), had: nil, current: current), .available(found))
+        XCTAssertEqual(Updater.answer(.success(found), had: nil, current: [9, 9, 9]), .upToDate, "the one you have")
+        XCTAssertEqual(Updater.answer(.success(nil), had: found, current: current), .upToDate, "an answer that there's nothing newer is believed")
+    }
+
     func testTheNewestReleaseWithADiskImageIsOffered() throws {
         let json = """
         [{"tag_name": "v0.0.11-beta", "draft": true, "html_url": "https://example.com/11", "body": "",

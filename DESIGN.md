@@ -146,7 +146,9 @@ what the disk really gave back. The Finder hides a name that starts with a dot, 
 without the dot, the message says so, and Undo brings it back under its own name.
 
 **Undo is real.** Everything keeps its place in the Trash on record, even across a restart, so Undo puts it all back
-and brings the list back too, ready to fix and run again.
+and brings the list back too, ready to fix and run again. Quitting halfway through a clean, or through emptying the
+Trash, stops it at the next thing and writes down where it got to, and putting a clean back always finishes before
+Headroom quits.
 
 ### How it knows
 
@@ -277,8 +279,9 @@ Underneath:
   scan, only reads what a saved map couldn't have known.
 - Updates come from GitHub's list of releases: the newest one with a disk image, if it's newer than this version and you
   haven't said no to it. Putting it in place opens the disk image, checks it holds this app at that version, signed with
-  the same certificate, copies it next to the old one, moves the old one to the Trash and the new one into its place, and
-  opens it once this one has quit. Quitting while that happens waits for it, so there's never a moment with no app.
+  the same certificate, copies it next to the old one, and moves the old one to the Trash and the new one into its place.
+  While you're using Headroom, the new version opens before this one quits and is handed the front; otherwise it opens
+  once this one has quit. Quitting during the swap waits for it, so there's never a moment with no app.
 - Full Disk Access is the one permission Headroom asks for. Without it, Headroom reads nothing at all: no scan, no saved
   map, nothing about apps or files. Reading around the private folders wasn't enough, because a map read with access
   names what's inside them, and looking up any of it brings up a prompt. The ring shows what the disk itself reports, and

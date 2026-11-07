@@ -59,7 +59,8 @@ import SwiftUI
 ///     cleananyway /some/path   the Clean anyway button, for something selected that's in use
 ///     leaks                    with --hide-names, look for real names in everything the app has ready to show
 ///     about picture.png        open About Headroom from the app menu, and take its picture
-///     clean, empty, undo       only ever act inside the throwaway test disk
+///     clean, empty, undo       only ever act inside the throwaway test disk. `empty nowait` and `undo nowait` go on to
+///                              the next step at once, while things are still going or coming back
 ///     keep Title               keep a suggestion
 ///     after on|off             show the disk as it will be after the clean
 ///     expand Title             open a suggestion
@@ -191,7 +192,7 @@ enum ScriptRunner {
         case "wait":
             try? await Task.sleep(for: .seconds(Double(argument) ?? 1))
         case "scanned":
-            while model.isScanning || model.tree == nil { try? await Task.sleep(for: .milliseconds(100)) }
+            while model.isScanning || model.tree == nil || model.mapsOnTheirWay > 0 { try? await Task.sleep(for: .milliseconds(100)) }
             try? await Task.sleep(for: .milliseconds(400))
         case "lens":
             // As a click on the switcher does it.
@@ -439,9 +440,10 @@ enum ScriptRunner {
             while model.cleanProgress != nil { try? await Task.sleep(for: .milliseconds(50)) }
         case "empty":
             model.emptyNow()
-            while model.afterClean?.isEmptying == true { try? await Task.sleep(for: .milliseconds(50)) }
+            if argument != "nowait" { while model.afterClean?.isEmptying == true { try? await Task.sleep(for: .milliseconds(50)) } }
         case "undo":
             model.undoClean()
+            if argument != "nowait" { while model.isPuttingBack { try? await Task.sleep(for: .milliseconds(50)) } }
         case "copies":
             // What's known about the other copies of a suggestion.
             guard let tree = model.tree, let row = model.flatRows.first(where: { $0.title == argument }) else { print("no such row: \(argument)"); return }
@@ -962,7 +964,8 @@ enum ScriptRunner {
             report(model)
         case "quit":
             fflush(stdout)
-            NSApp.terminate(nil)
+            // As the Quit menu does it, so a quit that waits for a clean works here too.
+            NSApp.terminateSoon()
         default:
             print("unknown step: \(command)")
         }

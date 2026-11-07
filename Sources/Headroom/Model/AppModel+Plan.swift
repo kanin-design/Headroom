@@ -60,15 +60,19 @@ extension AppModel {
         let waiting = file.cleaned.filter { FileManager.default.fileExists(atPath: $0.inTrash) }
         let oldTrash = (file.oldTrashItems ?? []).filter { FileManager.default.fileExists(atPath: $0) }
         if !waiting.isEmpty || !oldTrash.isEmpty {
-            afterClean = AfterClean(things: waiting, bytes: waiting.reduce(0) { $0 &+ $1.bytes } &+ file.oldTrashBytes, includesOldTrash: !oldTrash.isEmpty,
-                                    oldTrashBytes: file.oldTrashBytes, oldTrashItems: oldTrash)
+            // What was already in the Trash counts only while some of it is still there.
+            let oldBytes = oldTrash.isEmpty ? 0 : file.oldTrashBytes
+            afterClean = AfterClean(things: waiting, bytes: waiting.reduce(0) { $0 &+ $1.bytes } &+ oldBytes, includesOldTrash: !oldTrash.isEmpty,
+                                    oldTrashBytes: oldBytes, oldTrashItems: oldTrash)
         }
     }
 
     func savePlan() {
         guard !HiddenNames.isOn else { return }
         var file = PlanFile(list: plan, lastItems: lastPlanItems)
-        if let afterClean, afterClean.state == .waiting {
+        // While it's being emptied too. What has already gone is left out when this is read back, because it's no longer
+        // in the Trash.
+        if let afterClean, afterClean.state == .waiting || afterClean.isEmptying {
             file.cleaned = afterClean.things
             file.oldTrashItems = afterClean.oldTrashItems
             file.oldTrashBytes = afterClean.oldTrashBytes
@@ -101,9 +105,13 @@ extension AppModel {
         return path
     }
 
+    /// Things are leaving the disk or coming back to it: a clean or a Send to Trash, emptying the Trash, or putting a clean
+    /// back. Nothing else may change the map or the list meanwhile, and quitting waits for it.
+    var isCleaning: Bool { cleanProgress != nil || afterClean?.isEmptying == true || isPuttingBack }
+
     /// Nothing changes while things are on their way out, and suggestions only mean something for the map they came from.
     private var canEditPlan: Bool {
-        guard cleanProgress == nil, afterClean?.isEmptying != true else {
+        guard !isCleaning else {
             showTip("Just a moment, cleaning is under way.")
             return false
         }
@@ -380,7 +388,7 @@ extension AppModel {
 
     /// Looks at everything that's ticked as soon as the ticking stops, so what needs a look shows before you press Clean.
     func checkSoon() {
-        guard lens == .freeUp, cleanProgress == nil else { return }
+        guard lens == .freeUp, !isCleaning else { return }
         checkTask?.cancel()
         checkTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(180))
@@ -773,8 +781,8 @@ extension AppModel {
     /// Looks at everything planned as it is now. Nothing changes. `fresh` is for when you asked, or came back: while you're
     /// ticking things, what was seen a moment ago will do.
     func runChecks(fresh: Bool = false) {
-        // Checking reads the planned things, and nothing is read without Full Disk Access.
-        guard let tree, hasFullAccess else { return }
+        // Checking reads the planned things, and nothing is read without Full Disk Access. A clean checks for itself.
+        guard !isCleaning, let tree, hasFullAccess else { return }
         checkRun?.cancel()
         checkGeneration += 1
         let generation = checkGeneration
@@ -801,12 +809,22 @@ extension AppModel {
             let result = PlanChecks.run(items: items, trueBytes: bytes, otherCopy: othersNow.mapValues { (title: $0.title, bytes: $0.bytes) }, runningApps: apps, fullAccess: fullAccess, fresh: fresh)
             guard !Task.isCancelled else { return }
             await MainActor.run {
-                guard self.checkGeneration == generation, self.tree === tree else { return }
+                // A newer check has taken over, or a clean that has already ended this one.
+                guard self.checkGeneration == generation else { return }
+                self.isChecking = false
+                guard self.tree === tree else { return }
                 self.checks = Self.adding(self.cleanFailures, to: result)
                 self.otherCopies = othersNow
-                self.isChecking = false
             }
         }
+    }
+
+    /// No more looking: a clean is about to look once more, itself, as the first thing it does.
+    private func stopChecks() {
+        checkTask?.cancel()
+        checkRun?.cancel()
+        checkGeneration &+= 1
+        isChecking = false
     }
 
     var readyItems: [PlanItem] { plan.items.filter { checks[$0.id]?.canGo ?? true } }
@@ -834,7 +852,7 @@ extension AppModel {
     /// Checks everything one last time, then carries out what's ready. What isn't ready stays planned.
     func cleanNow() {
         factsOfSavedMap = false
-        guard cleanProgress == nil, afterClean?.isEmptying != true, let tree, !tree.isPartial else { return }
+        guard !isCleaning, let tree, !tree.isPartial else { return }
         // What was said about the last clean is over now.
         message = nil
         let items = plan.items
@@ -848,15 +866,13 @@ extension AppModel {
         let others = otherCopies.mapValues { (title: $0.title, bytes: $0.bytes) }
         let fullAccess = hasFullAccess
         let failedBefore = cleanFailures
-        // Nothing replaces the map while things are leaving it. The disk is read again afterwards.
+        // Nothing replaces the map while things are leaving it. The disk is read again afterwards, at full power if you
+        // were waiting for it.
         if isScanning {
-            activeScan?.scanner.cancel()
-            activeScan = nil
-            isScanning = false
-            scanGeneration &+= 1
-            scanWasStopped = true
+            scanOnceCleaned(hurry: scanIsHurrying)
+            stopScan()
         }
-        checkGeneration &+= 1
+        stopChecks()
         cleanProgress = CleanProgress(done: 0, total: 0, title: "Checking")
         // A clean that's waiting to be emptied stays on record: this one joins it.
         if afterClean == nil {
@@ -971,15 +987,13 @@ extension AppModel {
             return PlanChecks.RunningApp(bundleID: id, name: app.localizedName ?? id)
         }
         let fullAccess = hasFullAccess
-        // Nothing replaces the map while things are leaving it. The disk is read again afterwards.
+        // Nothing replaces the map while things are leaving it. The disk is read again afterwards, at full power if you
+        // were waiting for it.
         if isScanning {
-            activeScan?.scanner.cancel()
-            activeScan = nil
-            isScanning = false
-            scanGeneration &+= 1
-            scanWasStopped = true
+            scanOnceCleaned(hurry: scanIsHurrying)
+            stopScan()
         }
-        checkGeneration &+= 1
+        stopChecks()
         cleanProgress = CleanProgress(done: 0, total: 1, title: title)
         if afterClean == nil {
             takenOut = []
@@ -1061,10 +1075,7 @@ extension AppModel {
             NSApp.reply(toApplicationShouldTerminate: true)
             return
         }
-        if scanWasStopped {
-            scanWasStopped = false
-            scan()
-        }
+        runScanAfterClean()
     }
 
     /// The Undo button under the ring, and ⌘Z. While you're typing, ⌘Z means what it means in any text field.
@@ -1073,7 +1084,7 @@ extension AppModel {
             NSApp.sendAction(Selector(("undo:")), to: nil, from: nil)
             return
         }
-        guard let after = afterClean, after.state == .waiting, !after.things.isEmpty else { return }
+        guard let after = afterClean, after.state == .waiting, !after.things.isEmpty, canEditPlan else { return }
         undoClean()
         showTip(after.things.count == 1 ? "Put back: \(after.things[0].title)" : "Put back \(after.things.count) things")
     }
@@ -1168,21 +1179,20 @@ extension AppModel {
             NSApp.reply(toApplicationShouldTerminate: true)
             return
         }
-        if scanWasStopped {
-            scanWasStopped = false
-            scan()
-        }
+        runScanAfterClean()
     }
 
     /// Puts everything back where it was, and the list back as it was, so it can be fixed and run again.
     func undoClean() {
-        guard let after = afterClean, after.state == .waiting else { return }
+        guard let after = afterClean, after.state == .waiting, canEditPlan else { return }
         let things = after.things
         let taken = takenOut
         let items = lastPlanItems
         let hadMoves = items.contains(where: \.isMove)
         afterClean = nil
         cleanFailures = [:]
+        // Until everything is back, nothing else starts, and quitting waits.
+        isPuttingBack = true
         Task.detached(priority: .userInitiated) {
             var failed = 0
             for thing in things.reversed() {
@@ -1193,6 +1203,12 @@ extension AppModel {
                 for item in items {
                     self.plan.remove(item.id)
                     self.plan.items.append(item)
+                }
+                self.isPuttingBack = false
+                if self.quitAfterClean {
+                    self.savePlan()
+                    NSApp.reply(toApplicationShouldTerminate: true)
+                    return
                 }
                 if failures > 0 {
                     self.message = failures == 1 ? "One thing couldn't go back. It's still in the Trash, so you can put it back from there." : "\(failures) things couldn't go back. They're still in the Trash, so you can put them back from there."
@@ -1221,12 +1237,15 @@ extension AppModel {
                     if let tree = self.tree { self.resolvePlanSynchronously(in: tree) }
                     self.restartScan()
                 }
+                // A scan asked for meanwhile joins the one that's running, or starts now.
+                self.runScanAfterClean()
             }
         }
     }
 
     /// Leaves everything in the Trash and carries on. It shows up as what's already in the Trash from here on.
     func leaveInTrash() {
+        guard canEditPlan else { return }
         afterClean = nil
         takenOut = []
         savePlan()
@@ -1238,17 +1257,17 @@ extension AppModel {
 
     /// The last step, and the only one that can't be undone. It's always your click.
     func emptyNow() {
-        guard var after = afterClean, after.state == .waiting, cleanProgress == nil else { return }
+        guard !isCleaning, var after = afterClean, after.state == .waiting else { return }
         message = nil
         after.state = .emptying
         afterClean = after
         // Nothing replaces the map while things are leaving it. The disk is read again afterwards.
         if isScanning {
-            activeScan?.scanner.cancel()
-            activeScan = nil
-            isScanning = false
-            scanGeneration &+= 1
+            scanOnceCleaned(hurry: scanIsHurrying)
+            stopScan()
         }
+        let stop = LockedFlag()
+        cleanStop = stop
         let things = after.things
         let oldItems = after.oldTrashItems
         let expected = after.bytes
@@ -1263,6 +1282,8 @@ extension AppModel {
             var failed = 0
             var didDelete = false
             for thing in things {
+                // Quitting stops it between one thing and the next. What hasn't gone stays in the Trash, still on record.
+                if stop.value { return await MainActor.run { self.emptyingStopped() } }
                 do {
                     if try Cleaner.deleteForGood(thing) {
                         didDelete = true
@@ -1272,6 +1293,7 @@ extension AppModel {
                     failed += 1
                 }
             }
+            if stop.value { return await MainActor.run { self.emptyingStopped() } }
             failed += Cleaner.deleteFromTrash(oldItems)
             if !oldItems.isEmpty { didDelete = true }
             // The disk takes a moment to report what it got back.
@@ -1283,7 +1305,7 @@ extension AppModel {
                         if let now = VolumeFacts.read(path: mount)?.free, now > free { sum &+= now - free }
                     }
                     got = max(got, sum)
-                    if Double(got) >= Double(expected) * 0.98 { break }
+                    if Double(got) >= Double(expected) * 0.98 || stop.value { break }
                     try? await Task.sleep(for: .milliseconds(150))
                 }
             }
@@ -1306,6 +1328,27 @@ extension AppModel {
         }
     }
 
+    /// Quitting stopped the emptying between one thing and the next. What hasn't gone waits in the Trash again, on record,
+    /// to be emptied another time.
+    private func emptyingStopped() {
+        let fm = FileManager.default
+        if var after = afterClean {
+            after.things = after.things.filter { fm.fileExists(atPath: $0.inTrash) }
+            after.oldTrashItems = after.oldTrashItems.filter { fm.fileExists(atPath: $0) }
+            if after.oldTrashItems.isEmpty { after.oldTrashBytes = 0 }
+            after.includesOldTrash = !after.oldTrashItems.isEmpty
+            after.bytes = after.things.reduce(0) { $0 &+ $1.bytes } &+ after.oldTrashBytes
+            after.state = .waiting
+            afterClean = after.things.isEmpty && after.oldTrashItems.isEmpty ? nil : after
+        }
+        savePlan()
+        if quitAfterClean {
+            NSApp.reply(toApplicationShouldTerminate: true)
+            return
+        }
+        runScanAfterClean()
+    }
+
     private func finishEmpty(got: UInt64, oldTrash: UInt64, failed: Int, tree: DiskTree?) {
         if var after = afterClean {
             after.state = .done(got: got)
@@ -1324,8 +1367,14 @@ extension AppModel {
         lastPlanItems = []
         savePlan()
         rescanWhenBack = false
-        // A short look at what you got, then the disk is read again quietly so the numbers are exact.
-        scan()
+        if quitAfterClean {
+            NSApp.reply(toApplicationShouldTerminate: true)
+            return
+        }
+        // A short look at what you got, then the disk is read again so the numbers are exact: quietly, unless you asked for
+        // a scan meanwhile.
+        scanOnceCleaned()
+        runScanAfterClean()
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(failed > 0 ? 16 : 9))
             guard let self, case .done = self.afterClean?.state else { return }

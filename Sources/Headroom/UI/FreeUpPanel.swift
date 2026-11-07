@@ -1108,7 +1108,7 @@ struct NextStepBar: View {
                     Text(label)
                         .contentTransition(.numericText())
                 }
-                .disabled(partial || ready.isEmpty)
+                .disabled(partial || ready.isEmpty || model.isCleaning)
                 .buttonStyle(GoButton())
                 .animation(.snappy(duration: 0.25), value: model.planBytes)
                 HStack(spacing: 6) {

@@ -9,6 +9,12 @@ struct BusyThing {
     var why: String
 }
 
+/// A scan waiting to run, and how it was asked for.
+struct ScanRequest {
+    var hurry = false
+    var readAll = false
+}
+
 /// The three questions the map can answer. The geometry stays put, so changing the question never loses your place.
 enum Lens: String, CaseIterable, Identifiable {
     case map = "Map"
@@ -143,6 +149,8 @@ final class AppModel {
     var isChecking = false
     var cleanProgress: CleanProgress?
     var afterClean: AfterClean?
+    /// A clean is being put back where it came from.
+    var isPuttingBack = false
     /// A few words beside the ring, for when a click can't do what you asked.
     var tip: String?
     var tipOffersUndo = false
@@ -175,7 +183,8 @@ final class AppModel {
     /// Which scan's node numbers the suggestions use.
     @ObservationIgnored var winsScanID: UUID?
     @ObservationIgnored var quitAfterClean = false
-    @ObservationIgnored var scanWasStopped = false
+    /// A scan held back while things leave the disk or come back to it: one a clean stopped, or one asked for meanwhile.
+    @ObservationIgnored var scanAfterClean: ScanRequest?
 
     @ObservationIgnored var rowOfNode: [UInt32: Int] = [:]
     @ObservationIgnored var checkGeneration = 0
@@ -236,8 +245,9 @@ final class AppModel {
     @ObservationIgnored private var changes: ChangeMap?
     @ObservationIgnored var scanGeneration = 0
     @ObservationIgnored private var didStart = false
-    /// A tree on its way to the screen, so a scan starting now knows the ring won't be empty.
-    @ObservationIgnored private var treeOnItsWay = false
+    /// Trees on their way to the screen, so a scan starting now knows the ring won't be empty. At launch there can be two:
+    /// the saved map, and the scan that refreshes it.
+    @ObservationIgnored private(set) var mapsOnTheirWay = 0
     @ObservationIgnored private var zoomedAt = Date.distantPast
     @ObservationIgnored private var heldPicture: DiskTree?
     @ObservationIgnored private var insightsRunning = false
@@ -314,8 +324,11 @@ final class AppModel {
             }
             return
         }
-        // Nothing replaces the map while things are leaving it. The disk is read again when that's done.
-        if cleanProgress != nil || afterClean?.isEmptying == true { return }
+        // Nothing replaces the map while things are leaving it, so the scan waits until they've gone.
+        if isCleaning {
+            scanOnceCleaned(hurry: hurry, readAll: readAll)
+            return
+        }
         guard let volume else { return }
         guard let facts = VolumeFacts.read(path: volume.mountPath) else { return }
         self.volume = facts
@@ -334,7 +347,7 @@ final class AppModel {
         scanGeneration += 1
         heldPicture = nil
         let generation = scanGeneration
-        let showPictures = (tree == nil || tree?.isPartial == true) && !treeOnItsWay
+        let showPictures = (tree == nil || tree?.isPartial == true) && mapsOnTheirWay == 0
         let mode: ScanMode = hurry ? .full : (showPictures ? .firstLook : .quiet)
         // Free space, macOS and swap come straight from the disk, so the very first frame already has them.
         if showPictures { show(scan.picture()) }
@@ -387,9 +400,10 @@ final class AppModel {
             if scan.surprised {
                 DispatchQueue.main.async {
                     guard let self, self.scanGeneration == generation else { return }
-                    self.isScanning = false
-                    self.activeScan = nil
-                    self.scan(readAll: true)
+                    // Read again in full, and still at full power if you were waiting for it.
+                    let hurried = self.scanIsHurrying
+                    self.stopScan()
+                    self.scan(hurry: hurried, readAll: true)
                 }
                 return
             }
@@ -405,8 +419,7 @@ final class AppModel {
             DispatchQueue.main.async {
                 guard let self, self.scanGeneration == generation else { return }
                 guard complete else {
-                    self.isScanning = false
-                    self.activeScan = nil
+                    self.stopScan()
                     self.volumesChanged()
                     return
                 }
@@ -545,12 +558,35 @@ final class AppModel {
         }
     }
 
-    /// Stops a running scan and starts again.
+    /// Stops a running scan and starts again. One you were waiting for stays one you're waiting for.
     func restartScan(hurry: Bool = false) {
+        let hurried = scanIsHurrying
+        stopScan()
+        scan(hurry: hurry || hurried)
+    }
+
+    /// Ends the scan that's running, if there is one. Nothing it still sends is shown, not even its last picture, and it's
+    /// no longer one you're waiting for.
+    func stopScan() {
         activeScan?.scanner.cancel()
-        isScanning = false
         activeScan = nil
-        scan(hurry: hurry)
+        isScanning = false
+        scanIsHurrying = false
+        heldPicture = nil
+        scanGeneration &+= 1
+    }
+
+    /// A scan for when the things leaving the disk have gone. Asked for more than once, it does the most that was asked.
+    func scanOnceCleaned(hurry: Bool = false, readAll: Bool = false) {
+        let wanted = scanAfterClean ?? ScanRequest()
+        scanAfterClean = ScanRequest(hurry: wanted.hurry || hurry, readAll: wanted.readAll || readAll)
+    }
+
+    /// They've gone, so the scan that was waiting runs now.
+    func runScanAfterClean() {
+        guard let wanted = scanAfterClean else { return }
+        scanAfterClean = nil
+        scan(hurry: wanted.hurry, readAll: wanted.readAll)
     }
 
     /// Shows a new tree. What the views ask of it is worked out first, so the tree and everything derived from it
@@ -562,13 +598,13 @@ final class AppModel {
         let running = runningBundleIDs()
         let facts = self.facts
         let kept = plan.kept
-        treeOnItsWay = true
+        mapsOnTheirWay += 1
         Task.detached(priority: .userInitiated) {
             let (wins, map) = Self.suggest(tree: newTree, rules: rules, running: running, facts: facts, kept: kept)
             let change = Self.changeMap(tree: newTree, window: window, rules: rules, facts: facts)
             let rows = change.rows(tree: newTree, rules: rules)
             await MainActor.run {
-                self.treeOnItsWay = false
+                self.mapsOnTheirWay -= 1
                 // You may have picked another disk while this was being worked out.
                 guard newTree.rootPath == self.volume?.mountPath else { return }
                 // The end of a scan you've been watching: its folders are the same ones, so you simply stay where you are.
@@ -642,8 +678,7 @@ final class AppModel {
 
     func switchVolume(_ facts: VolumeFacts) {
         guard facts.mountPath != volume?.mountPath else { return }
-        activeScan?.scanner.cancel()
-        isScanning = false
+        stopScan()
         volume = facts
         tree = nil
         // The plan's node numbers belong to the disk that was on screen, and so does everything worked out from them.

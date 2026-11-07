@@ -44,6 +44,8 @@ final class Updater {
     @ObservationIgnored var quitWhenInPlace = false
     /// While the old version goes and the new one comes, quitting would leave neither.
     @ObservationIgnored private(set) var isInstalling = false
+    /// Which look the window is waiting for, so an older answer can't overwrite a newer one.
+    @ObservationIgnored private var checkToken = 0
 
     static let currentNumber = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
     static let current = parse(currentNumber)
@@ -85,21 +87,36 @@ final class Updater {
         if case .available = state { windowRequests += 1 }
     }
 
-    /// From the menu or About: always looks, and always says what it found.
+    /// From the menu or About: always looks, and always says what it found. An answer that arrives after you've closed the
+    /// window, or asked again, is out of date and let go.
     func checkNow() {
+        let had: Release?
         switch state {
         case .downloading, .installing:
             return
+        case .available(let release), .failed(let release, _):
+            had = release
         default:
-            state = .checking
+            had = nil
         }
+        state = .checking
+        checkToken &+= 1
+        let token = checkToken
         Task {
-            do {
-                let release = try await Self.newest()
-                state = release.map { Self.isNewer($0.version, than: Self.current) ? .available($0) : .upToDate } ?? .upToDate
-            } catch {
-                state = .couldNotCheck(Self.say(error))
-            }
+            let found: Result<Release?, Error>
+            do { found = .success(try await Self.newest()) } catch { found = .failure(error) }
+            guard token == checkToken, state == .checking else { return }
+            state = Self.answer(found, had: had, current: Self.current)
+        }
+    }
+
+    /// What a look ends in. A version found before stays on offer when the look can't get through.
+    static func answer(_ found: Result<Release?, Error>, had: Release?, current: [Int]) -> State {
+        switch found {
+        case .success(let release):
+            return release.map { isNewer($0.version, than: current) ? .available($0) : .upToDate } ?? .upToDate
+        case .failure(let error):
+            return had.map { .available($0) } ?? .couldNotCheck(say(error))
         }
     }
 
@@ -372,7 +389,7 @@ final class Updater {
             // A moment at most: a new version that never comes forward mustn't keep this one open.
             let giveUp = Date.now.addingTimeInterval(3)
             while !opened.isActive, Date.now < giveUp { try? await Task.sleep(for: .milliseconds(100)) }
-            NSApp.terminate(nil)
+            NSApp.terminateSoon()
         }
     }
 
@@ -386,7 +403,7 @@ final class Updater {
         task.executableURL = URL(fileURLWithPath: "/bin/sh")
         task.arguments = ["-c", "while /bin/kill -0 \(ProcessInfo.processInfo.processIdentifier) 2>/dev/null; do /bin/sleep 0.2; done; " + open, app.path] + passed
         try? task.run()
-        NSApp.terminate(nil)
+        NSApp.terminateSoon()
     }
 
     nonisolated private static func run(_ tool: String, _ arguments: [String]) -> Int32 {

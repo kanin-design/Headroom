@@ -1,6 +1,15 @@
 import AppKit
 import SwiftUI
 
+extension NSApplication {
+    /// Quits once this turn of the run loop is over, as the Quit menu does, rather than from inside a task. A quit that has
+    /// to wait, for a clean to stop or a new version to go in place, waits in a run loop of its own, and work on the main
+    /// actor can only go on there when the quit didn't start inside some.
+    func terminateSoon() {
+        perform(#selector(terminate(_:)), with: nil, afterDelay: 0)
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.appearance = NSAppearance(named: .darkAqua)
@@ -18,7 +27,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
-    /// A clean under way stops at the next safe point and writes down what it did, so it can still be undone.
+    /// A clean, or emptying the Trash, stops at the next safe point and writes down where it got to, so what's in the Trash
+    /// stays on record and a clean can still be undone. Putting a clean back finishes first.
     @MainActor
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         // Halfway through swapping in a new version, the app could be left in the Trash with the new one not yet in place.
@@ -27,7 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return .terminateLater
         }
         let model = AppModel.shared
-        guard model.cleanProgress != nil else {
+        guard model.isCleaning else {
             model.savePlan()
             return .terminateNow
         }
