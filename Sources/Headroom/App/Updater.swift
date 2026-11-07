@@ -354,8 +354,30 @@ final class Updater {
         return URL(fileURLWithPath: "/Applications/Headroom.app")
     }
 
-    /// Quits, and opens the new version once this one has gone, the way this one was opened.
+    /// Quits, and opens the new version the way this one was opened. While you're using Headroom, the new version opens
+    /// before this one quits and is handed the front, because macOS only lets the app in front pass it on. Opened after this
+    /// one had gone, it would stay behind whatever came forward in between as soon as you touched the mouse.
     private static func reopen(_ app: URL) {
+        guard ScriptRunner.path == nil, NSApp.isActive else { return reopenOnceGone(app) }
+        Task {
+            let handover = NSWorkspace.OpenConfiguration()
+            // This version is still running, from the Trash.
+            handover.createsNewApplicationInstance = true
+            handover.arguments = Array(CommandLine.arguments.dropFirst())
+            guard let opened = try? await NSWorkspace.shared.openApplication(at: app, configuration: handover) else {
+                return reopenOnceGone(app)
+            }
+            NSApp.yieldActivation(to: opened)
+            _ = opened.activate(from: .current, options: [])
+            // A moment at most: a new version that never comes forward mustn't keep this one open.
+            let giveUp = Date.now.addingTimeInterval(3)
+            while !opened.isActive, Date.now < giveUp { try? await Task.sleep(for: .milliseconds(100)) }
+            NSApp.terminate(nil)
+        }
+    }
+
+    /// Quits, and opens the new version once this one has gone.
+    private static func reopenOnceGone(_ app: URL) {
         let passed = Array(CommandLine.arguments.dropFirst())
         // A scripted check stays behind whatever you're doing.
         let behind = ScriptRunner.path == nil ? "" : "-g "
