@@ -99,8 +99,13 @@ the ring. Capitals and accents don't matter, in any alphabet.
 ![A card over the ring about one folder, listing what's inside it, biggest first](docs/card.jpg)
 
 Press Space on anything for a card: a folder's size and what's inside, with pictures when the folder is mostly photos or
-video, or a file's own preview. Double-click a file on the ring to open it. Right-click anything to copy its name or path,
-open it, reveal it in the Finder, open it in Terminal or send it to the Trash.
+video, or a file's own preview. A film plays where it is: click the picture. The card is a window of its own, so drag it
+where you like and resize it from its edges, and it opens there next time. It says when the thing was last opened and
+what deleting it would free, and for a film its length, size and frame rate. Tick it for Free Up or send it to the Trash
+from there. What the card shows is selected, so the inspector shows it too.
+
+Double-click a file on the ring to open it. Right-click anything to copy its name or path, open it, reveal it in the
+Finder, open it in Terminal or send it to the Trash.
 
 ## Get started
 
@@ -139,7 +144,7 @@ before you press **Clean**.
 | Space | A closer look at what you're pointing at |
 | Esc | Back out, the way you came in |
 | ⌘↑ | The folder this one is in |
-| ⌘[, ⌘] | Back and forward through where you've been |
+| ⌘←, ⌘→ or ⌘[, ⌘] | Back and forward through where you've been, as the arrows at the top do |
 | ⌘C, ⌥⌘C | Copy the name, or the path |
 | ⌘O, ⌥⌘R | Open, or reveal in the Finder |
 | ⌘⌫ | Select or unselect it in Free Up |

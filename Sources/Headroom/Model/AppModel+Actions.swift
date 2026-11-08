@@ -421,6 +421,20 @@ extension AppModel {
     func goBack() { walkVisits(-1) }
     func goForward() { walkVisits(1) }
 
+    /// ⌘← and ⌘→ do what the arrows at the top of the window do, in every view and with the card open. While you type, as in
+    /// the search field, they're the text's: to the start or the end of the line.
+    func watchBackAndForwardKeys() {
+        guard backForwardWatch == nil else { return }
+        backForwardWatch = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, event.keyCode == 123 || event.keyCode == 124,
+                  event.modifierFlags.intersection([.command, .option, .control, .shift]) == .command,
+                  let window = event.window, window === self.mapView?.window || window === LookPanel.shared.window,
+                  !(window.firstResponder is NSText) else { return event }
+            if event.keyCode == 123 { self.goBack() } else { self.goForward() }
+            return nil
+        }
+    }
+
     /// Skips anything that has gone since.
     private func walkVisits(_ step: Int) {
         guard let tree else { return }
@@ -434,6 +448,8 @@ extension AppModel {
                     if tree.isInside(visit.focus, focus) { zoom(into: visit.focus) } else { go(to: visit.focus) }
                 }
                 selected = visit.selected
+                // With the card open, it goes back too, so it and the inspector still show the same thing.
+                if look != nil { showInLook(visit.selected ?? focus, steppingIn: false) }
                 return
             }
             to += step

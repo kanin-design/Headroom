@@ -19,9 +19,6 @@ struct RootView: View {
 
                 CenterReadout(model: model, ring: ring)
 
-                LookLayer(model: model, ring: ring, height: geometry.size.height)
-                    .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
-
                 BottomArea(model: model, ring: ring)
                     .frame(width: ring.mapWidth, height: geometry.size.height, alignment: .bottom)
 

@@ -1,50 +1,32 @@
+import AVKit
 import AppKit
 import QuickLookThumbnailing
 import QuickLookUI
 import SwiftUI
 
-/// The card Space opens, on the side of the ring away from what it's about.
-struct LookLayer: View {
-    let model: AppModel
-    let ring: RingGeometry
-    let height: CGFloat
-
-    var body: some View {
-        if let look = model.look, let tree = model.tree {
-            let isFolder = LookContents.isFolder(look.node, in: tree)
-            let width = min(isFolder ? 400 : 620, ring.mapWidth - 32)
-            LookCard(model: model, look: look, isFolder: isFolder, width: width, tallest: max(height - 130, 300))
-                .position(x: look.onLeft ? 16 + width / 2 : ring.mapWidth - 16 - width / 2, y: height / 2 + 12)
-                .transition(.scale(scale: 0.94, anchor: look.onLeft ? .trailing : .leading).combined(with: .opacity))
-        }
-    }
-}
-
-private struct LookCard: View {
+/// The card Space opens: what something is, what it's like, and what you can do about it. It fills its own window, which
+/// `LookPanel` keeps.
+struct LookCard: View {
     let model: AppModel
     let look: Look
     let isFolder: Bool
-    let width: CGFloat
-    let tallest: CGFloat
-
-    private let shape = RoundedRectangle(cornerRadius: 26, style: .continuous)
+    @State private var headerHeight: CGFloat = 0
+    @State private var footerHeight: CGFloat = 0
 
     var body: some View {
         if let tree = model.tree {
             let _ = model.treeVersion
             VStack(alignment: .leading, spacing: 0) {
                 header(tree)
+                    .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { _, height in headerHeight = height }
                 content
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(FrameReader { model.lookContentFrame = $0 })
                 footer(tree)
+                    .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { _, height in footerHeight = height }
             }
-            .frame(width: width)
-            .background(FrameReader { model.lookCardFrame = $0 })
-            .clipShape(shape)
-            .glassEffect(.regular.tint(.black.opacity(0.42)), in: shape)
-            .contentShape(shape)
-            // A click on the card is for the card, not for what's behind it.
-            .onTapGesture {}
+            // How tall the card's own parts are, so its window can give a film or a picture the rest, in its own shape.
+            .onChange(of: headerHeight + footerHeight, initial: true) { _, chrome in model.lookChrome = chrome }
         }
     }
 
@@ -77,8 +59,15 @@ private struct LookCard: View {
             }
             VStack(alignment: .leading, spacing: 3) {
                 PanelTitle(title: name, subtitle: path, copyTitle: { model.copyName(of: thing) }, copySubtitle: { model.copyPath(of: thing) })
-                if let facts = model.facts(of: node) {
+                let details = model.lookDetails.node == node ? model.lookDetails : LookDetails()
+                if let facts = [model.facts(of: node), details.media].compactMap({ $0 }).joined(separator: " · ").nilIfEmpty {
                     Text(facts)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.white.opacity(0.62))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let decide = [details.lastUse, details.frees.map(Self.frees)].compactMap({ $0 }).joined(separator: " · ").nilIfEmpty {
+                    Text(decide)
                         .font(.system(size: 11.5))
                         .foregroundStyle(.white.opacity(0.62))
                         .fixedSize(horizontal: false, vertical: true)
@@ -114,16 +103,26 @@ private struct LookCard: View {
         .padding(.top, 14)
         .padding(.bottom, 10)
         .named(thing, in: model)
+        // Anywhere on it but a button moves the window.
+        .contentShape(Rectangle())
+        .gesture(WindowDragGesture())
+    }
+
+    /// What sending it to the Trash and emptying it would give back, with other copies counted.
+    private static func frees(_ bytes: UInt64) -> String {
+        bytes == 0 ? "Deleting it frees nothing" : "Deleting it frees \(formatBytes(bytes))"
     }
 
     @ViewBuilder
     private var content: some View {
         if isFolder {
-            LookFolder(model: model, node: look.node, tallest: tallest - 180)
+            LookFolder(model: model, node: look.node)
         } else if !HiddenNames.isOn, let path = model.realPath(of: look.node) {
-            LookPreview(url: URL(fileURLWithPath: path))
-                .frame(height: min(tallest - 180, width * 0.72))
-                .background(.black.opacity(0.55))
+            let url = URL(fileURLWithPath: path)
+            Group {
+                if LookMedia.isFilm(url) { LookFilm(model: model, url: url) } else { LookPreview(url: url) }
+            }
+            .background(.black.opacity(0.55))
         }
     }
 
@@ -146,6 +145,9 @@ private struct LookCard: View {
                 .buttonStyle(.glass)
             }
             Spacer(minLength: 4)
+            if model.canPlan(node) {
+                FreeUpTick(model: model, node: node)
+            }
             if node != 0 {
                 DeleteMenu(model: model, node: node)
             }
@@ -153,6 +155,8 @@ private struct LookCard: View {
         .controlSize(.regular)
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
+        .contentShape(Rectangle())
+        .gesture(WindowDragGesture())
     }
 }
 
@@ -160,7 +164,6 @@ private struct LookCard: View {
 private struct LookFolder: View {
     let model: AppModel
     let node: UInt32
-    let tallest: CGFloat
 
     private let rowHeight: CGFloat = 33.5
     private let pictureHeight: CGFloat = 78
@@ -172,8 +175,6 @@ private struct LookFolder: View {
             let biggest = Double(max(top.first.map { tree.totals[Int($0)] } ?? 1, 1))
             let own = node == 0 ? 0 : tree.nodes[Int(RingLayout.chainTail(tree: tree, node))].bytes
             let pictures = HiddenNames.isOn ? [] : LookContents.media(in: node, tree: tree)
-            let pictureRows = CGFloat((pictures.count + 2) / 3)
-            let wanted = CGFloat(top.count + (own > 0 ? 1 : 0)) * rowHeight + pictureRows * (pictureHeight + 6) + 16
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(spacing: 8) {
@@ -200,7 +201,7 @@ private struct LookFolder: View {
                     .padding(.vertical, 6)
                 }
                 .scrollIndicators(.never)
-                .frame(height: min(max(wanted, rowHeight + 16), tallest))
+                .frame(maxHeight: .infinity, alignment: .top)
                 .onChange(of: model.lookCursor) { _, cursor in
                     if let cursor, top.indices.contains(cursor) {
                         Motion.animate(.easeOut(duration: 0.14)) { proxy.scrollTo(top[cursor]) }
@@ -259,7 +260,126 @@ private struct LookPictures: View {
     }
 }
 
-/// macOS's own preview: a video plays, a PDF scrolls, and whatever else it can read looks as it does in the Finder.
+/// Ticks it for Free Up from the card, in the colour of the box it's suggested in, or as something picked by hand.
+private struct FreeUpTick: View {
+    let model: AppModel
+    let node: UInt32
+
+    var body: some View {
+        let planned = model.isPlanned(node)
+        Button {
+            model.toggleSelection(of: NamedThing(node))
+        } label: {
+            HStack(spacing: 7) {
+                TickMark(state: planned ? .all : .none, color: model.planColour(of: node), size: 15)
+                Text("Free Up")
+            }
+        }
+        .buttonStyle(.glass)
+        .help(planned ? "Take it out of what Free Up will clean" : "Select it in Free Up. Nothing goes until you clean")
+    }
+}
+
+/// A film, played where it is with macOS's own controls. A click on the picture plays it or pauses it, and the bar along
+/// the bottom, which shows when the pointer is over the film, is the controls'.
+private struct LookFilm: View {
+    let model: AppModel
+    let url: URL
+    @State private var film: FilmPlayer?
+
+    var body: some View {
+        ZStack {
+            FilmView(player: film?.player)
+            Color.clear
+                .contentShape(Rectangle())
+                .padding(.bottom, 64)
+                .onTapGesture { film?.toggle() }
+            if film?.isPlaying != true {
+                Image(systemName: "play.fill")
+                    .font(.system(size: 26, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.92))
+                    .frame(width: 64, height: 64)
+                    .glassEffect(.regular, in: Circle())
+                    .allowsHitTesting(false)
+                    .transition(Motion.arrival(from: .bottom).combined(with: .scale(scale: 0.9)))
+            }
+        }
+        .task(id: url) {
+            film?.stop()
+            film = FilmPlayer(url: url, model: model)
+        }
+        .onDisappear {
+            film?.stop()
+            film = nil
+        }
+    }
+}
+
+/// A film's player, and whether it's playing, for as long as the card shows the film. Whatever starts or stops it, the
+/// picture or the controls, the card hears of it.
+@MainActor @Observable
+private final class FilmPlayer {
+    let player: AVPlayer
+    private(set) var isPlaying = false
+    @ObservationIgnored private var watch: NSKeyValueObservation?
+    @ObservationIgnored private weak var model: AppModel?
+
+    init(url: URL, model: AppModel) {
+        player = AVPlayer(url: url)
+        self.model = model
+        model.lookIsPlaying = false
+        watch = player.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
+            let playing = player.timeControlStatus != .paused
+            Task { @MainActor in self?.playing(playing) }
+        }
+    }
+
+    private func playing(_ now: Bool) {
+        guard now != isPlaying else { return }
+        Motion.animate(.easeOut(duration: 0.15)) { isPlaying = now }
+        model?.lookIsPlaying = now
+    }
+
+    func toggle() {
+        if player.timeControlStatus == .paused {
+            // From the start again once it has reached the end.
+            if let item = player.currentItem, item.currentTime() >= item.duration { player.seek(to: .zero) }
+            player.play()
+        } else {
+            player.pause()
+        }
+    }
+
+    func stop() {
+        player.pause()
+        watch = nil
+        model?.lookIsPlaying = false
+    }
+}
+
+private struct FilmView: NSViewRepresentable {
+    let player: AVPlayer?
+
+    func makeNSView(context: Context) -> AVPlayerView {
+        let view = AVPlayerView()
+        view.controlsStyle = .floating
+        view.showsFullScreenToggleButton = true
+        view.videoGravity = .resizeAspect
+        view.player = player
+        return view
+    }
+
+    func updateNSView(_ view: AVPlayerView, context: Context) {
+        if view.player !== player { view.player = player }
+    }
+
+    static func dismantleNSView(_ view: AVPlayerView, coordinator: ()) {
+        view.player?.pause()
+        view.player = nil
+    }
+}
+
+/// macOS's own preview: a PDF scrolls, a song plays, and whatever else it can read looks as it does in the Finder.
 private struct LookPreview: NSViewRepresentable {
     let url: URL
 
@@ -278,6 +398,10 @@ private struct LookPreview: NSViewRepresentable {
     static func dismantleNSView(_ view: QLPreviewView, coordinator: ()) {
         view.close()
     }
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }
 
 /// Where something ended up in the window.

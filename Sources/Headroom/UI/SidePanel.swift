@@ -27,7 +27,10 @@ struct SidePanel: View {
                 }
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        // Never taller than the window. Measured as if it had no width at all, a line that wraps rather than being cut
+        // short counts as hundreds of points tall, and without this the inspector grew to fit it: the list's top went under
+        // the toolbar and the bar below it off the bottom of the window.
+        .frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .top)
     }
 }
 

@@ -153,6 +153,15 @@ extension AppModel {
 
     func isPlanned(_ node: UInt32) -> Bool { plannedTest()(node) }
 
+    /// Whether it can be ticked for Free Up: anything with a place on the disk. What's part of macOS can't.
+    func canPlan(_ node: UInt32) -> Bool { node != 0 && tree?.path(node) != nil }
+
+    /// The colour it's ticked in: its box's, when it's a suggestion, otherwise the colour of what's picked by hand.
+    func planColour(of node: UInt32) -> Color {
+        if let at = rowOfNode[node], at < flatRows.count, let colour = rowColours[flatRows[at].id] { return colour.swiftUI }
+        return Palette.Box.hand.swiftUI
+    }
+
     // MARK: What's shown
 
     /// The list always shows what's in the picture you're looking at.

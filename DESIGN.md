@@ -28,7 +28,7 @@ They also get the numbers wrong in ways that matter:
 | "Wait, I want to keep that" | To change my mind | Nothing happens until you press Clean. One click unticks anything, and Keep stops suggesting it. After that it's in the Trash, and Undo puts it back |
 | "What is this folder? Can I delete it?" | A plain answer | Hover: name, size, what it is, what you'd really get back |
 | "Why doesn't it add up?" | The whole disk | The ring always sums to the real disk: macOS, swap, updates, hidden data, free |
-| "What's inside here?" | To go deeper | Click to zoom, click the middle to go back. Reveal in Finder, or Space for a card that shows what's inside at once |
+| "What's inside here?" | To go deeper | Click to zoom, click the middle to go back. Reveal in Finder, or Space for a card, a window of its own, that shows what's inside at once and plays a film where it is |
 
 ## Principles
 

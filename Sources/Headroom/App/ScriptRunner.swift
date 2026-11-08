@@ -10,7 +10,8 @@ import SwiftUI
 /// so nothing is read, as on a first launch without it. `--reduce-motion` acts as if Reduce Motion were on. Its window
 /// opens at the default size and saves neither its size nor its place, so a check can't move or resize yours.
 /// `--remember-window` keeps the window, the inspector and the view between runs as your copy does, in your settings, so a
-/// check that uses it puts them back afterwards.
+/// check that uses it puts them back afterwards. Pictures need a permission to record the screen that's already there; a
+/// check never asks for it, so a copy without it, such as one started with `open`, goes on without pictures.
 ///
 ///     wait 1.5                 pause, in seconds
 ///     scanned                  wait until the running scan has finished
@@ -70,6 +71,7 @@ import SwiftUI
 ///     window 7                 pick a Changes window, in days, or 0 for the last scan
 ///     search text
 ///     panel on|off             show or hide the inspector, as its button does
+///     scrolls                  where each list starts and is scrolled to, beside the room kept for the toolbar
 ///     voiceover [press]        what VoiceOver hears for the ring, and with press, what pressing its first piece does
 ///     size 1440 900            the window's size. size 1440 900 0 40 also puts its top left corner there on the screen,
 ///                              away from wherever your real pointer is resting
@@ -81,8 +83,11 @@ import SwiftUI
 ///     click x y
 ///     activate                 bring the app to the front
 ///     look ~/some/file         open the card Space opens, for this or for what an action would apply to now
-///     card                     what the card is showing
-///     keydown 49               a key as the app gets it, by key code. 49 is space
+///     card                     what the card is showing, where its window is, and what it has worked out
+///     cardpress x y [clicks]   a click on the card's window, at points from its top left
+///     carddrag x y dx dy       a press on the card's window that drags the pointer this far
+///     cardframe x y w h        as if the card's window had been dragged and sized there
+///     keydown 49 [cmd opt ...] a key as the app gets it, by key code. 49 is space, and keydown 123 cmd is ⌘←
 ///     volume /Volumes/Name     switch to another disk
 ///     shot file.png
 ///     film 3 0.1 name          keep photographing in the background without holding anything up: 3 s, every 0.1 s
@@ -672,6 +677,20 @@ enum ScriptRunner {
             model.runSearch()
         case "panel":
             model.showPanel(argument != "off")
+        case "scrolls":
+            // Where each list in the window starts and is scrolled to, beside the room kept for the toolbar above it. A list
+            // whose top is out of sight under the toolbar shows as scrolled past that room.
+            guard let w = mainWindow, let root = w.contentView?.superview else { print("no window"); return }
+            func walk(_ view: NSView) {
+                if let scroll = view as? NSScrollView, !scroll.isHiddenOrHasHiddenAncestor, scroll.frame.width > 40 {
+                    let frame = scroll.convert(scroll.bounds, to: nil)
+                    print(String(format: "scroll x %.0f top %.0f, %.0f × %.0f: room %.0f, scrolled to %.0f, content %.0f tall",
+                                 frame.minX, w.frame.height - frame.maxY, frame.width, frame.height, scroll.contentInsets.top,
+                                 scroll.contentView.bounds.minY, scroll.documentView?.frame.height ?? 0))
+                }
+                view.subviews.forEach(walk)
+            }
+            walk(root)
         case "voiceover":
             guard let view = model.mapView else { return }
             func heard() -> String {
@@ -873,7 +892,7 @@ enum ScriptRunner {
             print("shot \(argument)")
         case "film":
             let parts = argument.split(separator: " ").map(String.init)
-            guard parts.count == 3, let seconds = Double(parts[0]), let step = Double(parts[1]), let window = mainWindow else { return }
+            guard parts.count == 3, let seconds = Double(parts[0]), let step = Double(parts[1]), let window = mainWindow, mayTakePictures else { return }
             let id = String(window.windowNumber)
             let name = parts[2]
             Task.detached {
@@ -911,17 +930,72 @@ enum ScriptRunner {
         case "look":
             if let node = resolve(argument, model) { model.openLook(node) } else { model.toggleLook() }
             try? await Task.sleep(for: .milliseconds(400))
+        case "cardpress":
+            // cardpress x y [clicks]: a click on the card's window, at points from its top left, given to the app alone.
+            guard let w = LookPanel.shared.window, w.isVisible else { print("cardpress: no card"); return }
+            let numbers = argument.split(separator: " ").compactMap { Double($0) }
+            guard numbers.count >= 2 else { return }
+            let at = NSPoint(x: numbers[0], y: w.frame.height - numbers[1])
+            let target = w.contentView?.hitTest(at)
+            print("cardpress at \(Int(numbers[0])),\(Int(numbers[1])) lands on \(target.map { String(describing: type(of: $0)) } ?? "nothing")")
+            for click in 1...max(numbers.count > 2 ? Int(numbers[2]) : 1, 1) {
+                for type: NSEvent.EventType in [.leftMouseDown, .leftMouseUp] {
+                    if let event = NSEvent.mouseEvent(with: type, location: at, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                      windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: click, pressure: 1) {
+                        NSApp.sendEvent(event)
+                    }
+                }
+            }
+            try? await Task.sleep(for: .milliseconds(400))
+        case "carddrag":
+            // carddrag x y dx dy: a press on the card's window that moves the pointer this far before letting go.
+            guard let w = LookPanel.shared.window, w.isVisible else { print("carddrag: no card"); return }
+            let numbers = argument.split(separator: " ").compactMap { Double($0) }
+            guard numbers.count == 4 else { return }
+            let before = w.frame.origin
+            func event(_ type: NSEvent.EventType, _ dx: Double, _ dy: Double) -> NSEvent? {
+                NSEvent.mouseEvent(with: type, location: NSPoint(x: numbers[0] + dx, y: w.frame.height - numbers[1] - dy), modifierFlags: [],
+                                   timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
+            }
+            // What follows the press is waiting before it, as when a hand drags.
+            for step in 1...8 { if let e = event(.leftMouseDragged, numbers[2] * Double(step) / 8, numbers[3] * Double(step) / 8) { NSApp.postEvent(e, atStart: false) } }
+            if let up = event(.leftMouseUp, numbers[2], numbers[3]) { NSApp.postEvent(up, atStart: false) }
+            if let down = event(.leftMouseDown, 0, 0) { NSApp.sendEvent(down) }
+            try? await Task.sleep(for: .milliseconds(300))
+            print("carddrag: moved from \(Int(before.x)),\(Int(before.y)) to \(Int(w.frame.minX)),\(Int(w.frame.minY))")
+        case "cardframe":
+            // cardframe x y w h: as if the card's window had been dragged and sized there, its top left from the screen's.
+            guard let w = LookPanel.shared.window, let screen = w.screen ?? NSScreen.main else { print("cardframe: no card"); return }
+            let numbers = argument.split(separator: " ").compactMap { Double($0) }
+            guard numbers.count == 4 else { return }
+            w.setFrame(NSRect(x: screen.frame.minX + numbers[0], y: screen.frame.maxY - numbers[1] - numbers[3], width: numbers[2], height: numbers[3]), display: true)
         case "card":
             // What the card is showing, and what its first button would do.
             if let look = model.look, let tree = model.tree {
                 print("card \(argument): \(model.realName(of: look.node)) on the \(look.onLeft ? "left" : "right"), \(model.lookRows(of: look.node, in: tree).count) rows, \(look.back.count) back, cursor \(model.lookCursor.map(String.init) ?? "none"), facts: \(model.facts(of: look.node) ?? "none"), lit: \(model.hover?.title ?? "nothing")")
+                let place = LookPanel.shared.window.map { w in
+                    "window \(Int(w.frame.width))x\(Int(w.frame.height)) at \(Int(w.frame.minX)),\(Int(w.frame.minY))\(w.isVisible ? "" : ", hidden"), key \(w.isKeyWindow), main window at \(Int(model.mapView?.window?.frame.minX ?? -1)),\(Int(model.mapView?.window?.frame.minY ?? -1))"
+                } ?? "no window"
+                let details = model.lookDetails
+                print("  \(place); media \(details.media ?? "none"), aspect \(details.aspect.map { String(format: "%.3f", $0) } ?? "none"), use \(details.lastUse ?? "none"), frees \(details.frees.map(formatBytes) ?? "?"); selected \(model.selected.map { model.realName(of: $0) } ?? "nothing"), planned \(model.isPlanned(look.node)), playing \(model.lookIsPlaying), main window key \(model.mapView?.window?.isKeyWindow == true)")
             } else {
                 print("card \(argument): closed")
             }
         case "keydown":
-            // A key as the app gets it, not the menu bar: keydown 49 is space.
-            guard let w = mainWindow, let code = UInt16(argument) else { return }
-            if let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: w.windowNumber, context: nil, characters: " ", charactersIgnoringModifiers: " ", isARepeat: false, keyCode: code) {
+            // A key as the app gets it, not the menu bar: keydown 49 is space, keydown 123 cmd is ⌘←.
+            let words = argument.split(separator: " ")
+            guard let w = mainWindow, let first = words.first, let code = UInt16(first) else { return }
+            var flags: NSEvent.ModifierFlags = []
+            for word in words.dropFirst() {
+                switch word {
+                case "cmd": flags.insert(.command)
+                case "opt": flags.insert(.option)
+                case "shift": flags.insert(.shift)
+                case "ctrl": flags.insert(.control)
+                default: break
+                }
+            }
+            if let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: w.windowNumber, context: nil, characters: " ", charactersIgnoringModifiers: " ", isARepeat: false, keyCode: code) {
                 NSApp.sendEvent(event)
             }
             try? await Task.sleep(for: .milliseconds(120))
@@ -1118,6 +1192,7 @@ enum ScriptRunner {
     /// With the display off for a moment, as on a locked screen, a picture can fail. It works when it's back on.
     @MainActor
     private static func picture(of window: NSWindow, to path: String) async {
+        guard mayTakePictures else { return }
         for _ in 0..<8 where !FileManager.default.fileExists(atPath: path) {
             let task = Process()
             task.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
@@ -1128,9 +1203,18 @@ enum ScriptRunner {
         }
     }
 
+    /// Pictures come from the window server, so only when Headroom may already record the screen. Asking would put
+    /// macOS's question on the screen of whoever is at the Mac, which a check must never do. A copy started with `open` is
+    /// an app of its own to macOS, without that permission, so its checks say so and go on without pictures.
+    private static var mayTakePictures: Bool {
+        if CGPreflightScreenCaptureAccess() { return true }
+        print("no picture: Headroom isn't allowed to record the screen, and a check never asks")
+        return false
+    }
+
     @MainActor
     private static var mainWindow: NSWindow? {
-        NSApp.windows.first { $0.isVisible && $0.contentView != nil && $0.frame.width > 400 }
+        NSApp.windows.first { $0.isVisible && $0.contentView != nil && $0.frame.width > 400 && !($0 is NSPanel) }
     }
 
     /// What a refresh costs and whether it comes out as a full read does. Between the two, the disk carries on changing, so

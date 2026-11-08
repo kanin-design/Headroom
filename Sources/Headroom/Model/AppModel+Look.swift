@@ -11,6 +11,20 @@ struct Look: Equatable {
     var onLeft = true
 }
 
+/// What the card works out about what it shows, beyond what the map knows: a film's or a picture's shape and size, when it
+/// was last opened, and what deleting it would give back.
+struct LookDetails: Equatable {
+    var node: UInt32?
+    /// Width over height, as shown, so the card's window can take that shape.
+    var aspect: CGFloat?
+    /// A film's length, pixels and frames a second, or a picture's pixels.
+    var media: String?
+    /// When it was last opened, watched or played, as far as macOS and the apps that keep count can say.
+    var lastUse: String?
+    /// What sending it to the Trash and emptying it would give back, with other copies counted.
+    var frees: UInt64?
+}
+
 /// What the card shows. It all comes from the map, so nothing has to be counted again.
 enum LookContents {
     static func isFolder(_ node: UInt32, in tree: DiskTree) -> Bool {
@@ -139,6 +153,7 @@ extension AppModel {
         }
         lookCursor = nil
         Motion.animate(.spring(response: 0.32, dampingFraction: 0.86)) { look = Look(node: node, onLeft: keptSide ?? onLeft) }
+        LookPanel.shared.show(for: self)
         mapView?.window?.makeFirstResponder(mapView)
         watchLookEvents()
         setHover(lookPieceIndex)
@@ -147,11 +162,39 @@ extension AppModel {
     func closeLook() {
         guard look != nil else { return }
         lookCursor = nil
+        LookPanel.shared.hide()
         Motion.animate(.spring(response: 0.28, dampingFraction: 0.9)) { look = nil }
         if let lookWatch { NSEvent.removeMonitor(lookWatch) }
         lookWatch = nil
         pointedThing = nil
         setHover(nil)
+        // A click on a preview gives it the keyboard, and it keeps it after the card has gone, so Space would no longer
+        // reach the ring to open the card again. Unless you're typing in the search field, the keys go back to the ring.
+        if let window = mapView?.window, !(window.firstResponder is NSText) { window.makeFirstResponder(mapView) }
+    }
+
+    /// What the card shows changed. It's selected, so the inspector says the same, and what the map doesn't know about it
+    /// is worked out afresh, off the main thread.
+    func lookMoved() {
+        lookDetailsTask?.cancel()
+        guard let look, let tree else {
+            lookDetails = LookDetails()
+            return
+        }
+        let node = look.node
+        if node != 0, node != focus, selected != node { selected = node }
+        lookDetails = LookDetails(node: node, frees: node == 0 ? nil : Accounting.reclaimable([node], in: tree))
+        guard hasFullAccess, !HiddenNames.isOn, let path = realPath(of: node) else { return }
+        let url = URL(fileURLWithPath: path)
+        lookDetailsTask = Task { [weak self] in
+            async let media = LookMedia.read(url)
+            async let use = Task.detached(priority: .userInitiated) { LastUse.line(node, in: tree, orChange: false) }.value
+            let (found, used) = await (media, use)
+            guard let self, !Task.isCancelled, self.look?.node == node else { return }
+            self.lookDetails.aspect = found?.aspect
+            self.lookDetails.media = found?.text
+            self.lookDetails.lastUse = used
+        }
     }
 
     // MARK: Moving around
@@ -257,7 +300,9 @@ extension AppModel {
     }
 
     private func handleLookEvent(_ event: NSEvent) -> Bool {
-        guard let window = mapView?.window, event.window === window else { return false }
+        // The keys come to the main window, which keeps the keyboard. The card's own window gets its clicks.
+        guard let main = mapView?.window, let window = event.window, window === main || window === LookPanel.shared.window else { return false }
+        let onCard = window === LookPanel.shared.window
         let at = CGPoint(x: event.locationInWindow.x, y: window.frame.height - event.locationInWindow.y)
         switch event.type {
         case .keyDown:
@@ -276,13 +321,13 @@ extension AppModel {
             }
             return true
         case .leftMouseDown:
-            guard event.clickCount == 2, lookContentFrame.contains(at) else { return false }
+            guard onCard, event.clickCount == 2, lookContentFrame.contains(at) else { return false }
             openLooked()
             return true
         case .rightMouseDown:
             // The rows have their own menu. A preview would offer macOS's.
-            guard let node = look?.node, let tree, !LookContents.isFolder(node, in: tree), lookContentFrame.contains(at),
-                  let view = mapView, let menu = menu(for: NamedThing(node)) else { return false }
+            guard onCard, let node = look?.node, let tree, !LookContents.isFolder(node, in: tree), lookContentFrame.contains(at),
+                  let view = window.contentView, let menu = menu(for: NamedThing(node)) else { return false }
             NSMenu.popUpContextMenu(menu, with: event, for: view)
             return true
         default:

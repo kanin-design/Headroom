@@ -183,10 +183,7 @@ final class MapHostView: NSView {
             model.pointerOffRing()
             return
         }
-        let p = convert(event.locationInWindow, from: nil)
-        // The card covers part of the ring. What's under it can't be pointed at.
-        let onCard = model.look != nil && model.lookCardFrame.contains(p)
-        model.pointerMoved(to: onCard ? nil : model.polar(p))
+        model.pointerMoved(to: model.polar(convert(event.locationInWindow, from: nil)))
     }
 
     override func mouseExited(with event: NSEvent) {

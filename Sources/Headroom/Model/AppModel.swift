@@ -87,12 +87,19 @@ final class AppModel {
     // Where you are
     var focus: UInt32 = 0 { didSet { if oldValue != focus { pointedThing = nil; closeLook(); refreshShownRows(); refreshChangeRows(); visitChanged() } } }
     /// What the card Space opens is showing, when it's open.
-    var look: Look?
+    var look: Look? { didSet { if look?.node != oldValue?.node { lookMoved() } } }
     var lookCursor: Int?
     @ObservationIgnored var lookWatch: Any?
+    @ObservationIgnored var backForwardWatch: Any?
     @ObservationIgnored var checkRun: Task<Void, Never>?
-    @ObservationIgnored var lookCardFrame = CGRect.zero
     @ObservationIgnored var lookContentFrame = CGRect.zero
+    /// What the card has worked out about what it shows, beyond what the map knows. It arrives a moment after the card opens.
+    var lookDetails = LookDetails()
+    @ObservationIgnored var lookDetailsTask: Task<Void, Never>?
+    /// How tall the card's own parts are, above and below a picture, so its window can give the picture its shape.
+    var lookChrome: CGFloat = 0
+    /// For a check: whether the card's film is playing.
+    @ObservationIgnored var lookIsPlaying = false
     @ObservationIgnored var factsCache: [UInt32: String] = [:]
     @ObservationIgnored var factsVersion = -1
     /// Where you've been, for the back and forward arrows, and where in that you are now.
@@ -272,6 +279,7 @@ final class AppModel {
     func start() {
         guard !didStart else { return }
         didStart = true
+        watchBackAndForwardKeys()
         loadPlan()
         // Asking for each folder is gone: it brought up a prompt per folder, and still left the rest needing Full Disk Access.
         UserDefaults.standard.removeObject(forKey: "askPerFolder")

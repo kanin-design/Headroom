@@ -13,7 +13,8 @@ enum LastUse {
         return (nil, line(node, in: tree))
     }
 
-    static func line(_ node: UInt32, in tree: DiskTree, now: Date = Date(), home: String = NSHomeDirectory()) -> String? {
+    /// Without `orChange`, only what says it was used: the card already gives the date it changed.
+    static func line(_ node: UInt32, in tree: DiskTree, now: Date = Date(), home: String = NSHomeDirectory(), orChange: Bool = true) -> String? {
         guard let full = tree.path(node) else { return nil }
         let path = Facts.visible(full)
         let isFolder = tree.nodes[Int(node)].has(NodeFlag.directory)
@@ -24,7 +25,7 @@ enum LastUse {
         if isFolder, hasGit(node, in: tree), let commit = lastCommit(in: full) { return "Last commit " + ago(commit, now: now) }
         if !isFolder || path.hasSuffix(".app"), let opened = openedBySpotlight(path) { return "Opened " + ago(opened, now: now) }
         let newest = newestChange(node, in: tree)
-        guard newest > 0, !Task.isCancelled else { return nil }
+        guard orChange, newest > 0, !Task.isCancelled else { return nil }
         return "Changed " + ago(Date(timeIntervalSince1970: TimeInterval(newest)), now: now)
     }
 
