@@ -845,7 +845,6 @@ final class AppModel {
             if ringReach != layout.reach { ringReach = layout.reach }
         }
         if lens == .map { layout.calmTinyPieces(viewBytes: tree.totals[Int(focus)]) }
-        if after == nil { layout.addMarks(ringMarks(), tree: tree) }
         return layout
     }
 
@@ -1045,7 +1044,7 @@ final class AppModel {
             if untouched > 0 {
                 // The window is in the panel, so a part only needs saying how much: the whole line has to fit in the middle.
                 note = Double(untouched) >= Double(p.bytes) * 0.999 ? "Untouched \(changeWindow.span)" : "\(formatBytes(UInt64(untouched))) untouched"
-            } else if !ownShape, !p.isSmaller, !p.isMark, p.style != 2, !(tree.isPartial && tree.isStillGrowing(p.node)) {
+            } else if !ownShape, !p.isSmaller, p.style != 2, !(tree.isPartial && tree.isStillGrowing(p.node)) {
                 share = ""
                 tellsUse = !(n.has(NodeFlag.synthetic) || (n.rule != 0 && rules.rule(n.rule).tier == .handsOff))
             }
@@ -1053,7 +1052,7 @@ final class AppModel {
             let delta = changes.value(of: p.node)
             if delta > 0 { note = "+\(formatBytes(UInt64(delta))) \(changes.shortCaption)" }
             else if delta < 0 { note = "−\(formatBytes(UInt64(-delta))) \(changes.shortCaption)" }
-        } else if !ownShape, !p.isSmaller, !p.isMark, p.style != 2, !(tree.isPartial && tree.isStillGrowing(p.node)) {
+        } else if !ownShape, !p.isSmaller, p.style != 2, !(tree.isPartial && tree.isStillGrowing(p.node)) {
             // The ring already shows its share. Once the pointer rests, the line says when it was last used, except on
             // macOS's own parts, which have nothing to add.
             share = ""

@@ -41,7 +41,7 @@ final class RingTests: XCTestCase {
             for depth in [5, 6, 8, 10] {
                 let layout = RingLayout.build(tree: d.tree, focus: d.node("/Volumes/Fake/d1"), colorer: { _ in .zero },
                                               sizes: RingSizes(depth: depth, style: style))
-                let pieces = layout.pieces.filter { !$0.isMark }
+                let pieces = layout.pieces
                 XCTAssertEqual(pieces.map(\.ring).max(), Int32(depth - 1), "a ring for every level, as deep as asked")
                 XCTAssertEqual(try XCTUnwrap(pieces.map(\.r1).max()), 1, accuracy: 0.0001, "the same circle at any depth")
                 let first = try XCTUnwrap(pieces.first { $0.ring == 0 })
@@ -64,7 +64,7 @@ final class RingTests: XCTestCase {
                 XCTAssertEqual(layout.reach, fills)
                 XCTAssertEqual(layout.rings, fills, "no more rings than it can fill")
                 // Around the whole disk, ring 0 is the band.
-                let pieces = layout.pieces.filter { !$0.isMark && (focus != 0 || $0.ring > 0) }
+                let pieces = layout.pieces.filter { focus != 0 || $0.ring > 0 }
                 let outermost = Int32(focus == 0 ? fills : fills - 1)
                 XCTAssertEqual(pieces.map(\.ring).max(), outermost)
                 XCTAssertEqual(try XCTUnwrap(pieces.filter { $0.ring == outermost }.map(\.r1).max()), 1, accuracy: 0.0001, "and they reach the edge")

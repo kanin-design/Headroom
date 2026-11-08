@@ -626,24 +626,6 @@ final class WinsTests: XCTestCase {
 }
 
 final class LayoutTests: XCTestCase {
-    func testMarksStayAtTheEndAndDontBreakHitTesting() {
-        let disk = FakeDisk()
-        disk.file("/Volumes/Fake/A/big.bin", 100_000_000_000)
-        disk.file("/Volumes/Fake/A/tiny.bin", 5_000_000)
-        disk.file("/Volumes/Fake/B/other.bin", 100_000_000_000)
-        disk.finish()
-        var layout = RingLayout.build(tree: disk.tree, focus: 0, colorer: { _ in .zero })
-        let before = layout.pieces.count
-        layout.addMarks([RingLayout.Mark(node: disk.node("/Volumes/Fake/A/tiny.bin"), color: .one, planned: true)], tree: disk.tree)
-        XCTAssertEqual(layout.pieces.count, before + 1)
-        XCTAssertTrue(layout.pieces.last?.isMark == true)
-        XCTAssertEqual(layout.pieces.last?.node, disk.node("/Volumes/Fake/A/tiny.bin"))
-        // Every ordinary point still finds an ordinary piece.
-        let piece = layout.pieces[0]
-        let hit = layout.hit(angle: piece.midAngle, radius: (piece.r0 + piece.r1) / 2)
-        XCTAssertEqual(hit, 0)
-    }
-
     func testPlannedPiecesAreMarked() {
         let disk = FakeDisk()
         disk.file("/Volumes/Fake/A/big.bin", 100_000_000_000)
@@ -678,7 +660,7 @@ final class LayoutTests: XCTestCase {
         disk.finish()
         let layout = RingLayout.build(tree: disk.tree, focus: 0, colorer: { _ in .zero })
         func area(_ p: Piece) -> Double { Double(p.sweep) * Double(p.r1 * p.r1 - p.r0 * p.r0) }
-        let drawn = layout.pieces.filter { !$0.isMark }.map(area).reduce(0, +)
+        let drawn = layout.pieces.map(area).reduce(0, +)
         for (id, share) in [(disk.tree.free, 0.25), (disk.tree.hidden, 0.10)] {
             let piece = layout.pieces.first { $0.node == id }
             XCTAssertEqual(piece.map(area) ?? 0, share * drawn, accuracy: 0.002 * drawn)

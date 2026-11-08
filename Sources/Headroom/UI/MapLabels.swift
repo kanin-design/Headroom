@@ -92,7 +92,7 @@ enum LabelPlacer {
         if lens == .map || lens == .freeUp {
             for i in order.prefix(160) {
                 let p = layout.pieces[i]
-                if p.isSmaller || p.isMark || p.ring > 3 { continue }
+                if p.isSmaller || p.ring > 3 { continue }
                 if lens == .freeUp && p.style != 1 { continue }
                 let isFree = p.style == 1
                 let isHidden = p.style == 2
@@ -121,7 +121,7 @@ enum LabelPlacer {
             let total = Double(max(tree.totals[Int(layout.focus)], 1))
             for i in order.prefix(260) where !labelled.contains(i) {
                 let p = layout.pieces[i]
-                if p.isSmaller || p.isMark || p.style == 1 || p.ring > 4 { continue }
+                if p.isSmaller || p.style == 1 || p.ring > 4 { continue }
                 let share = Double(p.bytes) / total
                 if share < 0.015 { continue }
                 if p.ring == 0 && layout.focus == 0 { continue }
@@ -258,7 +258,7 @@ enum LabelPlacer {
     private static func visiblePiece(for node: UInt32, layout: RingLayout, tree: DiskTree) -> Int? {
         var target = node
         while true {
-            if let i = layout.pieces.firstIndex(where: { !$0.isSmaller && !$0.isMark && $0.node == target }) { return i }
+            if let i = layout.pieces.firstIndex(where: { !$0.isSmaller && $0.node == target }) { return i }
             if target == 0 || target == layout.focus { return nil }
             target = tree.nodes[Int(target)].parent
         }

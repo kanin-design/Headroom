@@ -34,7 +34,7 @@ struct Uniforms {
     float4 ghostSlices[12]; // each colour, and in w where it ends, as a share of the whole
 };
 
-enum Style { StyleNormal = 0, StyleFree = 1, StyleHidden = 2, StyleSmaller = 3, StyleFile = 4, StyleMark = 5 };
+enum Style { StyleNormal = 0, StyleFree = 1, StyleHidden = 2, StyleSmaller = 3, StyleFile = 4 };
 
 struct SegmentOut {
     float4 position [[position]];
@@ -128,7 +128,7 @@ fragment PieceOut segment_fragment(SegmentOut in [[stage_in]], constant Uniforms
     float halfLen = halfSweep * rm;
 
     // Gaps stay the same on screen at every radius, and give way on the smallest pieces so they don't vanish.
-    float gap = in.style == StyleMark ? 0.0 : u.scale * 0.75;
+    float gap = u.scale * 0.75;
     float radialGap = min(gap, width * 0.22);
     float angularGap = min(gap, halfLen * 0.42);
     float corner = min(min(u.scale * 3.5, (width - 2.0 * radialGap) * 0.42), max(halfLen - angularGap, 0.0) * 0.9);
@@ -163,10 +163,7 @@ fragment PieceOut segment_fragment(SegmentOut in [[stage_in]], constant Uniforms
     float edge = 1.0 - saturate(-d / (u.scale * 1.6));
     edge *= edge;
 
-    if (in.style == StyleMark) {
-        // A tick outside the ring. What's planned is brighter than what's only suggested.
-        color = base * mix(0.46, 1.25, in.planned);
-    } else if (in.style == StyleFree) {
+    if (in.style == StyleFree) {
         // Free space is an open window: almost nothing inside, with a clean, fine edge.
         float wash = 0.010 + 0.016 * radial * radial;
         color = float3(wash * 0.85, wash * 1.05, wash * 1.3);

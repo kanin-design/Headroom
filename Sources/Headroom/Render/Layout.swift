@@ -19,7 +19,6 @@ struct Piece {
     var bytes: UInt64
     var calm: Float = 0           // how far it steps back until you point at it
     var planned: Float = 0        // 1 when it goes at the next clean
-    var isMark = false            // a tick outside the ring, not a piece of it
     var deeper: Float = 0         // in the outermost ring, how much of it is in folders that aren't drawn, 0 to 1
 
     var sweep: Float { a1 - a0 }
@@ -172,7 +171,7 @@ struct RingLayout {
     var fill: [Float] {
         let first: Int32 = focus == 0 ? 1 : 0
         var around: [Float] = []
-        for p in pieces where !p.isMark && p.ring >= first {
+        for p in pieces where p.ring >= first {
             let i = Int(p.ring - first)
             if i >= around.count { around += [Float](repeating: 0, count: i + 1 - around.count) }
             around[i] += p.sweep
@@ -216,7 +215,7 @@ struct RingLayout {
         while i < pieces.count {
             let p = pieces[i]
             if !p.isSmaller, p.style != 1, p.style != 2, set.contains(p.node) || set.contains(p.tail) {
-                let end = p.isMark ? i + 1 : max(Int(p.end), i + 1)
+                let end = max(Int(p.end), i + 1)
                 full.append(i..<end)
                 addParents(of: i)
                 i = end
@@ -227,7 +226,7 @@ struct RingLayout {
         var pieceOf = [UInt32: Int](minimumCapacity: pieces.count)
         var smallerOf: [Int: Int] = [:]
         var outerSmaller: Int?
-        for (at, p) in pieces.enumerated() where !p.isMark {
+        for (at, p) in pieces.enumerated() {
             if p.isSmaller {
                 if p.parent >= 0 { smallerOf[Int(p.parent)] = at } else { outerSmaller = at }
             } else {
@@ -239,7 +238,7 @@ struct RingLayout {
             if focus != 0, !tree.isInside(top, focus) { continue }
             let drawn = full.contains { range in
                 let p = pieces[range.lowerBound]
-                return !p.isMark && (tree.isInside(p.node, top) || tree.isInside(p.tail, top))
+                return tree.isInside(p.node, top) || tree.isInside(p.tail, top)
             }
             if drawn { continue }
             var walk = top
@@ -263,14 +262,14 @@ struct RingLayout {
     /// The biggest piece that stands for these things, or what holds them if they have none.
     func bestPiece(for nodes: [UInt32], tree: DiskTree) -> Int? {
         let found = lit(by: nodes, tree: tree)
-        if let best = found.full.map(\.lowerBound).filter({ !pieces[$0].isMark }).max(by: { pieces[$0].bytes < pieces[$1].bytes }) { return best }
-        return found.holding.filter { !pieces[$0].isMark }.max { pieces[$0].r0 < pieces[$1].r0 }
+        if let best = found.full.map(\.lowerBound).max(by: { pieces[$0].bytes < pieces[$1].bytes }) { return best }
+        return found.holding.max { pieces[$0].r0 < pieces[$1].r0 }
     }
 
     /// Tiny pieces step back until you point at them, so the big ones are easier to see.
     mutating func calmTinyPieces(viewBytes: UInt64) {
         let total = Float(max(viewBytes, 1))
-        for i in pieces.indices where !pieces[i].isMark { pieces[i].calm = min(max(1 - Float(pieces[i].bytes) / total / 0.006, 0), 0.8) }
+        for i in pieces.indices { pieces[i].calm = min(max(1 - Float(pieces[i].bytes) / total / 0.006, 0), 0.8) }
     }
 
     /// What's drawn directly inside a folder, once a folder that's nearly all one subfolder is drawn as one with it.
@@ -347,7 +346,7 @@ struct RingLayout {
     private mutating func reachLikeTheRest(free: UInt32, hidden: UInt32, atLeast: Float) {
         func isOwnShape(_ p: Piece) -> Bool { p.ring == 0 && (p.node == free || p.node == hidden) }
         var area: Float = 0, sweep: Float = 0
-        for p in pieces where !p.isMark && !isOwnShape(p) {
+        for p in pieces where !isOwnShape(p) {
             area += p.sweep * (p.r1 * p.r1 - p.r0 * p.r0)
             if p.ring == 0 { sweep += p.sweep }
         }
@@ -448,72 +447,6 @@ struct RingLayout {
                                     ring: Int32(ring), parent: parentPiece, end: index + 1, isSmaller: true, smallerCount: smallerCount,
                                     color: color, style: 3, seed: seed, bytes: rest, planned: plannerNow?(parentNode) == true ? 1 : 0))
             }
-        }
-    }
-
-    /// A tick outside the ring, so that things too thin to see still show where they are.
-    struct Mark {
-        var node: UInt32
-        var color: SIMD3<Float>
-        var planned: Bool
-    }
-
-    /// Marks follow the pieces, so a thing that has its own piece gets a line along it, and anything smaller gets a tick at
-    /// its place inside whichever piece holds it. Ticks that land on the same spot are one tick.
-    mutating func addMarks(_ marks: [Mark], tree: DiskTree) {
-        guard !marks.isEmpty else { return }
-        let nodes = tree.nodes, totals = tree.totals
-        var pieceOf = [UInt32: Int](minimumCapacity: pieces.count)
-        for (i, p) in pieces.enumerated() where !p.isSmaller && pieceOf[p.node] == nil { pieceOf[p.node] = i }
-        var taken = Set<Int>()
-        var added = 0
-        for mark in marks {
-            if added >= 1600 { break }
-            if focus != 0 && !tree.isInside(mark.node, focus) { continue }
-            guard totals[Int(mark.node)] > 0 else { continue }
-            var chain: [UInt32] = []
-            var at = mark.node
-            var lo: Float = 0, hi: Float = 2 * .pi
-            while true {
-                if let i = pieceOf[at] {
-                    lo = pieces[i].a0
-                    hi = pieces[i].a1
-                    break
-                }
-                if at == focus || at == 0 { break }
-                chain.append(at)
-                at = nodes[Int(at)].parent
-            }
-            var parent = at
-            for child in chain.reversed() {
-                let whole = max(totals[Int(parent)], 1)
-                var before: UInt64 = 0
-                var c = nodes[Int(parent)].firstChild
-                while c != 0 && c != child {
-                    before &+= totals[Int(c)]
-                    c = nodes[Int(c)].nextSibling
-                }
-                let span = hi - lo
-                let start = lo + span * Float(Double(before) / Double(whole))
-                hi = start + span * Float(Double(totals[Int(child)]) / Double(whole))
-                lo = start
-                parent = child
-            }
-            // What's big enough to see on the ring needs no tick. This is for what would otherwise be missed.
-            if hi - lo > 0.09 { continue }
-            let thinnest: Float = 0.0034
-            if hi - lo < thinnest {
-                let middle = (lo + hi) * 0.5
-                lo = middle - thinnest / 2
-                hi = middle + thinnest / 2
-                let spot = Int(middle * 900) * 2 + (mark.planned ? 1 : 0)
-                if !taken.insert(spot).inserted { continue }
-            }
-            let index = Int32(pieces.count)
-            pieces.append(Piece(node: mark.node, tail: mark.node, key: Self.pathKey(tree, mark.node) ^ 0x3C3C_3C3C_3C3C, a0: lo, a1: hi,
-                                r0: 1.018, r1: mark.planned ? 1.058 : 1.042, ring: 99, parent: -1, end: index + 1, isSmaller: false, smallerCount: 0,
-                                color: mark.color, style: 5, seed: 0, bytes: 0, planned: mark.planned ? 1 : 0, isMark: true))
-            added += 1
         }
     }
 

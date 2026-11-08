@@ -123,10 +123,9 @@ of something bigger, lights the piece that holds it, so pointing at something al
 4. **The ring.** A click on any piece selects it, and a double-click opens it, as in the Finder. What isn't part of any
    box appears at the top as Picked by hand, so it can be seen and taken back.
 
-**The ring shows what's selected.** Solid stays, striped goes, with a thin bright edge. What's too thin to see gets a tick
-outside the ring, so 25 slivers of `node_modules` still show where they are. The Free wedge grows in the colours of what's
-making room, in the order of the list, and the middle number rolls to the "after" figure. Hold Option and the ring
-animates to how the disk will actually look.
+**The ring shows what's selected.** Solid stays, striped goes, with a thin bright edge. The Free wedge grows in the
+colours of what's making room, in the order of the list, and the middle number rolls to the "after" figure. Hold Option
+and the ring animates to how the disk will actually look.
 
 **The list follows the zoom.** There's no scope control: the boxes are always for the picture on screen. On the whole disk,
 Project leftovers is one box. Inside a video folder, it opens up into old versions, scene renders and review stills. In a

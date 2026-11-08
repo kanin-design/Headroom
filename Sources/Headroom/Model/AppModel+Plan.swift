@@ -153,23 +153,6 @@ extension AppModel {
 
     func isPlanned(_ node: UInt32) -> Bool { plannedTest()(node) }
 
-    /// The ticks around the ring: every suggestion in this picture in Free Up, and what's planned everywhere.
-    func ringMarks() -> [RingLayout.Mark] {
-        var byNode: [UInt32: RingLayout.Mark] = [:]
-        let planned = plannedTest()
-        if lens == .freeUp {
-            for row in shownRows where row.isPlannable || row.action == .command {
-                let color = (rowColours[row.id] ?? Palette.Box.other).linearP3
-                for node in row.nodes { byNode[node] = RingLayout.Mark(node: node, color: color, planned: planned(node)) }
-            }
-        }
-        for item in plan.items {
-            let color = (rowColours[item.id] ?? Palette.Box.hand).linearP3
-            for node in planNodes[item.id] ?? [] { byNode[node] = RingLayout.Mark(node: node, color: color, planned: true) }
-        }
-        return Array(byNode.values)
-    }
-
     // MARK: What's shown
 
     /// The list always shows what's in the picture you're looking at.

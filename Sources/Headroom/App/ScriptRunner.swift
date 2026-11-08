@@ -362,7 +362,7 @@ enum ScriptRunner {
             let took = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1e6
             // Around the whole disk, ring 0 is the band, and the rings of folders are 1 to n.
             let first: Int32 = model.focus == 0 ? 1 : 0
-            let rings = (0..<Int32(layout.rings)).map { k in layout.pieces.filter { !$0.isMark && $0.ring == first + k } }
+            let rings = (0..<Int32(layout.rings)).map { k in layout.pieces.filter { $0.ring == first + k } }
             let widths = rings.map { ring in ring.first.map { String(format: "%.0f", ($0.r1 - $0.r0) * RingLayout.typicalRadius) } ?? "-" }
             let edge = rings.last?.map(\.r1).max() ?? 0
             print(String(format: "rings: asked %d %@, drawn %d, could fill %d, menu ticks %d and offers up to %d, pieces per ring %@, widths in points %@, outer edge %.4f, %d lips, %.1f ms",
@@ -808,7 +808,7 @@ enum ScriptRunner {
             print("off the row: lit \(model.hover?.title ?? "nothing")")
         case "ringpoint":
             // The pointer on the biggest piece of the ring itself.
-            guard let w = mainWindow, let piece = model.engine.layout.pieces.filter({ !$0.isSmaller && !$0.isMark && $0.style == 0 }).max(by: { $0.bytes < $1.bytes }) else { return }
+            guard let w = mainWindow, let piece = model.engine.layout.pieces.filter({ !$0.isSmaller && $0.style == 0 }).max(by: { $0.bytes < $1.bytes }) else { return }
             let angle = Double(piece.a0 + piece.a1) / 2, radius = Double(piece.r0 + piece.r1) / 2 * model.ring.radius
             let p = NSPoint(x: model.ring.center.x + sin(angle) * radius, y: w.frame.height - (model.ring.center.y - cos(angle) * radius))
             print("ring: lands on \(w.contentView?.superview?.hitTest(p).map { String(describing: type(of: $0)).prefix(24) } ?? "nothing")")
@@ -817,7 +817,7 @@ enum ScriptRunner {
         case "ringclick":
             // ringclick 2 2: a double-click on this piece of the ring, counting what can be clicked. `ringclick 2` is one click.
             let numbers = argument.split(separator: " ").map(String.init)
-            let pieces = model.engine.layout.pieces.filter { !$0.isSmaller && !$0.isMark }
+            let pieces = model.engine.layout.pieces.filter { !$0.isSmaller }
             guard let at = Int(numbers.first ?? ""), pieces.indices.contains(at), let tree = model.tree else { print("no such piece: \(argument)"); return }
             let piece = pieces[at]
             let angle = Double(piece.a0 + piece.a1) / 2, radius = Double(piece.r0 + piece.r1) / 2 * model.ring.radius
@@ -973,7 +973,7 @@ enum ScriptRunner {
             if parts.first == "piece" {
                 parts.removeFirst()
                 let layout = model.engine.layout
-                guard let piece = layout.pieces.filter({ !$0.isSmaller && !$0.isMark && $0.style == 0 }).max(by: { $0.bytes < $1.bytes }) else {
+                guard let piece = layout.pieces.filter({ !$0.isSmaller && $0.style == 0 }).max(by: { $0.bytes < $1.bytes }) else {
                     print("press: no piece among \(layout.pieces.count)")
                     return
                 }

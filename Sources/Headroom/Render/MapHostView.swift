@@ -304,7 +304,7 @@ final class MapHostView: NSView {
         let ring = model.ring
         let key = "\(model.focus) \(model.treeVersion) \(layout.pieces.count) \(ring.center) \(ring.radius)"
         if let cached = piecesForVoiceOver, cached.key == key { return cached.elements }
-        let inner = layout.pieces.enumerated().filter { $0.element.ring == 0 && !$0.element.isMark && $0.element.bytes > 0 }
+        let inner = layout.pieces.enumerated().filter { $0.element.ring == 0 && $0.element.bytes > 0 }
         let whole = Double(max(inner.reduce(UInt64(0)) { $0 &+ $1.element.bytes }, 1))
         let elements: [Any] = inner.sorted { $0.element.bytes > $1.element.bytes }.map { _, piece in
             let element = RingPieceElement()
@@ -319,7 +319,7 @@ final class MapHostView: NSView {
             let node = piece.node, smaller = piece.isSmaller
             element.press = { [weak model] in
                 guard let model, let now = model.engine.layout.pieces.firstIndex(where: {
-                    $0.node == node && $0.isSmaller == smaller && $0.ring == 0 && !$0.isMark
+                    $0.node == node && $0.isSmaller == smaller && $0.ring == 0
                 }) else { return false }
                 model.click(piece: now)
                 return true
