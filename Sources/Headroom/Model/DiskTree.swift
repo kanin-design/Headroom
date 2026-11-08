@@ -39,6 +39,14 @@ struct Node {
     @inline(__always) func has(_ flag: UInt16) -> Bool { flags & flag != 0 }
 }
 
+extension UInt32 {
+    /// Seconds from 1970 as the map keeps them. Before 1970, past 2106, or not a number at all, they're held at the nearest
+    /// end instead of stopping the app.
+    init(seconds: Double) {
+        self = seconds.isNaN || seconds <= 0 ? 0 : seconds >= Double(UInt32.max) ? .max : UInt32(seconds)
+    }
+}
+
 /// A block of names. A scan and its pictures share one, and a picture can outlive the block's use by the scan.
 final class NameStore: @unchecked Sendable {
     let pointer: UnsafeMutablePointer<UInt8>
@@ -75,7 +83,7 @@ final class DiskTree: @unchecked Sendable {
     private var statIndexCount = 0
     private var nextStatRow: UInt32 = 0
     /// In `statIndex`: this row is this node's alone, so it can be changed where it is.
-    private static let ownRow: UInt32 = 1 << 31
+    static let ownRow: UInt32 = 1 << 31
     let totals: UnsafeMutablePointer<UInt64>
     let totalFiles: UnsafeMutablePointer<UInt32>
     let dfsIn: UnsafeMutablePointer<UInt32>
@@ -187,6 +195,8 @@ final class DiskTree: @unchecked Sendable {
 
     /// Takes a removed folder or file out of the sums, so the ring can update at once without a new scan.
     func remove(_ id: UInt32) {
+        // Taken out twice, its bytes would be counted out twice.
+        guard !nodes[Int(id)].has(NodeFlag.gone) else { return }
         isWhole = false
         let bytes = totals[Int(id)], files = totalFiles[Int(id)]
         let parent = nodes[Int(id)].parent
@@ -250,6 +260,8 @@ final class DiskTree: @unchecked Sendable {
 
     /// Puts back something taken out with `remove`: it never stopped knowing what it held.
     func restore(_ id: UInt32) {
+        // Put back twice, it would be linked in after itself, and every walk of that folder would go round for ever.
+        guard nodes[Int(id)].has(NodeFlag.gone) else { return }
         isWhole = false
         markSubtree(id, gone: false)
         let parent = nodes[Int(id)].parent

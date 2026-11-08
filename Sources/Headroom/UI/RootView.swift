@@ -7,7 +7,8 @@ struct RootView: View {
 
     var body: some View {
         GeometryReader { geometry in
-            let ring = RingGeometry.make(size: geometry.size, panelOpen: model.panelOpen)
+            // The inspector has a column of its own, so all of this is the map's.
+            let ring = RingGeometry.make(size: geometry.size)
             ZStack(alignment: .topLeading) {
                 MapView(model: model)
                     .frame(width: geometry.size.width, height: geometry.size.height)
@@ -21,44 +22,59 @@ struct RootView: View {
                 LookLayer(model: model, ring: ring, height: geometry.size.height)
                     .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
 
-                // Centred over the ring, unless the window is so narrow that it would meet the disk chip.
-                LensSwitcher(model: model)
-                    .position(x: max(ring.center.x, 432), y: 31)
-
-                DiskChip(model: model)
-                    .padding(.leading, 82)
-                    .padding(.top, 11)
-
-                HStack {
-                    Spacer()
-                    ToolCluster(model: model)
-                        .padding(.trailing, 14)
-                        .padding(.top, 11)
-                }
-
-                if model.panelOpen {
-                    HStack {
-                        Spacer()
-                        SidePanel(model: model)
-                            .frame(width: RingGeometry.panelWidth)
-                            .padding(.trailing, 14)
-                            .padding(.top, 60)
-                            .padding(.bottom, 14)
-                    }
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
-                }
-
                 BottomArea(model: model, ring: ring)
                     .frame(width: ring.mapWidth, height: geometry.size.height, alignment: .bottom)
+
+                // The folder's own icon beside the title, as a Finder window has: drag it to another app, or ⌘-click the
+                // title for where it is. Not with names hidden, since that would show them.
+                if let url = proxyURL {
+                    Color.clear
+                        .frame(width: 0, height: 0)
+                        .navigationDocument(url)
+                }
             }
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
             .onChange(of: ring, initial: true) { _, new in model.setRing(new) }
         }
-        .ignoresSafeArea()
+        // The map goes on under the toolbar, which has no background of its own over it.
+        .ignoresSafeArea(.container, edges: .top)
         .background(Color(red: 0.03, green: 0.03, blue: 0.042))
+        .navigationTitle(title)
+        .navigationSubtitle(subtitle)
+        .toolbarTitleMenu { TitleMenu(model: model) }
+        .toolbar { MainToolbar(model: model) }
+        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+        .searchable(text: $model.searchText, isPresented: $model.searchActive, placement: .toolbar, prompt: "Find a file or folder")
+        .onChange(of: model.searchText) { _, text in
+            model.runSearch()
+            // What's found is listed in the inspector.
+            if !text.isEmpty { model.showPanel(true) }
+        }
+        // Done searching: the keyboard goes back to the map, so Esc and Space work on it again.
+        .onChange(of: model.searchActive) { _, active in
+            if !active { model.mapView?.window?.makeFirstResponder(model.mapView) }
+        }
+        .inspector(isPresented: Binding(get: { model.panelOpen }, set: { model.showPanel($0) })) {
+            SidePanel(model: model)
+                .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { _, width in model.noteInspectorWidth(width) }
+                // Last, or SwiftUI doesn't see it and the inspector is its own default 270 points wide, neither more nor less.
+                .inspectorColumnWidth(min: 340, ideal: AppModel.savedInspectorWidth, max: 520)
+                .toolbar {
+                    // Just before the search field, whether the inspector is open or not, as in Apple's apps.
+                    ToolbarItem(placement: .primaryAction) {
+                        Button { model.showPanel(!model.panelOpen) } label: {
+                            Label(model.panelOpen ? "Hide Inspector" : "Show Inspector", systemImage: "sidebar.trailing")
+                        }
+                        .help(model.panelOpen ? "Hide Inspector" : "Show Inspector")
+                    }
+                }
+        }
+        // With Reduce Motion, nothing springs past where it's going, and everything is quick.
+        .transaction { transaction in
+            if transaction.animation != nil, Motion.isReduced { transaction.animation = .easeInOut(duration: 0.2) }
+        }
         .preferredColorScheme(.dark)
         .focusEffectDisabled()
-        .animation(.spring(response: 0.42, dampingFraction: 0.88), value: model.panelOpen)
         .alert("\(model.busyToSend?.title ?? "This") is in use", isPresented: Binding(get: { model.busyToSend != nil }, set: { if !$0 { model.busyToSend = nil } }), presenting: model.busyToSend) { busy in
             Button("Send to Trash Anyway", role: .destructive) { model.sendAnyway(busy) }
             Button("Cancel", role: .cancel) {}
@@ -79,189 +95,106 @@ struct RootView: View {
             model.volumesChanged()
         }
     }
+
+    /// Where you are, as a Finder window says it: the folder you're in, or the disk itself.
+    private var title: String {
+        guard model.focus != 0, model.tree != nil else { return model.volume?.shownName ?? "Headroom" }
+        return model.displayName(model.focus)
+    }
+
+    /// Under the title: how far the scan has got, or how much is free, the same as in the middle of the ring. Inside a
+    /// folder, which disk it's on as well.
+    private var subtitle: String {
+        if model.isScanning { return model.scanFiles > 0 ? "Reading \(formatCount(model.scanFiles)) files" : "Reading" }
+        if !model.hasFullAccess, model.volume?.isBoot == true { return "Waiting for Full Disk Access" }
+        guard let free = model.tree.map({ $0.totals[Int($0.free)] }) ?? model.volume?.free else { return "" }
+        if model.focus != 0 { return "\(model.volume?.shownName ?? "Disk")  ·  \(formatBytes(free)) free" }
+        let capacity = model.tree?.capacityBytes ?? model.volume?.capacity ?? 0
+        return "\(formatBytes(free)) free of \(formatBytes(capacity))"
+    }
+
+    /// The real place on the disk the title stands for. Groups Headroom makes up, such as macOS's own parts, have none.
+    private var proxyURL: URL? {
+        guard !HiddenNames.isOn, let tree = model.tree, let volume = model.volume else { return nil }
+        if model.focus == 0 { return URL(fileURLWithPath: volume.mountPath) }
+        return tree.path(model.focus).map { URL(fileURLWithPath: $0) }
+    }
 }
 
 // MARK: Top
 
-struct LensSwitcher: View {
+/// Back and forward at the start of the toolbar, the three views in the middle, and Scan Again at the end, before the search
+/// field and the inspector's button. It can't be rearranged: on macOS 27 a toolbar that can be moves back and forward to the
+/// other end and squeezes the inspector, and a small app built the same way stops at launch.
+private struct MainToolbar: ToolbarContent {
     let model: AppModel
-    @Namespace private var space
 
-    var body: some View {
-        GlassEffectContainer {
-            HStack(spacing: 2) {
-                ForEach(Lens.allCases) { lens in
-                    Button {
-                        withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) { model.setLens(lens) }
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: lens.symbol)
-                                .font(.system(size: 12, weight: .semibold))
-                            Text(lens.rawValue)
-                                .font(.system(size: 13, weight: .semibold))
-                            // How many things are selected, wherever you are.
-                            if lens == .freeUp, !model.plan.isEmpty {
-                                Text("\(model.plan.count)")
-                                    .font(.system(size: 10.5, weight: .bold).monospacedDigit())
-                                    .foregroundStyle(.black.opacity(0.8))
-                                    .padding(.horizontal, 5)
-                                    .frame(minHeight: 15)
-                                    .background(Capsule().fill(Palette.reclaim(.rebuilds).swiftUI))
-                                    .help("\(model.plan.count) selected. Nothing happens until you clean.")
-                            }
-                        }
-                        .foregroundStyle(model.lens == lens ? Color.white : Color.white.opacity(0.62))
-                        .padding(.horizontal, 14)
-                        .frame(height: 32)
-                        .background {
-                            if model.lens == lens {
-                                Capsule()
-                                    .fill(.white.opacity(0.16))
-                                    .matchedGeometryEffect(id: "selected", in: space)
-                            }
-                        }
-                        .contentShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .help(help(lens))
-                }
-            }
-            .padding(3)
-            .glassEffect(.regular, in: Capsule())
+    var body: some ToolbarContent {
+        ToolbarItemGroup(placement: .navigation) {
+            Button { model.goBack() } label: { Label("Back", systemImage: "chevron.left") }
+                .disabled(!model.canGoBack)
+                .help("Back")
+            Button { model.goForward() } label: { Label("Forward", systemImage: "chevron.right") }
+                .disabled(!model.canGoForward)
+                .help("Forward")
         }
-    }
-
-    private func help(_ lens: Lens) -> String {
-        switch lens {
-        case .map: "What's on the disk, by kind"
-        case .changes: "What has grown lately"
-        case .freeUp: "Get space back, what you'd miss least first"
+        ToolbarItem(placement: .principal) {
+            LensPicker(model: model)
+        }
+        ToolbarItem(placement: .primaryAction) {
+            Button { model.scan(hurry: true) } label: { Label("Scan Again", systemImage: "arrow.clockwise") }
+                .disabled(model.scanIsHurrying)
+                .help("Read the disk again, at full power")
         }
     }
 }
 
-struct DiskChip: View {
+/// Map, Changes and Free Up. Switching never moves the ring, only what its colours say.
+struct LensPicker: View {
     let model: AppModel
 
     var body: some View {
-        Menu {
-            ForEach(model.volumes, id: \.mountPath) { volume in
+        Picker("View", selection: Binding(get: { model.lens }, set: { lens in
+            Motion.animate(.spring(response: 0.34, dampingFraction: 0.82)) { model.setLens(lens) }
+        })) {
+            ForEach(Lens.allCases) { lens in
+                Text(lens.rawValue)
+                    .help(lens.help)
+                    .tag(lens)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+    }
+}
+
+/// The title's menu: the folders the one you're in is inside, to go straight back to one, then the disks.
+private struct TitleMenu: View {
+    let model: AppModel
+
+    var body: some View {
+        if let tree = model.tree, model.focus != 0 {
+            ForEach(tree.ancestors(of: model.focus).dropLast().reversed(), id: \.self) { node in
                 Button {
-                    model.switchVolume(volume)
+                    model.go(to: node)
                 } label: {
-                    Label("\(volume.shownName)  ·  \(formatBytes(volume.free)) free of \(formatBytes(volume.capacity))",
-                          systemImage: volume.isBoot ? "internaldrive" : "externaldrive")
-                }
-            }
-        } label: {
-            HStack(spacing: 7) {
-                if model.isScanning {
-                    ProgressView()
-                        .controlSize(.small)
-                        .scaleEffect(0.7)
-                        .frame(width: 14, height: 14)
-                } else {
-                    Image(systemName: (model.volume?.isBoot ?? true) ? "internaldrive" : "externaldrive")
-                        .font(.system(size: 12, weight: .semibold))
-                }
-                VStack(alignment: .leading, spacing: -1) {
-                    Text(model.volume?.shownName ?? "Disk")
-                        .font(.system(size: 12, weight: .semibold))
-                    if model.isScanning {
-                        Text(model.scanFiles > 0 ? "Reading \(formatCount(model.scanFiles)) files" : "Reading")
-                            .font(.system(size: 9.5, weight: .medium).monospacedDigit())
-                            .foregroundStyle(.white.opacity(0.55))
-                    } else if !model.hasFullAccess, model.volume?.isBoot == true {
-                        Text("Waiting for access")
-                            .font(.system(size: 9.5, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.5))
-                    } else if model.scanFiles > 0 {
-                        Text("\(formatCount(model.scanFiles)) files")
-                            .font(.system(size: 9.5, weight: .medium).monospacedDigit())
-                            .foregroundStyle(.white.opacity(0.5))
+                    if node == 0 {
+                        Label(model.volume?.shownName ?? "Disk", systemImage: model.volume?.isBoot == false ? "externaldrive" : "internaldrive")
+                    } else {
+                        Label(model.displayName(node), systemImage: "folder")
                     }
                 }
             }
-            .foregroundStyle(.white.opacity(0.92))
-            .padding(.horizontal, 12)
-            .frame(height: 38)
-            .contentShape(Capsule())
+            Divider()
         }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
-        .focusable(false)
-        .focusEffectDisabled()
-        .fixedSize()
-        .glassEffect(.regular.interactive(), in: Capsule())
-    }
-}
-
-struct ToolCluster: View {
-    @Bindable var model: AppModel
-    @FocusState private var searchFocused: Bool
-
-    var body: some View {
-        GlassEffectContainer(spacing: 8) {
-            HStack(spacing: 8) {
-                if model.searchActive {
-                    HStack(spacing: 6) {
-                        Image(systemName: "magnifyingglass")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.6))
-                        TextField("Find a file or folder", text: $model.searchText)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 13))
-                            .focused($searchFocused)
-                            .frame(width: 170)
-                            .onChange(of: model.searchText) { _, _ in model.runSearch() }
-                            .onSubmit { model.runSearch() }
-                            .onExitCommand { closeSearch() }
-                            .onAppear { searchFocused = true }
-                        Button(action: closeSearch) {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundStyle(.white.opacity(0.45))
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    .padding(.horizontal, 12)
-                    .frame(height: 38)
-                    .glassEffect(.regular, in: Capsule())
-                } else {
-                    toolButton("magnifyingglass", "Find (⌘F)") {
-                        withAnimation(.spring(response: 0.32, dampingFraction: 0.85)) { model.searchActive = true; model.panelOpen = true }
-                    }
-                }
-                toolButton("arrow.clockwise", "Scan again (⌘R)") { model.scan(hurry: true) }
-                    .disabled(model.scanIsHurrying)
-                toolButton("sidebar.right", model.panelOpen ? "Hide the panel" : "Show the panel") {
-                    model.panelOpen.toggle()
-                }
+        ForEach(model.volumes, id: \.mountPath) { volume in
+            Button {
+                model.switchVolume(volume)
+            } label: {
+                Label("\(volume.shownName)  ·  \(formatBytes(volume.free)) free of \(formatBytes(volume.capacity))",
+                      systemImage: volume.isBoot ? "internaldrive" : "externaldrive")
             }
         }
-    }
-
-    private func closeSearch() {
-        withAnimation(.spring(response: 0.32, dampingFraction: 0.85)) {
-            model.searchActive = false
-            model.searchText = ""
-            model.searchResults = []
-        }
-        model.engine.setEmphasis(primary: nil, related: [])
-        model.mapView?.window?.makeFirstResponder(model.mapView)
-    }
-
-    private func toolButton(_ symbol: String, _ help: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.85))
-                .frame(width: 38, height: 38)
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .glassEffect(.regular.interactive(), in: Circle())
-        .help(help)
     }
 }
 
@@ -275,7 +208,7 @@ struct BottomArea: View {
         VStack(spacing: 10) {
             if let message = model.message {
                 MessageCard(model: model, message: message)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .transition(Motion.arrival(from: .bottom))
             }
             if let tip = model.tip {
                 HStack(spacing: 12) {
@@ -299,7 +232,7 @@ struct BottomArea: View {
             }
             if !model.hasFullAccess && !model.accessCardDismissed, model.volume?.isBoot == true {
                 AccessCard(model: model)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .transition(Motion.arrival(from: .bottom))
             } else if model.focus != 0 {
                 Breadcrumbs(model: model)
                     .transition(.opacity)

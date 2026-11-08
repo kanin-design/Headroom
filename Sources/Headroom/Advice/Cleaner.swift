@@ -291,7 +291,7 @@ enum FinderAsk {
     }
 
     /// Says where it ended up.
-    fileprivate static func moveToTrash(_ path: String) throws -> String {
+    fileprivate static func moveToTrash(_ path: String, stop: LockedFlag?) throws -> String {
         var place = try run([
             "on run argv",
             "set thing to POSIX file (item 1 of argv) as alias",
@@ -300,7 +300,7 @@ enum FinderAsk {
             "end timeout",
             "return POSIX path of place",
             "end run",
-        ], [path])
+        ], [path], stop: stop)
         // A package is a folder, and its path comes back like one.
         if place.count > 1, place.hasSuffix("/") { place.removeLast() }
         return place
@@ -323,18 +323,35 @@ enum FinderAsk {
     }
 
     /// Waits on its own thread, so a password box never holds up the window.
-    private static func run(_ lines: [String], _ arguments: [String]) throws -> String {
+    private static func run(_ lines: [String], _ arguments: [String], stop: LockedFlag? = nil) throws -> String {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
         task.arguments = lines.flatMap { ["-e", $0] } + arguments
+        return try runToEnd(task, stop: stop)
+    }
+
+    /// Runs it and says what it printed. Stopping a clean, which quitting does, ends the wait at once, so quitting never sits
+    /// behind a password box nobody answers. The Finder's own box stays up: answered, it moves the thing to the Trash anyway,
+    /// where it simply is, unrecorded.
+    static func runToEnd(_ task: Process, stop: LockedFlag?) throws -> String {
         let output = Pipe()
         let errors = Pipe()
         task.standardOutput = output
         task.standardError = errors
         try task.run()
+        var watch: DispatchSourceTimer?
+        if let stop {
+            let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+            timer.schedule(deadline: .now() + 0.1, repeating: 0.1)
+            timer.setEventHandler { if stop.value, task.isRunning { task.terminate() } }
+            timer.resume()
+            watch = timer
+        }
+        defer { watch?.cancel() }
         let said = output.fileHandleForReading.readDataToEndOfFile()
         let complaint = errors.fileHandleForReading.readDataToEndOfFile()
         task.waitUntilExit()
+        if stop?.value == true, task.terminationReason == .uncaughtSignal { throw Cleaner.Failure.stopped }
         guard task.terminationStatus == 0 else { throw failure(from: String(decoding: complaint, as: UTF8.self)) }
         return String(decoding: said, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -377,10 +394,10 @@ enum Cleaner {
 
     /// Moves it to the Trash, and says where it ended up and which file it is. An app goes through the Finder, and so does
     /// anything else macOS won't let this app move itself.
-    static func trash(_ path: String, step: PlanStep = .trash) throws -> (place: String, identity: String?) {
+    static func trash(_ path: String, step: PlanStep = .trash, stop: LockedFlag? = nil) throws -> (place: String, identity: String?) {
         guard mayTouch(path, step: step) else { throw Failure.notAllowed }
         func throughFinder() throws -> (place: String, identity: String?) {
-            let place = visibleInTrash(try FinderAsk.moveToTrash(path))
+            let place = visibleInTrash(try FinderAsk.moveToTrash(path, stop: stop))
             return (place, identity(of: place))
         }
         if step == .uninstall, path.hasSuffix(".app") { return try throughFinder() }

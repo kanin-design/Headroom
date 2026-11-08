@@ -37,13 +37,18 @@ struct VolumeFacts {
         var info = statfs()
         guard statfs(path, &info) == 0 else { return nil }
         let block = UInt64(info.f_bsize)
+        // Some network and cloud disks claim more blocks than a 64-bit count of bytes can hold: those count as the most.
+        func bytes(_ blocks: UInt64) -> UInt64 {
+            let (product, overflow) = blocks.multipliedReportingOverflow(by: block)
+            return overflow ? .max : product
+        }
         let url = URL(fileURLWithPath: path)
         let values = try? url.resourceValues(forKeys: [.volumeLocalizedNameKey])
         var facts = VolumeFacts(
             name: values?.volumeLocalizedName ?? url.lastPathComponent,
             mountPath: path,
-            capacity: UInt64(info.f_blocks) * block,
-            free: UInt64(info.f_bavail) * block,
+            capacity: bytes(UInt64(info.f_blocks)),
+            free: bytes(UInt64(info.f_bavail)),
             isBoot: path == "/"
         )
         if facts.isBoot {
@@ -239,7 +244,7 @@ final class DiskScan: @unchecked Sendable {
         let was = Dictionary(anchors.map { ($0.path, $0.id) }, uniquingKeysWith: { first, _ in first })
         for anchor in tree.anchors { if let old = was[anchor.path] { scanner.seed(anchor.id, was: old) } }
         // Dates are in whole seconds, so only those before the second the map began are sure to be older than it.
-        scanner.refresh(from: base, marks: marks, unchangedSince: UInt32(max(0, since.time.rounded(.down) - 1)))
+        scanner.refresh(from: base, marks: marks, unchangedSince: UInt32(seconds: since.time.rounded(.down) - 1))
         known = Set(base.links.lazy.map(\.key)).union(base.singleLinks.lazy.map(\.key))
         fullReadAt = base.fullReadAt
         self.place = place
@@ -590,7 +595,7 @@ enum Accounting {
                 c = nodes[Int(c)].nextSibling
             }
         }
-        let now = UInt32(Date().timeIntervalSince1970)
+        let now = UInt32(seconds: Date().timeIntervalSince1970)
         func isUnder(_ id: UInt32, _ ancestor: UInt32) -> Bool {
             var i = id
             while i != 0 {

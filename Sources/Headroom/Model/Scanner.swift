@@ -61,7 +61,7 @@ final class Scanner: @unchecked Sendable {
     private let cancelled = Atomic<Bool>(false)
 
     /// When this scan started, which is what file dates are measured from.
-    let now = UInt32(Date().timeIntervalSince1970)
+    let now = UInt32(seconds: Date().timeIntervalSince1970)
     private let extensions = ExtensionTable.shared
 
     /// One folder waiting to be read. The lowest key goes first: what you're looking at, then what's cheap, then the rest.

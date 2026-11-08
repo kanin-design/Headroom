@@ -182,7 +182,7 @@ enum Bencode {
         default: // 4:name
             var end = at
             while end < b.count, b[end] != 0x3A { end += 1 }
-            guard end < b.count, let count = Int(String(decoding: b[at..<end], as: UTF8.self)), count >= 0, end + 1 + count <= b.count else { return nil }
+            guard end < b.count, let count = Int(String(decoding: b[at..<end], as: UTF8.self)), count >= 0, count <= b.count - end - 1 else { return nil }
             let start = end + 1
             at = start + count
             return .bytes(Data(b[start..<at]))

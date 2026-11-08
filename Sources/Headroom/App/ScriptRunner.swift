@@ -7,7 +7,10 @@ import SwiftUI
 /// It can look and click, but it can't move your files: the app may hold Full Disk Access, and that shouldn't be
 /// something another program can script. Its clean, empty and undo steps are stopped by `Cleaner.onlyInside` anywhere but
 /// a throwaway test disk. `--no-cache` starts without the saved scan, and `--locked` acts as if Full Disk Access were off,
-/// so nothing is read, as on a first launch without it.
+/// so nothing is read, as on a first launch without it. `--reduce-motion` acts as if Reduce Motion were on. Its window
+/// opens at the default size and saves neither its size nor its place, so a check can't move or resize yours.
+/// `--remember-window` keeps the window, the inspector and the view between runs as your copy does, in your settings, so a
+/// check that uses it puts them back afterwards.
 ///
 ///     wait 1.5                 pause, in seconds
 ///     scanned                  wait until the running scan has finished
@@ -18,9 +21,9 @@ import SwiftUI
 ///     meter start, meter name  how busy the main thread was between the two, and its longest stall
 ///     pacing start, pacing name  whether every frame of the ring reached the screen on time between the two, what each
 ///                              cost, and how busy the main thread was
-///     sweep ring 5             the pointer travelling over the ring or the panel, without your real one moving
-///     back, forward            the arrows at the top of the panel
-///     select ~/some/file       as if it had been clicked: the panel shows it
+///     sweep ring 5             the pointer travelling over the ring or the inspector, without your real one moving
+///     back, forward            the arrows in the toolbar
+///     select ~/some/file       as if it had been clicked: the inspector shows it
 ///     hover ~/some/folder
 ///     links ~/some/folder      what the middle of the ring says about its hard links or clones, and how long that takes
 ///     lastuse ~/some/folder    what the middle of the ring says about when it was last used, and how long that takes
@@ -41,9 +44,9 @@ import SwiftUI
 ///     copyroute                what ⌘C would copy now
 ///     tick 0                 tick the nth row in Free Up, or the row with this title
 ///     plan ~/some/folder       add it to the planned actions, or take it out
-///     box quick                tick a box in the panel, by id or title
-///     point models             point at a box in the panel. Nothing after it: the pointer leaves
-///     pointat Caches           point at one thing in the panel
+///     box quick                tick a box in the inspector, by id or title
+///     point models             point at a box in the inspector. Nothing after it: the pointer leaves
+///     pointat Caches           point at one thing in the inspector
 ///     press x y clicks dx dy   a click, double-click or drag on the window, given to the app alone. `press piece 1` hits the ring
 ///     frame                    where the window is, and whether it fills the screen
 ///     memory, footprint        how much memory it uses, and what that's made of
@@ -51,7 +54,7 @@ import SwiftUI
 ///     review                   check what's selected
 ///     labelpoint 2             the pointer on a name around the ring, and what's lit while it moves there
 ///     labelleave 2, ringpoint  the pointer leaves that name, or moves onto the ring itself, and what's lit then
-///     panelhover 2             the pointer on that thing's row in the panel, moving a little, and what's lit
+///     panelhover 2             the pointer on that thing's row in the inspector, moving a little, and what's lit
 ///     labelclick 2             what a click on that name does. `labelclick 2 2` is the second click of a double-click
 ///     ringclick 2              a click on this piece of the ring. `ringclick 2 2` is a double-click
 ///     button                   how much of what's selected is ready, and why the rest isn't
@@ -59,16 +62,20 @@ import SwiftUI
 ///     cleananyway /some/path   the Clean anyway button, for something selected that's in use
 ///     leaks                    with --hide-names, look for real names in everything the app has ready to show
 ///     about picture.png        open About Headroom from the app menu, and take its picture
-///     clean, empty, undo       only ever act inside the throwaway test disk. `empty nowait` and `undo nowait` go on to
-///                              the next step at once, while things are still going or coming back
+///     clean, empty, undo       only ever act inside the throwaway test disk. `clean nowait`, `empty nowait` and
+///                              `undo nowait` go on to the next step at once, while things are still going or coming back
 ///     keep Title               keep a suggestion
 ///     after on|off             show the disk as it will be after the clean
 ///     expand Title             open a suggestion
 ///     window 7                 pick a Changes window, in days, or 0 for the last scan
 ///     search text
-///     panel on|off
+///     panel on|off             show or hide the inspector, as its button does
+///     voiceover [press]        what VoiceOver hears for the ring, and with press, what pressing its first piece does
 ///     size 1440 900            the window's size. size 1440 900 0 40 also puts its top left corner there on the screen,
 ///                              away from wherever your real pointer is resting
+///     jiggle 6                 for this many seconds, the window's right edge moves 3 points out and back every 8 ms, as
+///                              in a live resize, a zoom or a window manager, while the steps after it go on
+///     collide 860 620          switch the view as the switcher does, and give the window this size in the same instant
 ///     timescale 0.1            slow every animation down
 ///     mouse x y                move the real pointer path, in window points
 ///     click x y
@@ -197,7 +204,7 @@ enum ScriptRunner {
         case "lens":
             // As a click on the switcher does it.
             let lens: Lens = argument == "changes" ? .changes : argument == "freeUp" ? .freeUp : .map
-            withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) { model.setLens(lens) }
+            Motion.animate(.spring(response: 0.34, dampingFraction: 0.82)) { model.setLens(lens) }
         case "focus":
             if let node = resolve(argument, model), let tree = model.tree { model.zoom(into: RingLayout.chainTail(tree: tree, node)) }
             else { print("no such folder: \(argument)") }
@@ -300,6 +307,7 @@ enum ScriptRunner {
                     // Hidden items are only there for their keys, such as the Globe key's, and nobody sees them.
                     items.filter { !$0.isSeparatorItem && !$0.isHidden }.map { item in
                         var keys = ""
+                        if item.keyEquivalentModifierMask.contains(.control) { keys += "⌃" }
                         if item.keyEquivalentModifierMask.contains(.shift) { keys += "⇧" }
                         if item.keyEquivalentModifierMask.contains(.option) { keys += "⌥" }
                         if item.keyEquivalentModifierMask.contains(.command) { keys += "⌘" }
@@ -413,15 +421,15 @@ enum ScriptRunner {
         case "plan":
             if let node = resolve(argument, model) { model.togglePiece(node) } else { print("no such path: \(argument)") }
         case "box":
-            // box quick, box models: ticks a box in the panel, by its id or its title.
+            // box quick, box models: ticks a box in the inspector, by its id or its title.
             if let box = model.boxes.first(where: { $0.id == argument || $0.title == argument }) { model.toggle(box) } else { print("no such box: \(argument)") }
         case "point":
-            // point models: as if the pointer were on that box in the panel. With nothing after it, the pointer leaves.
+            // point models: as if the pointer were on that box in the inspector. With nothing after it, the pointer leaves.
             if argument.isEmpty { model.point(at: nil) }
             else if let box = model.boxes.first(where: { $0.id == argument || $0.title == argument }) { model.point(at: box) }
             else { print("no such box: \(argument)") }
         case "pointat":
-            // pointat Title: as if the pointer were on one thing in the panel.
+            // pointat Title: as if the pointer were on one thing in the inspector.
             if let box = model.boxes.first(where: { $0.rows.contains { $0.title == argument } }), let row = box.rows.first(where: { $0.title == argument }) { model.point(at: box, row: row) }
             else { print("no such thing: \(argument)") }
         case "open":
@@ -437,7 +445,7 @@ enum ScriptRunner {
         case "clean":
             // Only ever acts inside the throwaway test disk: see Cleaner.onlyInside.
             model.cleanNow()
-            while model.cleanProgress != nil { try? await Task.sleep(for: .milliseconds(50)) }
+            if argument != "nowait" { while model.cleanProgress != nil { try? await Task.sleep(for: .milliseconds(50)) } }
         case "empty":
             model.emptyNow()
             if argument != "nowait" { while model.afterClean?.isEmptying == true { try? await Task.sleep(for: .milliseconds(50)) } }
@@ -513,7 +521,8 @@ enum ScriptRunner {
             // So that something outside can tell how far this has got.
             FileManager.default.createFile(atPath: argument, contents: nil)
         case "sweep":
-            // sweep ring 5, sweep panel 5: the pointer travelling over it for that many seconds, without your real one moving.
+            // sweep ring 5, sweep panel 5: the pointer travelling over the ring or the inspector for that many seconds, without
+            // your real one moving.
             guard let w = mainWindow else { return }
             let parts = argument.split(separator: " ").map(String.init)
             let seconds = Double(parts.last ?? "") ?? 3
@@ -593,8 +602,8 @@ enum ScriptRunner {
             let effect = Accounting.effect(of: tops, except: [], in: tree)
             time("the disk as it'd be after", rounds: 3) { _ = AfterPlan(tree: tree, ids: tops, excluded: [], effect: effect) }
             time("the other copies of each", rounds: 1) { for row in model.flatRows { _ = Accounting.otherCopies(of: row.nodes, in: tree) } }
-            if let volume = model.volume { time("save the map", rounds: 1) { TreeCache.save(tree, for: volume) } }
-            if let volume = model.volume { time("read the saved map", rounds: 3) { _ = TreeCache.load(for: volume) } }
+            if let volume = model.volume { time("save the map", rounds: 1) { TreeCache.save(tree, for: volume, rules: model.rules) } }
+            if let volume = model.volume { time("read the saved map", rounds: 3) { _ = TreeCache.load(for: volume, rules: model.rules) } }
             time("gather facts, afresh", rounds: 1) { _ = Facts.gather(tree: tree, running: [], fullAccess: true, reusing: nil) }
             time("gather facts, again", rounds: 2) { _ = Facts.gather(tree: tree, running: [], fullAccess: true, reusing: facts) }
             time("newest change, 40,000 files", rounds: 1) { _ = Walker.newestChange(in: home + "/Library", limit: 40_000) }
@@ -662,10 +671,24 @@ enum ScriptRunner {
             model.searchText = argument
             model.runSearch()
         case "panel":
-            model.panelOpen = argument != "off"
+            model.showPanel(argument != "off")
+        case "voiceover":
+            guard let view = model.mapView else { return }
+            func heard() -> String {
+                (view.accessibilityChildren() ?? []).prefix(8).compactMap { $0 as? NSAccessibilityElement }.map {
+                    "\($0.accessibilityLabel() ?? "?") (\(($0.accessibilityValue() as? String) ?? "?"))"
+                }.joined(separator: ", ")
+            }
+            print("voiceover \(view.accessibilityLabel() ?? "?"): \(heard())")
+            if argument == "press", let first = view.accessibilityChildren()?.first as? NSAccessibilityElement {
+                _ = first.accessibilityPerformPress()
+                try? await Task.sleep(for: .milliseconds(600))
+                print("voiceover after pressing \(first.accessibilityLabel() ?? "?"): \(view.accessibilityLabel() ?? "?"): \(heard())")
+            }
         case "size":
             let numbers = argument.split(separator: " ").compactMap { Double($0) }
             if numbers.count == 2 || numbers.count == 4, let w = mainWindow {
+                // At once, even in the same instant as the step before's animated change: `Motion.animate` makes that safe.
                 var frame = w.frame
                 frame.origin.y += frame.height - numbers[1]
                 frame.size = CGSize(width: numbers[0], height: numbers[1])
@@ -674,6 +697,38 @@ enum ScriptRunner {
                 }
                 w.setFrame(frame, display: true)
             }
+        case "jiggle":
+            // New frames all the time, so that animated changes meet them in the same turn of the run loop.
+            guard let w = mainWindow, let seconds = Double(argument) else { return }
+            let start = w.frame.size
+            let until = Date().addingTimeInterval(seconds)
+            var flip = false, frames = 0
+            let timer = Timer(timeInterval: 0.008, repeats: true) { timer in
+                MainActor.assumeIsolated {
+                    guard Date() < until else {
+                        timer.invalidate()
+                        print("jiggle: \(frames) new frames, from \(Int(start.width))x\(Int(start.height)) to \(Int(w.frame.width))x\(Int(w.frame.height))")
+                        return
+                    }
+                    var frame = w.frame
+                    frame.size.width += flip ? 3 : -3
+                    flip.toggle()
+                    w.setFrame(frame, display: true)
+                    frames += 1
+                }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+        case "collide":
+            // collide 860 620 asks for that size; without numbers, a little smaller than now.
+            guard let w = mainWindow else { return }
+            let numbers = argument.split(separator: " ").compactMap { Double($0) }
+            Motion.animate(.spring(response: 0.34, dampingFraction: 0.82)) { model.setLens(model.lens == .map ? .changes : .map) }
+            var frame = w.frame
+            let size = numbers.count == 2 ? CGSize(width: numbers[0], height: numbers[1]) : CGSize(width: frame.width - 40, height: frame.height - 30)
+            frame.origin.y += frame.height - size.height
+            frame.size = size
+            w.setFrame(frame, display: true)
+            print("collide: asked for \(Int(frame.width))x\(Int(frame.height))")
         case "timescale":
             model.engine.timeScale = Float(argument) ?? 1
         case "checkupdates":
@@ -739,7 +794,7 @@ enum ScriptRunner {
             if let event = NSEvent.mouseEvent(with: .mouseMoved, location: p, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0) { model.mapView?.mouseMoved(with: event) }
             print("left: lit \(model.hover?.title ?? "nothing")")
         case "panelhover":
-            // panelhover 2: the pointer on the row in the panel for that name, then moving about on the row a little.
+            // panelhover 2: the pointer on the row in the inspector for that name, then moving about on the row a little.
             guard let w = mainWindow, let at = labelPoint(argument, model) else { print("no such name: \(argument)"); return }
             model.highlight(node: at.label.node)
             print("on the row for \"\(at.label.title)\": lit \(model.hover?.title ?? "nothing")")
@@ -1101,10 +1156,10 @@ enum ScriptRunner {
         guard !refresh.surprised else { return out.joined(separator: "\n") }
         let a = refresh.tree
         let saveStart = DispatchTime.now()
-        TreeCache.save(a, for: facts)
+        TreeCache.save(a, for: facts, rules: rules)
         let saved = seconds(saveStart)
         let loadStart = DispatchTime.now()
-        let loaded = TreeCache.load(for: facts)
+        let loaded = TreeCache.load(for: facts, rules: rules)
         let size = (try? FileManager.default.attributesOfItem(atPath: TreeCache.url(facts.name).path)[.size] as? Int) ?? 0
         out.append(String(format: "saved map %.1f MB, saved in %.2f s, read back in %.2f s%@", Double(size) / 1e6, saved, seconds(loadStart),
                           loaded == nil ? ", but it didn't read back" : ""))

@@ -213,14 +213,14 @@ final class Updater {
                 isInstalling = true
                 let app = try await Task.detached(priority: .userInitiated) { try Updater.putInPlace(from: disk, version: release.number) }.value
                 isInstalling = false
-                if quitWhenInPlace { return NSApp.reply(toApplicationShouldTerminate: true) }
+                if quitWhenInPlace { return AppModel.shared.quitWhenNothingIsLeft() }
                 Self.reopen(app)
             } catch is CancellationError {
                 state = .available(release)
             } catch {
                 isInstalling = false
                 state = .failed(release, Self.say(error))
-                if quitWhenInPlace { NSApp.reply(toApplicationShouldTerminate: true) }
+                if quitWhenInPlace { AppModel.shared.quitWhenNothingIsLeft() }
             }
         }
     }
@@ -285,7 +285,9 @@ final class Updater {
         }
 
         func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-            guard let error else { return }
+            // Done with no error but no file handed over, the window would say "Downloading" for ever. After a file, the
+            // download has already finished, and this changes nothing.
+            guard let error else { return finish(.failure(Problem.noAnswer)) }
             finish(.failure((error as? URLError)?.code == .cancelled ? CancellationError() : error))
         }
     }

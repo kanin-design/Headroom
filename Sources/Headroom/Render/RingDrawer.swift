@@ -244,8 +244,9 @@ final class RingDrawer: NSObject, @unchecked Sendable {
         // moves on by one refresh of this display, whatever its rate.
         let dt = restarted ? refresh : link.timestamp - lastFrame
         lastFrame = link.timestamp
-        // While the window draws the ring with each of its own frames, it's left to that.
-        if drawing.withLock({ link.timestamp - windowDrewAt < refresh * 1.5 }) { return }
+        // While the window draws the ring with each of its own frames, it's left to that. As the inspector slides, the window
+        // can miss a refresh or two, and a frame of the ring's own in that gap would show it where the window isn't yet.
+        if drawing.withLock({ link.timestamp - windowDrewAt < max(refresh * 2.5, 0.04) }) { return }
         let moving = draw(dt: dt, restarted: restarted, withTransaction: false, target: link.targetTimestamp)
         if !moving {
             link.isPaused = true

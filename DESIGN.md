@@ -32,8 +32,10 @@ They also get the numbers wrong in ways that matter:
 
 ## Principles
 
-1. **The map is the interface.** It fills the window. Everything else floats on top in glass, and the
-   window should still look complete with the panel closed.
+1. **The map is the interface.** It fills the window, under a toolbar like any Mac app's, and what floats over it is
+   glass. The inspector sits beside it, edge to edge, as in Apple's own apps, and the window should still look complete
+   with the inspector closed. The title says where you are, as a Finder window does, and the window comes back as you
+   left it: the view, and the inspector shown or hidden at its width.
 2. **Colour means something.** In **Map**, it shows what belongs together. In **Changes**, it's how much of a
    piece is new or changed, red for a little and yellow for all of it, or how much of it is untouched, deep blue for a
    little and pale ice for all of it. In
@@ -76,19 +78,20 @@ sunburst in the reference:
   whole spectrum, kept far from the pieces beside it. Headroom remembers it, so a folder keeps its colour
   between scans even when sizes change. Everything inside stays close to that colour and gets lighter going
   out, so one group reads as one wedge from the middle to the edge. Big files are the brightest, and tiny
-  things step back. System data stays slate on the whole disk. The panel lists the kinds of data, and
+  things step back. System data stays slate on the whole disk. The inspector lists the kinds of data, and
   pointing at one lights it up.
 - **Changes:** what grew. Uses scan history when there is any, and file dates on the first run, so it's
   useful on day one. Keeps a free-space history, including system volumes, which is how a downloaded
   update gets caught. Each piece is coloured by how much of it is new or changed, from red for a little to
   yellow for all of it, and what didn't change goes quiet. A file counts as wholly changed when its date is in the
   window, or by how much it grew since the scan compared with: which bytes inside it changed could only be found
-  by reading it. The middle says how much free space changed; the panel has the month's free space, then what grew and what shrank.
+  by reading it. The middle says how much free space changed; the inspector has the month's free space, then what grew and what shrank in
+  the folder you're in.
   The other way round, it shows what's gone untouched: what nothing has changed in for a month, three months or a
   year, by file dates, which the scan sums per folder as it reads. The cold scale mirrors the warm one, as light at
   every step, so the two read the same way. What you're known to have used in that time counts as touched, however
   old its files: an app you opened, a film Plex says you watched, a game Steam started, a video Spotlight saw you open.
-  macOS's own parts and what Headroom leaves alone never count. Both scales in the panel are drawn from the ring's own
+  macOS's own parts and what Headroom leaves alone never count. Both scales in the inspector are drawn from the ring's own
   colours, starting from the quiet grey of a piece with none of it.
 - **Free Up:** a short stack of boxes, each one kind of thing, with what you'd miss least on top: the Trash, caches and
   build output, AI models, project leftovers, installers, episodes you've watched, apps you don't seem to use, and so on
@@ -105,7 +108,7 @@ just size. It asks four things about anything on the disk: what is it, can it co
 would you really get back? The sentence on screen comes from the answers, and it states facts: "6 episodes, 8.9 GB each,
 nearly 5x your other series. Opened Nov 1. Not watched in Plex."
 
-**One set of data, shown two ways.** A section is a list of files and folders. The panel shows its name, size and what
+**One set of data, shown two ways.** A section is a list of files and folders. The inspector shows its name, size and what
 it's made of, and the ring shows where those files are. Pointing or ticking in one shows in the other, because there's
 only one list. Point at a box and its files light up, the names around the ring change to them, and a dashed wedge shows
 how much free space it would add. Point at the ring and the box lights up. What's too small to draw, or is drawn as part
@@ -135,13 +138,13 @@ with the ring showing what each press did.
 
 **Checks run as you tick.** Each selected thing is looked at as soon as the ticking stops, and again just before anything
 moves. Is it still there? Is something running from it, or holding a file open in it? Has it changed since you selected it?
-Is the other disk plugged in, with room? Whatever needs a look shows at the top of the panel with a reason and a fix (Quit
+Is the other disk plugged in, with room? Whatever needs a look shows at the top of the inspector with a reason and a fix (Quit
 Chrome, Clean anyway). Whatever isn't ready stays ticked, and everything else goes ahead. A check never has the last word on
 something that can be put back: something using a folder is a reason to ask, and the answer is yours. Send to Trash asks the
 same thing straight away.
 
 **You can see it go.** Pieces leave as they're moved, and the Trash piece grows, labelled and striped. Free space
-doesn't change yet, and the panel says so. Emptying moves the Trash piece into the Free wedge, and the panel then reports
+doesn't change yet, and the inspector says so. Emptying moves the Trash piece into the Free wedge, and the inspector then reports
 what the disk really gave back. The Finder hides a name that starts with a dot, even in the Trash, so what goes there shows
 without the dot, the message says so, and Undo brings it back under its own name.
 
@@ -194,7 +197,7 @@ seconds a folder, and it rated a folder of finished films as the likeliest thing
   because it also holds your login.
 - An app goes to the Trash through the Finder, because macOS keeps apps to itself and only the Finder can move all of them.
   macOS asks once whether Headroom may ask the Finder, and the Finder asks for your password when an app isn't yours to
-  move. The panel says so first. Whatever doesn't go stays on the list with the reason and a Try again button.
+  move. The inspector says so first. Whatever doesn't go stays on the list with the reason and a Try again button.
 
 ## Truthful accounting
 
@@ -229,7 +232,7 @@ opening it.
 
 Two details keep it honest while it runs:
 
-- The interface only ever reads a copy of the tables, taken every so often. So hovering, zooming and the panels
+- The interface only ever reads a copy of the tables, taken every so often. So hovering, zooming and the inspector
   all work during the scan, and nothing can read a number that's being written.
 - A hard link in Downloads or a cache doesn't claim its file's bytes during the scan, because that's rarely the
   file's home. Without this, 90 GB of films would sit under Downloads until the last moment, then jump to Media.
@@ -244,11 +247,12 @@ Underneath:
   folders and big files, not every file.
 - Metal draws each piece from a single analytic shape, so the frame cost doesn't depend on how complex the map is.
   Nothing is drawn when nothing moves, so it uses no power at rest.
-- The ring draws on a thread of its own, in step with the display, so it never waits for the rest of the window: a panel
-  being laid out or names being placed can take the main thread for 20 to 50 ms, and the ring doesn't miss a frame. Only
-  the ring's place in the window comes from SwiftUI. When the panel comes or goes, SwiftUI says where the ring is on each
-  frame of its own animation, and that frame of the ring is drawn in the same transaction, so the numbers in the middle
-  stay in the middle.
+- The ring draws on a thread of its own, in step with the display, so it never waits for the rest of the window: the
+  inspector being laid out or names being placed can take the main thread for 20 to 50 ms, and the ring doesn't miss a
+  frame. Only the ring's place in the window comes from SwiftUI. As the inspector slides in or out, the map is a little
+  narrower or wider on each frame, and that frame of the ring is drawn in the same transaction as the rest of the window,
+  so the numbers in the middle stay in the middle. The window can miss a refresh while it slides, so the ring's own thread
+  waits a moment longer before drawing on its own, rather than show the ring where the window isn't yet.
 - While the ring is still, its drawing memory is marked as free to take: the glow textures, and every surface but the
   one on screen. Nothing is released or made again, so the next frame costs the same as any other, and if the Mac does
   take it, the ring simply draws again. With the window covered, minimized or hidden, nothing is drawn at all and a running
@@ -288,7 +292,7 @@ Underneath:
   a guide explains what's private and where to switch access on, once per version unless you say not now. Every version is signed with one certificate made for Headroom, rather than ad hoc, so macOS
   sees each one as the same app: access granted once survives updates, and the updater can tell a real update from
   anything else. It isn't a developer certificate, so no name is in it, and macOS still asks you to open the first one.
-- The side panel only makes the rows you can see.
+- The inspector only makes the rows you can see.
 - Looking closely at one folder has its own walk: `getattrlistbulk` on up to six threads, with one pass collecting the
   folder's size, its newest change, its largest file and its files with more than one path. While you're ticking things, a
   look from the last minute is used again. Check Again, coming back to the app and the clean itself always look afresh.
@@ -297,7 +301,7 @@ Underneath:
   written so far, and once per file it was nine tenths of the work. The original stays where it is until it has happened.
 - Finding a file's other copies goes up from the deepest folder and looks at each folder once, so 1,500 clones cost little
   more than a few. Going deepest first also means one answer, whatever order the copies were found in, with nothing named
-  twice. The biggest copy comes first, because that's the one the panel names.
+  twice. The biggest copy comes first, because that's the one the inspector names.
 - A folder's thumbnails are asked for together, and each shows as soon as it's ready.
 
 Measured on this Mac, an M5 MacBook Air with 2.1 million files and a 494 GB disk, without Full Disk Access:
@@ -321,7 +325,7 @@ Measured on this Mac, an M5 MacBook Air with 2.1 million files and a 494 GB disk
 | The app | 6.7 MB, of which the icon is 4.4 MB |
 | Building the ring | Under 1 ms |
 | Pointing across the ring, zooming, switching tabs | No frame of the ring late at 60 Hz, where 1 to 3 in a hundred were |
-| The panel coming and going | The ring and the numbers in its middle within a pixel of each other on almost every frame, where they were up to 60 pt apart |
+| The inspector coming and going | The ring within half a point of the middle of the map on every frame, and the numbers in its middle within about a point of it. The slide shows 10 to 12 frames in about 0.22 s |
 
 And with Full Disk Access, for what happens after the scan:
 
@@ -343,5 +347,7 @@ chasing a faster scan.
 ## What it looks like
 
 Near-black, with the ring as the only source of light. Real Liquid Glass (`glassEffect`), not an
-imitation, floats over the ring and refracts it. Numbers roll instead of snapping. Motion is one spring,
-used everywhere.
+imitation, floats over the ring and refracts it. The toolbar and the inspector are macOS's own, so they look and move
+as they do in any Mac app. Numbers roll instead of snapping. The ring moves on springs. With Reduce Motion, the
+ring dissolves from one picture to the next instead of zooming, numbers change in place, and nothing springs past where
+it's going. VoiceOver reads the ring as a list of what's in the folder you're in.

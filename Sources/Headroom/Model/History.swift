@@ -107,7 +107,8 @@ enum History {
     static func snapshotsToKeep(_ times: [Double], now: Double) -> Set<Double> {
         var seen = Set<Int>()
         var keep = Set<Double>()
-        for (at, time) in times.sorted(by: >).enumerated() {
+        // A name that isn't a time from about now, such as one made by hand, is no snapshot of ours.
+        for (at, time) in times.filter({ $0.isFinite && $0 >= 0 && $0 < 1e11 }).sorted(by: >).enumerated() {
             let age = now - time
             if at < 2 { keep.insert(time); continue }
             guard age <= 60 * 86_400 else { continue }
@@ -124,6 +125,7 @@ enum History {
         let times = ((try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? [])
             .filter { $0.pathExtension == "snap" }
             .compactMap { Double($0.deletingPathExtension().lastPathComponent) }
+            .filter { $0.isFinite && $0 >= 0 && $0 < 1e11 }
             .sorted(by: >)
         let reference = date.timeIntervalSince1970
         let candidates = times.filter { $0 < reference - 60 }
@@ -140,7 +142,8 @@ enum History {
         return data.withUnsafeBytes { raw -> ScanSnapshot in
             let when = raw.loadUnaligned(fromByteOffset: 0, as: Double.self)
             let free = raw.loadUnaligned(fromByteOffset: 8, as: UInt64.self)
-            let count = Int(raw.loadUnaligned(fromByteOffset: 16, as: UInt32.self))
+            // No more than the file holds, whatever a damaged one says.
+            let count = min(Int(raw.loadUnaligned(fromByteOffset: 16, as: UInt32.self)), (raw.count - 20) / 16)
             var table = [UInt64: UInt64](minimumCapacity: count)
             for i in 0..<count {
                 let at = 20 + i * 16
@@ -172,6 +175,8 @@ enum TreeCache {
         var readGuarded: Bool
         /// The build that wrote it. Another build may sort things differently, so then its map is shown, never refreshed.
         var build: String
+        /// The rule book that numbered its rules (`RuleBook.fingerprint`). Under another one, the map isn't shown at all.
+        var ruleBook: UInt64
     }
 
     /// Changes whenever the layout of a saved scan does, so an old file is simply ignored.
@@ -184,14 +189,15 @@ enum TreeCache {
         AppData.folder.appendingPathComponent("last-" + String(volume.map { $0.isLetter || $0.isNumber ? $0 : "_" }) + ".scan")
     }
 
-    static func save(_ tree: DiskTree, for facts: VolumeFacts) {
+    static func save(_ tree: DiskTree, for facts: VolumeFacts, rules: RuleBook) {
         let n = tree.count
         guard n > 0, let stats = tree.packedStats else { return }
         var display: [String: String] = [:]
         for (id, name) in tree.displayNames { display[String(id)] = name }
         let meta = Meta(volumeName: tree.volumeName, capacity: tree.capacityBytes, free: tree.freeBytes, rootPath: tree.rootPath, home: tree.home,
                         freeNode: tree.free, hiddenNode: tree.hidden, scanSeconds: tree.scanSeconds, finishedAt: tree.finishedAt,
-                        displayNames: display, journal: tree.journal, fullReadAt: tree.fullReadAt, readGuarded: tree.readGuarded, build: build)
+                        displayNames: display, journal: tree.journal, fullReadAt: tree.fullReadAt, readGuarded: tree.readGuarded, build: build,
+                        ruleBook: rules.fingerprint)
         guard let metaData = try? JSONEncoder().encode(meta) else { return }
         let header: [UInt64] = [magic, UInt64(n), UInt64(stats.rowCount), UInt64(tree.nameBytes), UInt64(tree.links.count),
                                 UInt64(tree.singleLinks.count), UInt64(metaData.count)]
@@ -216,18 +222,20 @@ enum TreeCache {
         try? FileManager.default.removeItem(at: temporary)
     }
 
-    static func load(for facts: VolumeFacts) -> DiskTree? {
+    static func load(for facts: VolumeFacts, rules: RuleBook) -> DiskTree? {
         guard let data = try? Data(contentsOf: url(facts.name), options: .alwaysMapped), data.count > 16 else { return nil }
         return data.withUnsafeBytes { file -> DiskTree? in
             guard file.loadUnaligned(fromByteOffset: 0, as: UInt64.self) == fileMagic,
                   let unpacker = Unpacker(UnsafeRawBufferPointer(rebasing: file[8...])) else { return nil }
-            return read(unpacker)
+            return read(unpacker, rules: rules)
         }
     }
 
-    private static func read(_ unpacker: Unpacker) -> DiskTree? {
+    private static func read(_ unpacker: Unpacker, rules: RuleBook) -> DiskTree? {
         var header = [UInt64](repeating: 0, count: 7)
         guard header.withUnsafeMutableBytes({ unpacker.take($0.baseAddress!, $0.count) }), header[0] == magic else { return nil }
+        // Sizes past this aren't a map's, and couldn't even be made into numbers here.
+        guard header.dropFirst().allSatisfy({ $0 < 1 << 40 }) else { return nil }
         let count = Int(header[1]), rowCount = Int(header[2]), nameBytes = Int(header[3]), linkCount = Int(header[4])
         let singleCount = Int(header[5]), metaBytes = Int(header[6])
         // A row of numbers can be one node's own after the tree was changed by hand, so there can be up to twice as many.
@@ -235,7 +243,7 @@ enum TreeCache {
               singleCount < DiskTree.capacity, metaBytes < 1 << 26 else { return nil }
         var metaData = Data(count: metaBytes)
         guard metaData.withUnsafeMutableBytes({ unpacker.take($0.baseAddress!, metaBytes) }),
-              let meta = try? JSONDecoder().decode(Meta.self, from: metaData) else { return nil }
+              let meta = try? JSONDecoder().decode(Meta.self, from: metaData), meta.ruleBook == rules.fingerprint else { return nil }
         let tree = DiskTree()
         guard unpacker.take(tree.nodes, count * MemoryLayout<Node>.stride) else { return nil }
         let stats = tree.roomForPackedStats(rowCount: rowCount, nodes: count)
@@ -269,8 +277,34 @@ enum TreeCache {
         tree.journal = meta.build == build ? meta.journal : nil
         tree.isWhole = true
         for (key, name) in meta.displayNames { if let id = UInt32(key) { tree.displayNames[id] = name } }
+        guard isSound(tree, count: count, rowCount: rowCount, nameBytes: nameBytes, index: stats.index) else { return nil }
         tree.restoreSums()
         return tree
+    }
+
+    /// A damaged file can hold any numbers at all. Everything that points at something else has to point inside the map,
+    /// and every folder comes before what's in it, as a scan writes them, so climbing to the top always ends.
+    private static func isSound(_ tree: DiskTree, count: Int, rowCount: Int, nameBytes: Int, index: UnsafeMutablePointer<UInt32>) -> Bool {
+        let nodes = tree.nodes
+        for i in 0..<count {
+            let n = nodes[i]
+            guard i == 0 || Int(n.parent) < i, Int(n.firstChild) < count, Int(n.nextSibling) < count,
+                  Int(n.nameOffset) + Int(n.nameLength) <= nameBytes, Int(index[i] & ~DiskTree.ownRow) < rowCount else { return false }
+        }
+        // Each folder's list holds only what's in it, each thing once and after the folder, so walking down ends too.
+        let listed = Mapped<UInt8>(count: count)
+        for folder in 0..<count {
+            var c = Int(nodes[folder].firstChild)
+            while c != 0 {
+                guard c > folder, Int(nodes[c].parent) == folder, listed[c] == 0 else { return false }
+                listed[c] = 1
+                c = Int(nodes[c].nextSibling)
+            }
+        }
+        guard Int(tree.home) < count, Int(tree.free) < count, Int(tree.hidden) < count else { return false }
+        for link in tree.links where Int(link.dir) >= count || Int(link.file) >= count { return false }
+        for link in tree.singleLinks where Int(link.dir) >= count || Int(link.file) >= count { return false }
+        return true
     }
 
     /// Compresses what it's given straight into a file, a buffer at a time.
@@ -359,9 +393,12 @@ enum TreeCache {
             stream.pointee.dst_ptr = target.assumingMemoryBound(to: UInt8.self)
             stream.pointee.dst_size = count
             while stream.pointee.dst_size > 0 {
+                let before = (stream.pointee.src_size, stream.pointee.dst_size)
                 let status = compression_stream_process(stream, 0)
                 if status == COMPRESSION_STATUS_ERROR { return false }
                 if status == COMPRESSION_STATUS_END { return stream.pointee.dst_size == 0 }
+                // A file cut short: nothing more comes out and nothing more goes in, however often it's asked.
+                if (stream.pointee.src_size, stream.pointee.dst_size) == before { return false }
             }
             return true
         }

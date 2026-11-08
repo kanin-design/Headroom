@@ -138,7 +138,7 @@ extension AppModel {
             onLeft = sin(piece.midAngle) >= 0
         }
         lookCursor = nil
-        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { look = Look(node: node, onLeft: keptSide ?? onLeft) }
+        Motion.animate(.spring(response: 0.32, dampingFraction: 0.86)) { look = Look(node: node, onLeft: keptSide ?? onLeft) }
         mapView?.window?.makeFirstResponder(mapView)
         watchLookEvents()
         setHover(lookPieceIndex)
@@ -147,7 +147,7 @@ extension AppModel {
     func closeLook() {
         guard look != nil else { return }
         lookCursor = nil
-        withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) { look = nil }
+        Motion.animate(.spring(response: 0.28, dampingFraction: 0.9)) { look = nil }
         if let lookWatch { NSEvent.removeMonitor(lookWatch) }
         lookWatch = nil
         pointedThing = nil

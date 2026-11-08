@@ -21,28 +21,24 @@ enum Lens: String, CaseIterable, Identifiable {
     case changes = "Changes"
     case freeUp = "Free Up"
     var id: String { rawValue }
-    var symbol: String {
+    var help: String {
         switch self {
-        case .map: "circle.circle"
-        case .changes: "flame"
-        case .freeUp: "sparkles"
+        case .map: "What's on the disk, by kind"
+        case .changes: "What changed lately, and what hasn't for a long time"
+        case .freeUp: "Get space back, what you'd miss least first"
         }
     }
 }
 
-/// Where the ring sits in the window. The panel takes the right side, and the ring stays centred in what's left.
+/// Where the ring sits in the map's part of the window, which is all of it but the inspector. The ring stays centred there.
 struct RingGeometry: Equatable {
     var center: CGPoint
     var radius: CGFloat
     var mapWidth: CGFloat
     var windowHeight: CGFloat
 
-    /// The same in every tab, so switching tabs never moves the ring. Wide enough for Free Up's evidence, ticks and plan.
-    static let panelWidth: CGFloat = 384
-
-    static func make(size: CGSize, panelOpen: Bool) -> RingGeometry {
-        let panel = panelOpen ? panelWidth + 28 : 0
-        let usable = max(size.width - panel, 320)
+    static func make(size: CGSize) -> RingGeometry {
+        let usable = max(size.width, 320)
         let top: CGFloat = 60, bottom: CGFloat = 46
         let height = max(size.height - top - bottom, 240)
         // Room at the sides for names around the ring.
@@ -89,7 +85,7 @@ final class AppModel {
     var accessCardDismissed = false
 
     // Where you are
-    var focus: UInt32 = 0 { didSet { if oldValue != focus { pointedThing = nil; closeLook(); refreshShownRows(); visitChanged() } } }
+    var focus: UInt32 = 0 { didSet { if oldValue != focus { pointedThing = nil; closeLook(); refreshShownRows(); refreshChangeRows(); visitChanged() } } }
     /// What the card Space opens is showing, when it's open.
     var look: Look?
     var lookCursor: Int?
@@ -106,7 +102,8 @@ final class AppModel {
     /// Where you've been, so Back returns to the picture you came from.
     @ObservationIgnored var trail: [UInt32] = []
     var lens: Lens = .map
-    var panelOpen = true
+    var panelOpen = true { didSet { if oldValue != panelOpen { rememberWindow() } } }
+    @ObservationIgnored var inspectorWidthTask: Task<Void, Never>?
     /// How the rings are sized, picked in View › Rings and kept for the next launch.
     var ringSizes = RingSizes.saved {
         didSet {
@@ -183,6 +180,8 @@ final class AppModel {
     /// Which scan's node numbers the suggestions use.
     @ObservationIgnored var winsScanID: UUID?
     @ObservationIgnored var quitAfterClean = false
+    /// The clean a quit was waiting for has stopped. The quit may still be waiting for a new version to go into place.
+    @ObservationIgnored var cleanStoppedForQuit = false
     /// A scan held back while things leave the disk or come back to it: one a clean stopped, or one asked for meanwhile.
     @ObservationIgnored var scanAfterClean: ScanRequest?
 
@@ -228,8 +227,11 @@ final class AppModel {
 
     // Search
     var searchText = ""
+    /// Whether the search field in the toolbar has the keyboard, as ⌘F gives it.
     var searchActive = false
     var searchResults: [UInt32] = []
+    /// Something is typed in the search field, so the inspector lists what it finds, wherever the keyboard is.
+    var isSearching: Bool { !searchText.isEmpty }
 
     @ObservationIgnored let engine = MapEngine()
     @ObservationIgnored let rules = RuleBook(homePath: NSHomeDirectory())
@@ -243,6 +245,8 @@ final class AppModel {
     @ObservationIgnored var pointedThing: NamedThing?
     @ObservationIgnored var reclaim: ReclaimMap?
     @ObservationIgnored private var changes: ChangeMap?
+    /// Which scan's numbering the Changes map uses.
+    @ObservationIgnored private var changesScanID: UUID?
     @ObservationIgnored var scanGeneration = 0
     @ObservationIgnored private var didStart = false
     /// Trees on their way to the screen, so a scan starting now knows the ring won't be empty. At launch there can be two:
@@ -283,12 +287,13 @@ final class AppModel {
         let launch = DispatchTime.now()
         var saved: DiskTree?
         // Without Full Disk Access nothing is read, the saved map included: whatever it names would be looked at.
-        if hasFullAccess, !CommandLine.arguments.contains("--no-cache"), let cached = TreeCache.load(for: volume) {
+        if hasFullAccess, !CommandLine.arguments.contains("--no-cache"), let cached = TreeCache.load(for: volume, rules: rules) {
             present(cached, transition: .appear)
             cacheLoadMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - launch.uptimeNanoseconds) / 1e6
             watchJournal(from: cached, on: volume)
             saved = cached
         }
+        restoreWindow()
         scan(refreshing: saved)
         readOtherDisksQuietly()
     }
@@ -413,7 +418,7 @@ final class AppModel {
             let complete = !scan.scanner.wasCancelled && VolumeFacts.read(path: facts.mountPath) != nil
             let snapshot = complete ? History.record(tree: tree, facts: facts) : []
             if complete {
-                TreeCache.save(tree, for: facts)
+                TreeCache.save(tree, for: facts, rules: scan.rules)
                 DiskIndex.save(tree)
             }
             DispatchQueue.main.async {
@@ -460,6 +465,7 @@ final class AppModel {
             treeVersion += 1
             resolvePlanSynchronously(in: picture)
             relayout(.appear)
+            if isSearching { runSearch() }
             workOutInsights(from: picture)
             return
         }
@@ -479,7 +485,8 @@ final class AppModel {
             }
             return
         }
-        if current.scanID != picture.scanID {
+        let restarted = current.scanID != picture.scanID
+        if restarted {
             // The scan started over, so its folders have new numbers, and nothing that holds the old ones can stay.
             focus = 0
             trail = []
@@ -493,11 +500,17 @@ final class AppModel {
             rowOfNode = [:]
             shownRows = []
             otherCopies = [:]
+            changes = nil
+            changesScanID = nil
+            reclaim = nil
+            changeRows = []
+            changeShrank = []
         }
         tree = picture
         treeVersion += 1
         if !plan.isEmpty { resolvePlanSynchronously(in: picture) }
         refreshLive()
+        if restarted, isSearching { runSearch() }
         workOutInsights(from: picture)
     }
 
@@ -515,7 +528,7 @@ final class AppModel {
             lastHoverIndex = nil
         }
         // The same spring as the ring's, so names stay with their pieces.
-        if labelsVisible { withAnimation(.spring(response: 0.81, dampingFraction: 1)) { labels = makeLabels() } }
+        if labelsVisible { Motion.animate(.spring(response: 0.81, dampingFraction: 1)) { labels = makeLabels() } }
     }
 
     /// Free Up and Changes during a scan: off the main thread and low priority, every couple of seconds.
@@ -536,7 +549,7 @@ final class AppModel {
                 self.insightsAt = Date()
                 guard self.tree?.isPartial == true, self.tree?.scanID == picture.scanID else { return }
                 self.adopt(map, wins, change, rows, for: window)
-                if self.searchActive { self.runSearch() }
+                if self.isSearching { self.runSearch() }
                 if self.lens != .map { self.refreshLive() }
             }
         }
@@ -609,6 +622,7 @@ final class AppModel {
                 guard newTree.rootPath == self.volume?.mountPath else { return }
                 // The end of a scan you've been watching: its folders are the same ones, so you simply stay where you are.
                 let sameScan = self.tree?.scanID == newTree.scanID
+                var newFocus: UInt32?
                 if !sameScan {
                     self.pointedThing = nil
                     self.closeLook()
@@ -616,13 +630,15 @@ final class AppModel {
                     // Keep your place, if the folder you were looking at still exists.
                     var keepPath: String?
                     if self.focus != 0, let tree = self.tree { keepPath = tree.path(self.focus) }
-                    self.focus = keepPath.flatMap { newTree.find(path: $0) } ?? 0
+                    newFocus = keepPath.flatMap { newTree.find(path: $0) } ?? 0
                     self.trail = []
                     self.selected = nil
                 }
                 self.tree = newTree
                 self.nameCache = [:]
                 self.treeVersion += 1
+                // Only now, so what moving there sets off reads the new tree with the new tree's numbers.
+                if let newFocus { self.focus = newFocus }
                 self.resolvePlanSynchronously(in: newTree)
                 self.adopt(map, wins, change, rows, for: window)
                 // What was read for a saved map is read again once the scan after it has finished.
@@ -635,6 +651,9 @@ final class AppModel {
                 } else {
                     self.relayout(transition)
                 }
+                // What a search found is numbered in the tree it was made from, and a scan you watched ends with folders
+                // it hadn't read when you typed.
+                if self.isSearching { self.runSearch() }
             }
         }
     }
@@ -703,10 +722,14 @@ final class AppModel {
         shownRows = []
         changeRows = []
         changeShrank = []
+        changes = nil
+        changesScanID = nil
+        reclaim = nil
+        searchResults = []
         labels = []
         engine.apply(RingLayout(), .settle)
         history = History.points(for: facts)
-        let cached = hasFullAccess ? TreeCache.load(for: facts) : nil
+        let cached = hasFullAccess ? TreeCache.load(for: facts, rules: rules) : nil
         if let cached { present(cached, transition: .appear) }
         scan(refreshing: cached)
     }
@@ -778,12 +801,23 @@ final class AppModel {
 
     private func show(_ change: ChangeMap, _ rows: [ChangeRow]) {
         changes = change
-        changeRows = rows
-        // A comparison counts down from free space, and what's untouched is the whole of it. Otherwise it's what the list adds up to.
+        changesScanID = tree?.scanID
+        // A comparison counts down from free space, and what's untouched is the whole of it. Otherwise it's what the whole
+        // disk's list adds up to.
         changeTotal = change.usesHistory || change.isUntouched ? change.total : rows.reduce(0) { $0 + $1.delta }
         changeCaption = change.caption
         changeUsesHistory = change.usesHistory
-        changeShrank = change.usesHistory ? tree.map { change.rows(tree: $0, rules: rules, shrinking: true) } ?? [] : []
+        refreshChangeRows(wholeDisk: rows)
+    }
+
+    /// What grew, shrank or went untouched in the folder you're in, as on the ring. The whole disk's list comes with its map.
+    /// A folder's is worked out here, and quickly, because only what changed by 100 MB or more is looked into.
+    func refreshChangeRows(wholeDisk: [ChangeRow]? = nil) {
+        // A map made for an earlier scan numbers things differently, so its rows wait for the map of this one.
+        guard let tree, let changes, changesScanID == tree.scanID else { return }
+        let root = focus == 0 ? 0 : RingLayout.chainTail(tree: tree, focus)
+        changeRows = root == 0 ? (wholeDisk ?? changes.rows(tree: tree, rules: rules)) : changes.rows(tree: tree, rules: rules, under: root)
+        changeShrank = changes.usesHistory ? changes.rows(tree: tree, rules: rules, shrinking: true, under: root) : []
     }
 
     // MARK: Drawing
@@ -792,6 +826,7 @@ final class AppModel {
         guard let tree else { return }
         let layout = drawing(tree)
         engine.apply(layout, transition)
+        mapView?.voiceOverLayoutChanged()
         lastHoverIndex = nil
         hover = nil
         placeLabels(after: labelDelay)
@@ -841,12 +876,12 @@ final class AppModel {
 
     func placeLabels(after delay: Double) {
         labelTask?.cancel()
-        withAnimation(.easeOut(duration: 0.1)) { labelsVisible = false }
+        Motion.animate(.easeOut(duration: 0.1)) { labelsVisible = false }
         labelTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(delay))
             guard let self, !Task.isCancelled else { return }
             self.labels = self.makeLabels()
-            withAnimation(.easeOut(duration: 0.28)) { self.labelsVisible = true }
+            Motion.animate(.easeOut(duration: 0.28)) { self.labelsVisible = true }
         }
     }
 
@@ -1126,7 +1161,7 @@ final class AppModel {
                 zoom(into: p.tail, from: p)
             } else {
                 selected = p.node
-                panelOpen = true
+                showPanel(true)
                 if meaning.opensFile { open(NamedThing(p.node)) }
             }
             return
@@ -1167,7 +1202,7 @@ final class AppModel {
         }
         if !n.has(NodeFlag.directory) || n.firstChild == 0 {
             selected = p.node
-            panelOpen = true
+            showPanel(true)
             return
         }
         zoom(into: p.tail, from: p)
@@ -1203,6 +1238,23 @@ final class AppModel {
         go(to: up, keepingTrail: true)
     }
 
+    /// The folder this one is in, as the Finder's Enclosing Folder goes, however you got here. Esc instead goes back out the
+    /// way you came in. Like Esc, it lets go of what's selected first.
+    func goToEnclosingFolder() {
+        if selected != nil {
+            selected = nil
+            return
+        }
+        guard let tree, focus != 0 else { return }
+        var up = tree.nodes[Int(focus)].parent
+        // Skip folders that would draw exactly the same picture.
+        while up != 0, RingLayout.chainTail(tree: tree, up) == RingLayout.chainTail(tree: tree, focus) {
+            up = tree.nodes[Int(up)].parent
+        }
+        if trail.last == up { trail.removeLast() }
+        go(to: up, keepingTrail: true)
+    }
+
     func go(to node: UInt32, keepingTrail: Bool = false) {
         guard let tree, node != focus else { return }
         if !keepingTrail { trail = [] }
@@ -1223,6 +1275,7 @@ final class AppModel {
         }
         zoomedAt = Date()
         engine.apply(layout, .zoomOut(mapping))
+        mapView?.voiceOverLayoutChanged()
         lastHoverIndex = nil
         hover = nil
         placeLabels(after: 0.34)
@@ -1235,8 +1288,9 @@ final class AppModel {
         guard new != lens else { return }
         closeLook()
         lens = new
+        rememberWindow()
         selected = nil
-        panelOpen = true
+        showPanel(true)
         pointing = nil
         pointedThing = nil
         hotBox = nil
@@ -1256,6 +1310,8 @@ final class AppModel {
     /// Takes something out of the picture, and into the Trash piece. If you were looking inside it, you step back to the
     /// folder that held it. What another copy still holds stays on the disk, and shows up there.
     func takeOut(_ node: UInt32, from tree: DiskTree, trueBytes: UInt64? = nil) -> UInt64 {
+        // Already in the Trash: taking it out again would count it twice, and putting it back twice would loop.
+        guard !tree.nodes[Int(node)].has(NodeFlag.gone) else { return 0 }
         let bytes = tree.totals[Int(node)]
         let real = min(trueBytes ?? bytes, bytes)
         if focus != 0, tree.isInside(focus, node) {

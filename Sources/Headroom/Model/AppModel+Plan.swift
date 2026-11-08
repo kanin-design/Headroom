@@ -467,7 +467,7 @@ extension AppModel {
                 self.pointing = nil
                 self.highlight(nodes: [])
                 self.engine.setPreview(0, color: .zero)
-                withAnimation(.easeOut(duration: 0.16)) { self.labels = self.makeLabels() }
+                Motion.animate(.easeOut(duration: 0.16)) { self.labels = self.makeLabels() }
             }
             return
         }
@@ -488,7 +488,7 @@ extension AppModel {
             picks.append(LabelPlacer.Pick(index: at, title: one.title, value: formatBytes(one.gain), score: Double(layout.pieces[at].bytes)))
         }
         picks.sort { $0.score > $1.score }
-        withAnimation(.easeOut(duration: 0.14)) {
+        Motion.animate(.easeOut(duration: 0.14)) {
             labels = LabelPlacer.place(layout: layout, ring: ring, lens: lens, tree: tree, model: self, only: Array(picks.prefix(7)))
             labelsVisible = true
         }
@@ -733,7 +733,7 @@ extension AppModel {
         guard on != previewingAfter, let tree else { return }
         if on, planBytes == 0 || lens != .freeUp || cachedAfterPlan == nil { return }
         previewingAfter = on
-        withAnimation(.easeOut(duration: 0.12)) { labelsVisible = false }
+        Motion.animate(.easeOut(duration: 0.12)) { labelsVisible = false }
         if on, let after = cachedAfterPlan {
             engine.setGhost(0)
             engine.apply(drawing(tree, after: after), .settle)
@@ -933,7 +933,7 @@ extension AppModel {
                                 Task { @MainActor in if self.cleanProgress != nil { self.cleanProgress = update } }
                             }
                         }
-                        moved = try Cleaner.trash(path, step: item.step)
+                        moved = try Cleaner.trash(path, step: item.step, stop: stop)
                     } catch {
                         failedPaths[item.id, default: []].append(path)
                         reasons[item.id] = Cleaner.whyItFailed(error)
@@ -962,6 +962,14 @@ extension AppModel {
     }
 
     func stopCleaning() { cleanStop.value = true }
+
+    /// A quit that had to wait goes on once nothing is left to wait for: a clean stopped at a safe point, and a new version in
+    /// place. Either can end first. What the plan got to is written down last thing.
+    func quitWhenNothingIsLeft() {
+        guard !Updater.shared.isInstalling, !quitAfterClean || cleanStoppedForQuit else { return }
+        savePlan()
+        NSApp.reply(toApplicationShouldTerminate: true)
+    }
 
     // MARK: Send to Trash
 
@@ -995,6 +1003,8 @@ extension AppModel {
         }
         stopChecks()
         cleanProgress = CleanProgress(done: 0, total: 1, title: title)
+        let stop = LockedFlag()
+        cleanStop = stop
         if afterClean == nil {
             takenOut = []
             lastPlanItems = []
@@ -1006,7 +1016,7 @@ extension AppModel {
             var reason = check.canGo ? nil : check.problems.first { $0.holdsBack || $0 == .gone }
             var moved: (place: String, identity: String?)?
             if reason == nil {
-                do { moved = try Cleaner.trash(path) } catch { reason = Cleaner.whyItFailed(error) }
+                do { moved = try Cleaner.trash(path, stop: stop) } catch { reason = Cleaner.whyItFailed(error) }
             }
             let inTrash = moved
             let why = reason
@@ -1056,6 +1066,7 @@ extension AppModel {
                 resolvePlanSynchronously(in: tree)
                 rebuildInsights()
                 relayout(.settle)
+                if isSearching { runSearch() }
             }
             let there = (moved.place as NSString).lastPathComponent
             showTip("Moved to Trash: \(item.title)" + (there == (path as NSString).lastPathComponent ? "" : ", shown there as \(there)"), for: 8, offeringUndo: true)
@@ -1072,7 +1083,8 @@ extension AppModel {
         if !plan.isEmpty { runChecks() }
         savePlan()
         if quitAfterClean {
-            NSApp.reply(toApplicationShouldTerminate: true)
+            cleanStoppedForQuit = true
+            quitWhenNothingIsLeft()
             return
         }
         runScanAfterClean()
@@ -1171,12 +1183,14 @@ extension AppModel {
             resolvePlanSynchronously(in: tree)
             rebuildInsights()
             relayout(.settle)
+            if isSearching { runSearch() }
         }
         cleanFailures = cleanFailures.filter { plan.item($0.key) != nil }
         if !plan.isEmpty { runChecks() }
         savePlan()
         if quitAfterClean {
-            NSApp.reply(toApplicationShouldTerminate: true)
+            cleanStoppedForQuit = true
+            quitWhenNothingIsLeft()
             return
         }
         runScanAfterClean()
@@ -1206,8 +1220,8 @@ extension AppModel {
                 }
                 self.isPuttingBack = false
                 if self.quitAfterClean {
-                    self.savePlan()
-                    NSApp.reply(toApplicationShouldTerminate: true)
+                    self.cleanStoppedForQuit = true
+                    self.quitWhenNothingIsLeft()
                     return
                 }
                 if failures > 0 {
@@ -1228,6 +1242,7 @@ extension AppModel {
                     self.resolvePlanSynchronously(in: tree)
                     self.rebuildInsights()
                     self.relayout(.settle)
+                    if self.isSearching { self.runSearch() }
                     self.savePlan()
                     self.rescanWhenBack = true
                     if self.isScanning { self.restartScan() }
@@ -1343,7 +1358,8 @@ extension AppModel {
         }
         savePlan()
         if quitAfterClean {
-            NSApp.reply(toApplicationShouldTerminate: true)
+            cleanStoppedForQuit = true
+            quitWhenNothingIsLeft()
             return
         }
         runScanAfterClean()
@@ -1368,7 +1384,8 @@ extension AppModel {
         savePlan()
         rescanWhenBack = false
         if quitAfterClean {
-            NSApp.reply(toApplicationShouldTerminate: true)
+            cleanStoppedForQuit = true
+            quitWhenNothingIsLeft()
             return
         }
         // A short look at what you got, then the disk is read again so the numbers are exact: quietly, unless you asked for

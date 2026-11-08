@@ -174,9 +174,10 @@ final class LinksTests: XCTestCase {
         XCTAssertEqual(disk.tree.links.count, 400)
 
         let facts = VolumeFacts(name: "HeadroomLinksTest", mountPath: "/Volumes/Fake", capacity: 500_000_000_000, free: 50_000_000_000, isBoot: false)
-        TreeCache.save(disk.tree, for: facts)
+        let rules = RuleBook(homePath: "/Users/nobody")
+        TreeCache.save(disk.tree, for: facts, rules: rules)
         defer { try? FileManager.default.removeItem(at: AppData.folder.appendingPathComponent("last-HeadroomLinksTest.scan")) }
-        let loaded = try XCTUnwrap(TreeCache.load(for: facts))
+        let loaded = try XCTUnwrap(TreeCache.load(for: facts, rules: rules))
         XCTAssertEqual(loaded.count, disk.tree.count, "the whole map, small files and all")
         XCTAssertEqual(loaded.links.count, 400, "every path, so a refresh knows where each file is")
         XCTAssertTrue(loaded.isWhole)

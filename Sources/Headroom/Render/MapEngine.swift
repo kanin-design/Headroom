@@ -90,11 +90,13 @@ final class MapEngine: @unchecked Sendable {
     // MARK: Pictures
 
     func apply(_ new: RingLayout, _ transition: RingTransition) {
-        lock.withLock { applyLocked(new, transition) }
+        // Asked here, on the main thread, where System Settings can be.
+        let reduceMotion = Motion.isReduced
+        lock.withLock { applyLocked(new, transition, reduceMotion: reduceMotion) }
         requestFrame()
     }
 
-    private func applyLocked(_ new: RingLayout, _ transition: RingTransition) {
+    private func applyLocked(_ new: RingLayout, _ transition: RingTransition, reduceMotion: Bool) {
         let t = x
         let colorT = min(max(x, 0), 1)
         var currentIndex = [UInt64: Int](minimumCapacity: keys.count)
@@ -112,6 +114,14 @@ final class MapEngine: @unchecked Sendable {
         case .zoomOut(let m): enterMapping = m
         default: break
         }
+        // With Reduce Motion nothing travels: the old picture fades out where it is, and the new one fades in where it ends up.
+        var dissolve = false
+        if reduceMotion {
+            switch transition {
+            case .appear, .zoomIn, .zoomOut: dissolve = true
+            default: break
+            }
+        }
 
         var out: [SegmentGPU] = []
         out.reserveCapacity(new.pieces.count + keys.count / 2)
@@ -128,7 +138,9 @@ final class MapEngine: @unchecked Sendable {
             var from = to
             var colorFrom = SIMD4<Float>(p.color.x, p.color.y, p.color.z, 0)
             var plannedFrom = p.planned
-            if let i = currentIndex[p.key], !appearing {
+            if dissolve {
+                // Where it ends up, fading in.
+            } else if let i = currentIndex[p.key], !appearing {
                 from = geometryNow(i)
                 colorFrom = colorNow(i)
                 plannedFrom = instances[i].plan.x + (instances[i].plan.y - instances[i].plan.x) * colorT
@@ -181,6 +193,7 @@ final class MapEngine: @unchecked Sendable {
                 } else if let m = exitMapping {
                     to = m.apply(g)
                 }
+                if dissolve { to = g }
                 let leaving = instances[i].plan.x + (instances[i].plan.y - instances[i].plan.x) * colorT
                 out.append(SegmentGPU(from: g, to: to, colorFrom: nowColor, colorTo: SIMD4(nowColor.x, nowColor.y, nowColor.z, 0), params: instances[i].params,
                                       plan: SIMD4(leaving, leaving, 0, 0)))
@@ -226,6 +239,7 @@ final class MapEngine: @unchecked Sendable {
         case .live: setSpring(stiffness: 60, dampingRatio: 1)
         case .settle: setSpring(stiffness: 80, dampingRatio: 1)
         }
+        if dissolve { setSpring(stiffness: 90, dampingRatio: 1) }
         velocity = min(carried, stiffness.squareRoot())
     }
 

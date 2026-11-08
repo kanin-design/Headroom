@@ -266,7 +266,7 @@ extension AppModel {
         let most = 1000
         var title: String
         var rows: [(name: String, size: String)] = []
-        if searchActive && !searchText.isEmpty {
+        if isSearching {
             title = "\"\(searchText)\": \(searchResults.count.formatted()) found"
             rows = searchResults.prefix(most).map { (tree.friendlyPath($0), formatBytes(tree.totals[Int($0)])) }
         } else {
@@ -278,7 +278,7 @@ extension AppModel {
                 let own = tree.nodes[Int(folder)].bytes
                 if focus != 0, own > 0 { rows.append(("Smaller items here", formatBytes(own))) }
             case .changes:
-                title = "What changed"
+                title = focus == 0 ? "What changed" : "What changed in " + displayName(RingLayout.chainTail(tree: tree, focus))
                 rows = changeRows.prefix(most).map { ($0.title, "+" + formatBytes(UInt64(max($0.delta, 0)))) }
             case .freeUp:
                 title = "Free Up"
@@ -335,11 +335,60 @@ extension AppModel {
         }
     }
 
+    // MARK: What comes back next time
+
+    /// The inspector, shown or hidden and how wide, and the view you were in come back next time, as in Apple's apps, and
+    /// so do the window's size and place, through the scene in `HeadroomApp`. A scripted check starts the same way every
+    /// time, and leaves yours alone, unless it's started with `--remember-window`.
+    static let remembersWindow = ScriptRunner.path == nil || CommandLine.arguments.contains("--remember-window")
+    private static let inspectorShownKey = "inspectorShown", inspectorWidthKey = "inspectorWidth", viewKey = "view"
+
+    /// How wide the inspector opens: as you last left it, or wide enough for Free Up.
+    static var savedInspectorWidth: CGFloat {
+        let saved = remembersWindow ? UserDefaults.standard.double(forKey: inspectorWidthKey) : 0
+        return saved >= 340 && saved <= 520 ? saved : SidePanel.idealWidth
+    }
+
+    /// The view and the inspector as you left them. Both are read first, because going to the view saves the window as it
+    /// is at that moment.
+    func restoreWindow() {
+        guard Self.remembersWindow else { return }
+        let defaults = UserDefaults.standard
+        let view = defaults.string(forKey: Self.viewKey).flatMap(Lens.init(rawValue:))
+        let shown = defaults.object(forKey: Self.inspectorShownKey) as? Bool
+        if let view { setLens(view) }
+        if let shown { panelOpen = shown }
+    }
+
+    func rememberWindow() {
+        guard Self.remembersWindow else { return }
+        UserDefaults.standard.set(panelOpen, forKey: Self.inspectorShownKey)
+        UserDefaults.standard.set(lens.rawValue, forKey: Self.viewKey)
+    }
+
+    /// The inspector's width once it has settled, so neither its slide nor a drag still going on is what's kept.
+    func noteInspectorWidth(_ width: CGFloat) {
+        guard Self.remembersWindow else { return }
+        inspectorWidthTask?.cancel()
+        inspectorWidthTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(600))
+            guard let self, !Task.isCancelled, self.panelOpen, width >= 340, width <= 520 else { return }
+            UserDefaults.standard.set(Double(width), forKey: Self.inspectorWidthKey)
+        }
+    }
+
     // MARK: Going places
+
+    /// The inspector slides in or out the same way whatever asks: its button, the menu, a search or a click on a file.
+    func showPanel(_ open: Bool) {
+        guard open != panelOpen else { return }
+        // With Reduce Motion it's just there, or gone.
+        if Motion.isReduced { panelOpen = open } else { Motion.animate(.smooth(duration: 0.25)) { panelOpen = open } }
+    }
 
     func findOthers(named name: String) {
         searchActive = true
-        panelOpen = true
+        showPanel(true)
         searchText = name
         runSearch()
     }
@@ -440,12 +489,12 @@ extension AppModel {
 
     func toggleSelection(of thing: NamedThing) {
         if let toggle = thing.toggle {
-            withAnimation(.snappy(duration: 0.18)) { toggle() }
+            Motion.animate(.snappy(duration: 0.18)) { toggle() }
             return
         }
         guard let node = thing.single, node != 0 else { return }
         let before = isPlanned(node)
-        withAnimation(.snappy(duration: 0.2)) { togglePiece(node) }
+        Motion.animate(.snappy(duration: 0.2)) { togglePiece(node) }
         guard isPlanned(node) != before else { return }
         showTip(before ? "Taken out: \(displayName(node))" : "Selected: \(displayName(node)). Nothing goes until you clean.")
     }

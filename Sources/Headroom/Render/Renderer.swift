@@ -131,25 +131,31 @@ final class MapRenderer {
 
     /// Hands over this transition's pieces. Frames still being drawn keep the old buffer until they finish.
     func setInstances(_ instances: [SegmentGPU]) {
-        instanceCount = instances.count
-        guard !instances.isEmpty else { return }
-        instances.withUnsafeBytes { raw in
-            if let buffer = device.makeBuffer(bytes: raw.baseAddress!, length: raw.count, options: .storageModeShared) {
-                instanceBuffer = buffer
-            }
+        guard !instances.isEmpty else {
+            instanceCount = 0
+            return
         }
+        // Short of memory, the buffers already here stay, and so does the number of pieces they're drawn with: a number
+        // larger than a buffer holds would have the GPU read past its end.
         let needed = instances.count * 3 * MemoryLayout<Float>.stride
         if emphasisBuffer.length < needed {
-            emphasisBuffer = device.makeBuffer(length: needed * 2, options: .storageModeShared)!
+            guard let bigger = device.makeBuffer(length: needed * 2, options: .storageModeShared) else { return }
+            emphasisBuffer = bigger
         }
+        let made = instances.withUnsafeBytes { raw in device.makeBuffer(bytes: raw.baseAddress!, length: raw.count, options: .storageModeShared) }
+        guard let made else { return }
+        instanceBuffer = made
+        instanceCount = instances.count
     }
 
     func writeEmphasis(_ values: [Float]) {
         guard !values.isEmpty else { return }
         let bytes = values.count * MemoryLayout<Float>.stride
-        emphasisSlot = (emphasisSlot + 1) % 3
-        emphasisOffset = emphasisSlot * bytes
-        guard emphasisOffset + bytes <= emphasisBuffer.length else { return }
+        let slot = (emphasisSlot + 1) % 3
+        // A buffer that couldn't grow keeps the emphasis it last held, rather than one the GPU would read past its end.
+        guard (slot + 1) * bytes <= emphasisBuffer.length else { return }
+        emphasisSlot = slot
+        emphasisOffset = slot * bytes
         values.withUnsafeBytes { raw in
             (emphasisBuffer.contents() + emphasisOffset).copyMemory(from: raw.baseAddress!, byteCount: bytes)
         }
@@ -159,16 +165,22 @@ final class MapRenderer {
 
     private func prepareTargets(width: Int, height: Int) {
         if renderSize == (width, height), piecesTexture != nil { return }
-        renderSize = (width, height)
-        func texture(_ w: Int, _ h: Int) -> MTLTexture {
+        func texture(_ w: Int, _ h: Int) -> MTLTexture? {
             let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: Self.hdrFormat, width: max(w, 1), height: max(h, 1), mipmapped: false)
             d.usage = [.renderTarget, .shaderRead]
             d.storageMode = .private
-            return device.makeTexture(descriptor: d)!
+            return device.makeTexture(descriptor: d)
         }
-        piecesTexture = texture(width, height)
-        glowTexture = texture(width, height)
-        levels = (1...6).map { texture(width >> $0, height >> $0) }
+        // Short of memory, one may not be made. Then this frame of the ring stays empty, and the next one asks again.
+        let made = [texture(width, height), texture(width, height)] + (1...6).map { texture(width >> $0, height >> $0) }
+        guard made.allSatisfy({ $0 != nil }) else {
+            piecesTexture = nil
+            return
+        }
+        renderSize = (width, height)
+        piecesTexture = made[0]
+        glowTexture = made[1]
+        levels = made.dropFirst(2).compactMap { $0 }
     }
 
     /// The ring only redraws while something moves, and every frame starts these from nothing. So while it's still, the

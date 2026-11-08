@@ -80,7 +80,8 @@ box to select everything in it, or open the box to pick one thing at a time. Not
 
 What grew since the last scan, or in the last day, week or month. Each piece is coloured by how much of it is new or
 changed, red for a little and yellow for all of it. The middle says how much free space changed, when there's an earlier
-scan to compare with, or otherwise how much was touched, going by file dates. The panel lists what grew or was touched.
+scan to compare with, or otherwise how much was touched, going by file dates. The inspector lists what grew or was touched
+in the folder you're in.
 
 Or the other way round: what nothing has changed in for a month, three months or a year, deep blue for a little and
 pale ice for all of it. An app you opened, a film you watched or a game you played in that time counts as touched,
@@ -88,7 +89,7 @@ however old its files are.
 
 ### Search
 
-![Search: 65 matches for "mkv", each with its path and size, all of them lit up on the ring](docs/search.jpg)
+![Search: 69 matches for "mkv", each with its path and size, all of them lit up on the ring](docs/search.jpg)
 
 Press ⌘F and type. The matches are listed as you type, biggest first, each with its path and size, and they light up on
 the ring. Capitals and accents don't matter, in any alphabet.
@@ -133,10 +134,11 @@ before you press **Clean**.
 |---|---|
 | ⌘1, ⌘2, ⌘3 | Map, Changes, Free Up |
 | ⇧⌘↑ | Back to the whole disk |
-| ⇧⌘P | Show or hide the panel |
+| ⌃⌘I | Show or hide the inspector |
 | ⌘F | Find a file or folder |
 | Space | A closer look at what you're pointing at |
-| Esc | Up a level |
+| Esc | Back out, the way you came in |
+| ⌘↑ | The folder this one is in |
 | ⌘[, ⌘] | Back and forward through where you've been |
 | ⌘C, ⌥⌘C | Copy the name, or the path |
 | ⌘O, ⌥⌘R | Open, or reveal in the Finder |
@@ -146,6 +148,9 @@ before you press **Clean**.
 | Hold ⌥ in Free Up | See the disk as it will be afterwards |
 
 Keys apply to what you're pointing at, otherwise to what's selected, otherwise to the folder you're in.
+
+With Reduce Motion on, the ring fades from one picture to the next instead of zooming. VoiceOver reads the ring as a list
+of what's in the folder you're in, biggest first, and pressing one does what a click does.
 
 ## For developers
 
@@ -168,6 +173,8 @@ How Headroom is designed, with every measurement, is in [DESIGN.md](DESIGN.md).
 - `--hide-names` swaps every folder and file name for a made-up one, for screenshots. With `--script`, put it last.
 - `--no-cache` starts without the saved scan, to see what a first launch looks like.
 - `--locked`, with `--script`, acts as if Full Disk Access were off, to see what that looks like.
+- `--reduce-motion` acts as if Reduce Motion were on, whatever System Settings says.
+- `--remember-window`, with `--script`, keeps the window, the inspector and the view between runs, in your own settings.
 - `./release.sh` makes the release disk image, signed with the certificate called Headroom. A release signed any other
   way would be turned down by every copy that updates itself.
 - The app icon is an Icon Composer document, `Resources/AppIcon.icon`. After changing it, run `Resources/make-icon.sh`.

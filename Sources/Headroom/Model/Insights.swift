@@ -332,7 +332,7 @@ enum Wins {
         }
         var inDownloads: [UInt32] = []
         var old: [(UInt32, UInt64)] = []
-        let cutoff = UInt32(Date().timeIntervalSince1970) &- 180 * 86_400
+        let cutoff = UInt32(seconds: Date().timeIntervalSince1970) &- 180 * 86_400
         for i in 1..<max(tree.count, 1) {
             let n = nodes[i]
             guard !n.has(NodeFlag.directory), !n.has(NodeFlag.synthetic), !n.has(NodeFlag.alias), !n.has(NodeFlag.gone), n.rule == 0,
@@ -509,7 +509,7 @@ final class ChangeMap: @unchecked Sendable {
             let days: Int
             if case .days(let d) = window { days = d } else { days = 30 }
             let field = days == 1 ? DiskTree.statRecent1 : (days == 7 ? DiskTree.statRecent7 : DiskTree.statRecent30)
-            let cut = UInt32(Date().timeIntervalSince1970) &- UInt32(days) * 86_400
+            let cut = UInt32(seconds: Date().timeIntervalSince1970) &- UInt32(days) * 86_400
             for i in 0..<n {
                 if nodes[i].has(NodeFlag.directory) {
                     // Left alone where nothing changed, so that part of the table never takes up memory.
@@ -609,7 +609,7 @@ final class ChangeMap: @unchecked Sendable {
         let nodes = tree.nodes
         // The nearest kept field at or before the window, so nothing newer than it is ever counted as untouched.
         let field = DiskTree.recency.last { $0.days <= UInt32(days) }?.field ?? DiskTree.statRecent1
-        let cut = UInt32(Date().timeIntervalSince1970) &- UInt32(days) * 86_400
+        let cut = UInt32(seconds: Date().timeIntervalSince1970) &- UInt32(days) * 86_400
         for i in 0..<n {
             let total = tree.totals[i]
             if nodes[i].has(NodeFlag.directory) {
@@ -678,8 +678,9 @@ final class ChangeMap: @unchecked Sendable {
     /// The folders that explain the growth. Not "your files grew", but which folder did, and no deeper than is
     /// useful: a season that grew is one row, not eight episodes. It follows what grew, not what each folder came to in
     /// the end, so growth inside a folder that shrank overall is still found.
-    /// With `shrinking`, the same for what got smaller, with negative deltas.
-    func rows(tree: DiskTree, rules: RuleBook, shrinking: Bool = false) -> [ChangeRow] {
+    /// With `shrinking`, the same for what got smaller, with negative deltas. With a folder as `root`, only what's in that
+    /// folder, named no higher than the things directly in it.
+    func rows(tree: DiskTree, rules: RuleBook, shrinking: Bool = false, under root: UInt32 = 0) -> [ChangeRow] {
         let sign: Int64 = shrinking ? -1 : 1
         @inline(__always) func changed(_ id: UInt32) -> Int64 { amount(id, shrinking: shrinking) }
         var out: [UInt32: Int64] = [:]
@@ -703,7 +704,7 @@ final class ChangeMap: @unchecked Sendable {
             var at = id
             while true {
                 let up = nodes[Int(at)].parent
-                if up == 0 || up == tree.home || nodes[Int(up)].parent == 0 || nodes[Int(up)].parent == tree.home || nodes[Int(up)].has(NodeFlag.synthetic) { break }
+                if up == root || up == 0 || up == tree.home || nodes[Int(up)].parent == 0 || nodes[Int(up)].parent == tree.home || nodes[Int(up)].has(NodeFlag.synthetic) { break }
                 if Double(changed(up)) > Double(changed(id)) * 1.12 { break }
                 // Nor when it also went the other way: a folder that shrank overall isn't one that grew.
                 if Double(sign * values[Int(up)]) < Double(changed(id)) * 0.9 { break }
@@ -737,16 +738,26 @@ final class ChangeMap: @unchecked Sendable {
                 emit(id)
             }
         }
-        var topLevel = nodes[0].firstChild
-        while topLevel != 0 {
-            if topLevel != tree.free && topLevel != tree.hidden { walk(topLevel, 0) }
-            topLevel = nodes[Int(topLevel)].nextSibling
+        if root == 0 {
+            var topLevel = nodes[0].firstChild
+            while topLevel != 0 {
+                if topLevel != tree.free && topLevel != tree.hidden { walk(topLevel, 0) }
+                topLevel = nodes[Int(topLevel)].nextSibling
+            }
+        } else {
+            // Inside a folder, what's directly in it can be a row of its own, as anything deeper can on the whole disk.
+            var child = nodes[Int(root)].firstChild
+            while child != 0 {
+                walk(child, 1)
+                child = nodes[Int(child)].nextSibling
+            }
         }
         return out.sorted { $0.value > $1.value }.prefix(60).map { id, delta in
             let parent = nodes[Int(id)].parent
             let name = tree.name(id)
-            // A name like "final" or "8.14" only makes sense next to the folder it's in.
-            let generic = name.count <= 8 && nodes[Int(id)].has(NodeFlag.directory) && (name.first?.isNumber == true || name == name.lowercased())
+            // A name like "final" or "8.14" only makes sense next to the folder it's in, unless that's the folder you're in.
+            let generic = parent != root && name.count <= 8 && nodes[Int(id)].has(NodeFlag.directory)
+                && (name.first?.isNumber == true || name == name.lowercased())
             return ChangeRow(node: id, title: generic ? "\(tree.name(parent)) › \(name)" : name,
                              subtitle: tree.path(parent).map(DiskTree.friendly) ?? tree.name(parent), delta: sign * delta)
         }
@@ -831,7 +842,8 @@ enum Search {
         var found: [UInt32] = []
         for i in 1..<max(tree.count, 1) {
             let n = nodes[i]
-            if n.has(NodeFlag.anchor) || n.has(NodeFlag.synthetic) { continue }
+            // What's been sent to the Trash isn't on the disk to be found.
+            if n.flags & (NodeFlag.anchor | NodeFlag.synthetic | NodeFlag.gone) != 0 { continue }
             let p = UnsafePointer(names + Int(n.nameOffset))
             let length = Int(n.nameLength)
             let holds = isPlain ? holdsPlain(needle, first: first, upperFirst: upperFirst, in: p, length: length) : holdsWide(wanted, in: p, length: length)

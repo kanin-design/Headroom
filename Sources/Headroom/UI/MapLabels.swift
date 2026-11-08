@@ -368,6 +368,8 @@ private struct OuterLabel: View {
             Text(label.title)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.white.opacity(isOn ? 1 : 0.88))
+                // Beside the inspector there's less room: a long name gets a little smaller before it's cut short.
+                .minimumScaleFactor(0.8)
                 .truncationMode(.tail)
             Text(label.value)
                 .font(.system(size: 11, weight: .regular).monospacedDigit())
@@ -439,7 +441,7 @@ struct CenterReadout: View {
                 Text(model.lens == .changes ? "−8.88" : "8.88").font(digits).hidden()
                 Text(sign + value)
                     .font(digits)
-                    .contentTransition(.numericText(value: Double(bytes)))
+                    .contentTransition(Motion.rolling(Double(bytes)))
             }
             ZStack(alignment: .leading) {
                 Text("MB").font(units).hidden()

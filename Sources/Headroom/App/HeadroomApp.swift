@@ -28,16 +28,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
     /// A clean, or emptying the Trash, stops at the next safe point and writes down where it got to, so what's in the Trash
-    /// stays on record and a clean can still be undone. Putting a clean back finishes first.
+    /// stays on record and a clean can still be undone. Putting a clean back finishes first. If a new version is going into
+    /// place at the same time, the quit waits for that too: see `AppModel.quitWhenNothingIsLeft`.
     @MainActor
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        // Halfway through swapping in a new version, the app could be left in the Trash with the new one not yet in place.
-        if Updater.shared.isInstalling {
-            Updater.shared.quitWhenInPlace = true
-            return .terminateLater
-        }
         let model = AppModel.shared
+        // Halfway through swapping in a new version, the app could be left in the Trash with the new one not yet in place.
+        let installing = Updater.shared.isInstalling
+        if installing { Updater.shared.quitWhenInPlace = true }
         guard model.isCleaning else {
+            if installing { return .terminateLater }
             model.savePlan()
             return .terminateNow
         }
@@ -87,6 +87,17 @@ private struct RingsCommand: View {
     }
 }
 
+/// Up to the folder this one is in, as in the Finder. Like Esc, it lets go of what's selected first.
+private struct EnclosingFolderCommand: View {
+    let model = AppModel.shared
+
+    var body: some View {
+        Button("Enclosing Folder") { model.goToEnclosingFolder() }
+            .keyboardShortcut(.upArrow, modifiers: .command)
+            .disabled(model.focus == 0 && model.selected == nil)
+    }
+}
+
 private struct AboutCommand: View {
     @Environment(\.openWindow) private var openWindow
 
@@ -116,9 +127,12 @@ struct HeadroomApp: App {
                 // A scripted check stays behind whatever you're doing, and its clicks have to count anyway.
                 .allowsWindowActivationEvents(ScriptRunner.path != nil ? true : nil)
         }
-        .windowStyle(.hiddenTitleBar)
+        .windowToolbarStyle(.unified)
         .windowResizability(.contentMinSize)
         .defaultSize(width: 1440, height: 900)
+        // The window opens where you left it, as big as you left it. A scripted check opens at the default size and saves
+        // neither, so resizing or moving its window can't change yours.
+        .restorationBehavior(AppModel.remembersWindow ? .automatic : .disabled)
         .commands {
             CommandGroup(replacing: .appInfo) {
                 AboutCommand()
@@ -175,10 +189,9 @@ struct HeadroomApp: App {
                     .keyboardShortcut("[", modifiers: .command)
                 Button("Forward") { AppModel.shared.goForward() }
                     .keyboardShortcut("]", modifiers: .command)
+                EnclosingFolderCommand()
                 Button("Back to the Whole Disk") { AppModel.shared.go(to: 0) }
                     .keyboardShortcut(.upArrow, modifiers: [.command, .shift])
-                Button("Show or Hide Panel") { AppModel.shared.panelOpen.toggle() }
-                    .keyboardShortcut("p", modifiers: [.command, .shift])
                 RingsCommand()
                 Divider()
             }
@@ -188,10 +201,14 @@ struct HeadroomApp: App {
                     .keyboardShortcut("?", modifiers: .command)
             }
             CommandGroup(replacing: .sidebar) {}
+            // Show Inspector and Hide Inspector, on ⌃⌘I: SwiftUI's own, the way ⌃⌘S shows and hides a sidebar.
+            InspectorCommands()
+            // Show or Hide Toolbar, as in any Mac app.
+            ToolbarCommands()
             CommandGroup(after: .textEditing) {
                 Button("Find") {
                     AppModel.shared.searchActive = true
-                    AppModel.shared.panelOpen = true
+                    AppModel.shared.showPanel(true)
                 }
                 .keyboardShortcut("f", modifiers: .command)
             }

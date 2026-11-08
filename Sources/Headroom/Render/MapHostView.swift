@@ -15,8 +15,6 @@ final class MapHostView: NSView {
     private var downPoint: NSPoint?
     /// A press on empty background, which moves the window if the pointer moves.
     private var backgroundDown: NSEvent?
-    /// How far down the window its top works as a title bar, whatever is under the pointer.
-    private static let titleBarHeight: CGFloat = 52
     private var doubleClickWatch: Any?
     /// For a check: how many times the window has been told to follow the pointer.
     private(set) var windowMovesStarted = 0
@@ -200,7 +198,7 @@ final class MapHostView: NSView {
         backgroundDown = nil
         window?.makeFirstResponder(self)
         let p = convert(event.locationInWindow, from: nil)
-        if p.y < Self.titleBarHeight {
+        if p.y < titleBarHeight {
             downPoint = nil
             moveWindow(with: event)
         } else if event.modifierFlags.contains(.command) {
@@ -219,13 +217,19 @@ final class MapHostView: NSView {
         return polar.radius >= RingLayout.hole && model.engine.layout.hit(angle: polar.angle, radius: polar.radius) == nil
     }
 
-    /// A double-click along the top, with nothing else under it, is one on a title bar. It's caught here because the top of
-    /// the window is part ours and part macOS's real title bar, and this way the whole of it does the same.
+    /// How far down the window the toolbar reaches. The map goes on under it, and where none of the toolbar's controls are, a
+    /// press comes through to the map. So along the top, the map does what a title bar does.
+    private var titleBarHeight: CGFloat {
+        guard let window else { return 0 }
+        return window.frame.height - window.contentLayoutRect.maxY
+    }
+
+    /// A double-click along the top, with nothing of the toolbar's under it, is one on a title bar.
     private func watchForDoubleClicksOnTop() {
         guard doubleClickWatch == nil else { return }
         doubleClickWatch = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
             guard let self, event.clickCount == 2, let window, event.window === window,
-                  self.convert(event.locationInWindow, from: nil).y < Self.titleBarHeight,
+                  self.convert(event.locationInWindow, from: nil).y < self.titleBarHeight,
                   window.contentView?.superview?.hitTest(event.locationInWindow) === self else { return event }
             // What you've chosen in System Settings for this. Fill and Zoom both end up filling the screen here.
             switch UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") {
@@ -278,6 +282,77 @@ final class MapHostView: NSView {
         }
     }
 
+    // MARK: VoiceOver
+
+    /// To VoiceOver the map is a group of what's in the folder you're in, biggest first, each with its size and its share
+    /// of the folder. Pressing one does what a click does: a folder opens, a file is selected.
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .group }
+    override func accessibilityRoleDescription() -> String? { "disk map" }
+
+    override func accessibilityLabel() -> String? {
+        guard let model else { return "Disk map" }
+        return "Map of " + (model.focus == 0 ? (model.volume?.shownName ?? "the disk") : model.displayName(model.focus))
+    }
+
+    /// The same elements while the picture stays the same, so VoiceOver keeps its place among them.
+    private var piecesForVoiceOver: (key: String, elements: [Any])?
+
+    override func accessibilityChildren() -> [Any]? {
+        guard let model, model.tree != nil, model.ring.radius > 0 else { return [] }
+        let layout = model.engine.layout
+        let ring = model.ring
+        let key = "\(model.focus) \(model.treeVersion) \(layout.pieces.count) \(ring.center) \(ring.radius)"
+        if let cached = piecesForVoiceOver, cached.key == key { return cached.elements }
+        let inner = layout.pieces.enumerated().filter { $0.element.ring == 0 && !$0.element.isMark && $0.element.bytes > 0 }
+        let whole = Double(max(inner.reduce(UInt64(0)) { $0 &+ $1.element.bytes }, 1))
+        let elements: [Any] = inner.sorted { $0.element.bytes > $1.element.bytes }.map { _, piece in
+            let element = RingPieceElement()
+            element.setAccessibilityParent(self)
+            element.setAccessibilityRole(.button)
+            element.setAccessibilityLabel(model.displayName(piece: piece))
+            element.setAccessibilityValue("\(formatBytes(piece.bytes)), \(Int((Double(piece.bytes) / whole * 100).rounded()))%")
+            // In the view's own points, so it stays right when the window moves.
+            element.setAccessibilityFrameInParentSpace(Self.box(of: piece, in: ring))
+            // Found again when pressed: the ring may have changed since VoiceOver was told about this piece, and the same
+            // place in it can hold something else by then.
+            let node = piece.node, smaller = piece.isSmaller
+            element.press = { [weak model] in
+                guard let model, let now = model.engine.layout.pieces.firstIndex(where: {
+                    $0.node == node && $0.isSmaller == smaller && $0.ring == 0 && !$0.isMark
+                }) else { return false }
+                model.click(piece: now)
+                return true
+            }
+            return element
+        }
+        piecesForVoiceOver = (key, elements)
+        return elements
+    }
+
+    /// The ring has changed: VoiceOver asks again.
+    func voiceOverLayoutChanged() {
+        guard NSWorkspace.shared.isVoiceOverEnabled else { return }
+        piecesForVoiceOver = nil
+        NSAccessibility.post(element: self, notification: .layoutChanged)
+    }
+
+    /// A wedge's bounding box, in the view's points.
+    private static func box(of piece: Piece, in ring: RingGeometry) -> CGRect {
+        var minX = CGFloat.infinity, minY = CGFloat.infinity, maxX = -CGFloat.infinity, maxY = -CGFloat.infinity
+        let steps = max(Int((piece.a1 - piece.a0) / 0.05), 1)
+        for step in 0...steps {
+            let angle = CGFloat(piece.a0 + (piece.a1 - piece.a0) * Float(step) / Float(steps))
+            for r in [piece.r0, piece.r1] {
+                let x = ring.center.x + sin(angle) * CGFloat(r) * ring.radius
+                let y = ring.center.y - cos(angle) * CGFloat(r) * ring.radius
+                minX = min(minX, x); maxX = max(maxX, x)
+                minY = min(minY, y); maxY = max(maxY, y)
+            }
+        }
+        return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+    }
+
     override func keyDown(with event: NSEvent) {
         guard let model else { return super.keyDown(with: event) }
         // In Free Up the keyboard steps through the list: nothing here does anything until you clean.
@@ -294,6 +369,14 @@ final class MapHostView: NSView {
         model?.setPreviewAfter(event.modifierFlags.contains(.option) && !event.modifierFlags.contains(.command))
         super.flagsChanged(with: event)
     }
+}
+
+/// One piece of the ring, to VoiceOver.
+final class RingPieceElement: NSAccessibilityElement {
+    /// False when the piece isn't on the ring any more.
+    var press: () -> Bool = { false }
+
+    override func accessibilityPerformPress() -> Bool { press() }
 }
 
 struct MapView: NSViewRepresentable {

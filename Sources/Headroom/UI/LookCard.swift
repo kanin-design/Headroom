@@ -203,7 +203,7 @@ private struct LookFolder: View {
                 .frame(height: min(max(wanted, rowHeight + 16), tallest))
                 .onChange(of: model.lookCursor) { _, cursor in
                     if let cursor, top.indices.contains(cursor) {
-                        withAnimation(.easeOut(duration: 0.14)) { proxy.scrollTo(top[cursor]) }
+                        Motion.animate(.easeOut(duration: 0.14)) { proxy.scrollTo(top[cursor]) }
                     }
                 }
             }
@@ -252,7 +252,7 @@ private struct LookPictures: View {
                     }
                 }
                 for await (file, picture) in group where !Task.isCancelled {
-                    if let picture { withAnimation(.easeOut(duration: 0.16)) { pictures[file] = picture } }
+                    if let picture { Motion.animate(.easeOut(duration: 0.16)) { pictures[file] = picture } }
                 }
             }
         }

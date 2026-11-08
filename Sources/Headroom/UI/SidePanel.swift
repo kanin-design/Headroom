@@ -2,62 +2,32 @@ import AppKit
 import Charts
 import SwiftUI
 
+/// The inspector beside the map: what the view you're in has to say, or what a search found.
 struct SidePanel: View {
     let model: AppModel
 
+    /// How wide it opens. Wide enough for Free Up's evidence, ticks and plan, and you can drag it wider.
+    static let idealWidth: CGFloat = 384
+
     var body: some View {
-        VStack(spacing: 0) {
-            PanelArrows(model: model)
-            Group {
-                if model.searchActive && !model.searchText.isEmpty {
-                    SearchPanel(model: model)
-                } else {
-                    VStack(spacing: 0) {
-                        Group {
-                            switch model.lens {
-                            case .map: MapPanel(model: model)
-                            case .changes: ChangesPanel(model: model)
-                            case .freeUp: FreeUpPanel(model: model)
-                            }
+        Group {
+            if model.isSearching {
+                SearchPanel(model: model)
+            } else {
+                VStack(spacing: 0) {
+                    Group {
+                        switch model.lens {
+                        case .map: MapPanel(model: model)
+                        case .changes: ChangesPanel(model: model)
+                        case .freeUp: FreeUpPanel(model: model)
                         }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                        NextStepBar(model: model)
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    NextStepBar(model: model)
                 }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-    }
-}
-
-/// Back and forward through where you've been, in the same place on every tab.
-private struct PanelArrows: View {
-    let model: AppModel
-
-    var body: some View {
-        HStack(spacing: 4) {
-            arrow("chevron.left", help: "Back", isOn: model.canGoBack) { model.goBack() }
-            arrow("chevron.right", help: "Forward", isOn: model.canGoForward) { model.goForward() }
-            Spacer()
-        }
-        .padding(.horizontal, 14)
-        .padding(.top, 12)
-    }
-
-    private func arrow(_ symbol: String, help: String, isOn: Bool, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.white.opacity(isOn ? 0.88 : 0.24))
-                .frame(width: 30, height: 24)
-                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.white.opacity(isOn ? 0.09 : 0.03)))
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(!isOn)
-        .help(help)
     }
 }
 
@@ -180,8 +150,8 @@ struct MapPanel: View {
             let _ = model.treeVersion
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    header(tree, subject)
-                    if subject == 0 { summary(tree) }
+                    // The disk's name is the window's title, so the whole disk starts with what's on it.
+                    if subject == 0 { summary(tree) } else { header(tree, subject) }
                     description(tree, subject)
                     if model.selected == nil { WorthDoing(model: model) }
                     kinds(tree, subject)
@@ -195,14 +165,14 @@ struct MapPanel: View {
         }
     }
 
+    /// A folder's or a file's name, where it is, and what's known about it.
     private func header(_ tree: DiskTree, _ subject: UInt32) -> some View {
-        let name = subject == 0 ? (model.volume?.shownName ?? "Disk") : model.displayName(subject)
-        let path = subject == 0 || HiddenNames.isOn ? nil : tree.path(subject).map(DiskTree.friendly)
+        let path = HiddenNames.isOn ? nil : tree.path(subject).map(DiskTree.friendly)
         let thing = NamedThing(subject)
         return VStack(alignment: .leading, spacing: 5) {
-            PanelTitle(title: name, subtitle: path, copyTitle: { model.copyName(of: thing) }, copySubtitle: { model.copyPath(of: thing) })
+            PanelTitle(title: model.displayName(subject), subtitle: path, copyTitle: { model.copyName(of: thing) }, copySubtitle: { model.copyPath(of: thing) })
                 .named(thing, in: model)
-            if subject != 0, let facts = model.facts(of: subject) {
+            if let facts = model.facts(of: subject) {
                 Text(tree.sizeText(subject) + " · " + facts)
                     .font(.system(size: 11.5))
                     .foregroundStyle(.white.opacity(0.62))
@@ -230,7 +200,7 @@ struct MapPanel: View {
             }
             if canGo > 0 {
                 Button {
-                    withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) { model.setLens(.freeUp) }
+                    Motion.animate(.spring(response: 0.34, dampingFraction: 0.82)) { model.setLens(.freeUp) }
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "sparkles")
@@ -471,6 +441,12 @@ struct ChangesPanel: View {
 
     private var untouched: Bool { model.changeWindow.isUntouched }
 
+    /// The lists follow the folder you're in, and say which it is.
+    private var place: String {
+        guard model.focus != 0, let tree = model.tree else { return "" }
+        return " in " + model.displayName(RingLayout.chainTail(tree: tree, model.focus))
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
@@ -588,7 +564,7 @@ struct ChangesPanel: View {
     private var rows: some View {
         if model.tree != nil {
             HStack(alignment: .center) {
-                SectionHeading(text: untouched ? "Untouched" : model.changeUsesHistory ? "Grew" : "Touched")
+                SectionHeading(text: (untouched ? "Untouched" : model.changeUsesHistory ? "Grew" : "Touched") + place)
                 if !model.changeRows.isEmpty { scale }
             }
             if model.changeRows.isEmpty {
@@ -654,7 +630,9 @@ struct SearchPanel: View {
         if let tree = model.tree {
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
-                    PanelTitle(title: "\(model.searchResults.count.formatted()) found")
+                    // Like the list on the Map, it says when there's more than it shows.
+                    PanelTitle(title: "\(model.searchResults.count.formatted()) found",
+                               subtitle: model.searchResults.count > 120 ? "The biggest 120 are listed" : nil)
                     let top = model.searchResults.prefix(120)
                     let biggest = Double(max(top.first.map { tree.totals[Int($0)] } ?? 1, 1))
                     LazyVStack(spacing: 0) {

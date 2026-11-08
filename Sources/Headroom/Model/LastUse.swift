@@ -171,7 +171,8 @@ enum LastUse {
         guard let zone = head.lastIndex(of: UInt8(ascii: " ")), let when = head[..<zone].lastIndex(of: UInt8(ascii: " ")) else { return nil }
         var seconds = 0
         for digit in head[(when + 1)..<zone] {
-            guard digit >= 48, digit <= 57 else { return nil }
+            // More digits than any date has: a broken log, not a reason to stop.
+            guard digit >= 48, digit <= 57, seconds < 1 << 40 else { return nil }
             seconds = seconds * 10 + Int(digit - 48)
         }
         return Date(timeIntervalSince1970: TimeInterval(seconds))

@@ -33,7 +33,7 @@ struct FreeUpPanel: View {
             .scrollEdgeEffectStyle(.soft, for: .all)
             .scrollIndicators(.never)
             .onChange(of: model.hotBox) { _, id in
-                if let id { withAnimation(.snappy(duration: 0.2)) { proxy.scrollTo(id) } }
+                if let id { Motion.animate(.snappy(duration: 0.2)) { proxy.scrollTo(id) } }
             }
         }
     }
@@ -122,7 +122,7 @@ private struct TuckedAway: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Button {
-                withAnimation(.snappy(duration: 0.22)) { isOpen.toggle() }
+                Motion.animate(.snappy(duration: 0.22)) { isOpen.toggle() }
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "chevron.right")
@@ -210,7 +210,7 @@ private struct BoxView: View {
                     Spacer(minLength: 0)
                     if state != .none, shortfall() != nil {
                         Button {
-                            withAnimation(.snappy(duration: 0.2)) { model.includeOtherCopies(of: box) }
+                            Motion.animate(.snappy(duration: 0.2)) { model.includeOtherCopies(of: box) }
                         } label: {
                             Text("Include other copies")
                                 .font(.system(size: 10.5, weight: .medium))
@@ -244,7 +244,7 @@ private struct BoxView: View {
             if inside { model.point(at: box) } else { model.point(at: nil) }
         }
         .onTapGesture {
-            withAnimation(.snappy(duration: 0.18)) { model.toggle(box) }
+            Motion.animate(.snappy(duration: 0.18)) { model.toggle(box) }
         }
         .named(thing, in: model)
         .animation(.easeOut(duration: 0.14), value: isLit)
@@ -323,7 +323,7 @@ private struct BoxView: View {
 
     private var chevron: some View {
         Button {
-            withAnimation(.snappy(duration: 0.2)) {
+            Motion.animate(.snappy(duration: 0.2)) {
                 if isOpen { model.openBoxes.remove(box.id) } else { model.openBoxes.insert(box.id) }
             }
         } label: {
@@ -354,7 +354,7 @@ private struct BoxView: View {
                 if box.rows.count > limit {
                     let rest = box.rows.dropFirst(limit)
                     Button("and \(rest.count) smaller, \(formatBytes(rest.reduce(UInt64(0)) { $0 &+ $1.gain }))") {
-                        withAnimation(.snappy(duration: 0.2)) { showAll = true }
+                        Motion.animate(.snappy(duration: 0.2)) { showAll = true }
                     }
                     .buttonStyle(.plain)
                     .font(.system(size: 11))
@@ -457,9 +457,9 @@ private struct BoxBar: View {
             .onTapGesture { location in
                 // Only a piece of the bar takes one thing. The rest of the line is the box.
                 if let row = piece(at: location.x, in: width, of: list)?.row {
-                    withAnimation(.snappy(duration: 0.18)) { model.toggle(row) }
+                    Motion.animate(.snappy(duration: 0.18)) { model.toggle(row) }
                 } else {
-                    withAnimation(.snappy(duration: 0.18)) { model.toggle(box) }
+                    Motion.animate(.snappy(duration: 0.18)) { model.toggle(box) }
                 }
             }
         }
@@ -581,7 +581,7 @@ struct ThingRow: View {
             }
         }
         .onTapGesture {
-            if row.isPlannable { withAnimation(.snappy(duration: 0.18)) { model.toggle(row) } }
+            if row.isPlannable { Motion.animate(.snappy(duration: 0.18)) { model.toggle(row) } }
         }
         .named(thing, in: model)
         .animation(.easeOut(duration: 0.14), value: isLit)
@@ -650,7 +650,7 @@ struct ThingRow: View {
             if row.isPlannable { small("Keep") { model.keep(row) }.help("Take this out, and don't suggest this again") }
             if !row.nodes.isEmpty {
                 Button {
-                    withAnimation(.snappy(duration: 0.22)) { model.toggleExpanded(row) }
+                    Motion.animate(.snappy(duration: 0.22)) { model.toggleExpanded(row) }
                 } label: {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 9.5, weight: .bold))
@@ -676,7 +676,7 @@ struct ThingRow: View {
 
     private func small(_ text: String, _ action: @escaping () -> Void) -> some View {
         Button {
-            withAnimation(.snappy(duration: 0.2)) { action() }
+            Motion.animate(.snappy(duration: 0.2)) { action() }
         } label: {
             label(text)
         }
@@ -735,7 +735,7 @@ struct ThingRow: View {
 
     private func choice(_ title: String, note: String?, isOn: Bool, tint: Color, _ action: @escaping () -> Void) -> some View {
         Button {
-            withAnimation(.snappy(duration: 0.2)) { action() }
+            Motion.animate(.snappy(duration: 0.2)) { action() }
         } label: {
             HStack(alignment: .top, spacing: 7) {
                 TickMark(state: isOn ? .all : .none, color: tint, size: 14)
@@ -892,7 +892,7 @@ private struct InnerRow: View {
             model.highlight(nodes: inside ? [node] : [])
         }
         .onTapGesture {
-            withAnimation(.snappy(duration: 0.18)) { model.togglePiece(node) }
+            Motion.animate(.snappy(duration: 0.18)) { model.togglePiece(node) }
         }
         .named(NamedThing(node), in: model)
     }
@@ -938,14 +938,14 @@ private struct LookRow: View {
             model.highlight(nodes: inside ? (model.planNodes[item.id] ?? []) : [])
         }
         .onTapGesture {
-            withAnimation(.snappy(duration: 0.2)) { isOpen.toggle() }
+            Motion.animate(.snappy(duration: 0.2)) { isOpen.toggle() }
         }
         .named(NamedThing(nodes: model.planNodes[item.id] ?? [], title: item.title), in: model)
     }
 
     private func action(_ text: String, _ run: @escaping () -> Void) -> some View {
         Button {
-            withAnimation(.snappy(duration: 0.2)) { run() }
+            Motion.animate(.snappy(duration: 0.2)) { run() }
         } label: {
             Text(text)
                 .font(.system(size: 10.5, weight: .medium))
@@ -1080,7 +1080,7 @@ struct NextStepBar: View {
                 .disabled(true)
                 .buttonStyle(GoButton())
             if !model.clearedItems.isEmpty {
-                Button("Bring back what you unticked") { withAnimation(.snappy(duration: 0.2)) { model.restoreCleared() } }
+                Button("Bring back what you unticked") { Motion.animate(.snappy(duration: 0.2)) { model.restoreCleared() } }
                     .buttonStyle(.plain)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.white.opacity(0.65))
@@ -1106,7 +1106,7 @@ struct NextStepBar: View {
                     model.cleanNow()
                 } label: {
                     Text(label)
-                        .contentTransition(.numericText())
+                        .contentTransition(Motion.rolling())
                 }
                 .disabled(partial || ready.isEmpty || model.isCleaning)
                 .buttonStyle(GoButton())
@@ -1120,7 +1120,7 @@ struct NextStepBar: View {
                             .minimumScaleFactor(0.85)
                     }
                     Spacer(minLength: 0)
-                    Button("Untick all") { withAnimation(.snappy(duration: 0.2)) { model.clearPlan() } }
+                    Button("Untick all") { Motion.animate(.snappy(duration: 0.2)) { model.clearPlan() } }
                         .buttonStyle(.plain)
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.white.opacity(0.55))
@@ -1128,7 +1128,7 @@ struct NextStepBar: View {
                 }
             } else {
                 Button {
-                    withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) { model.setLens(.freeUp) }
+                    Motion.animate(.spring(response: 0.34, dampingFraction: 0.82)) { model.setLens(.freeUp) }
                 } label: {
                     Text("\(formatBytes(model.planBytes)) selected in Free Up")
                         .font(.system(size: 13, weight: .semibold).monospacedDigit())
@@ -1219,7 +1219,7 @@ struct NextStepBar: View {
                             .foregroundStyle(.white.opacity(0.55))
                     }
                     Spacer(minLength: 0)
-                    Button("Not now") { withAnimation(.snappy(duration: 0.2)) { model.leaveInTrash() } }
+                    Button("Not now") { Motion.animate(.snappy(duration: 0.2)) { model.leaveInTrash() } }
                         .buttonStyle(.plain)
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.white.opacity(0.65))
@@ -1307,7 +1307,7 @@ struct WorthDoing: View {
                     }
                     .padding(.horizontal, -2)
                     Button {
-                        withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) { model.setLens(.freeUp) }
+                        Motion.animate(.spring(response: 0.34, dampingFraction: 0.82)) { model.setLens(.freeUp) }
                     } label: {
                         HStack(spacing: 5) {
                             Image(systemName: "sparkles")

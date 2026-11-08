@@ -120,6 +120,8 @@ final class RuleBook: @unchecked Sendable {
     private var stateRule: UnsafeMutablePointer<UInt16>
     private static let transitionSlots = 4096
     private static let maxStates = 256
+    /// Room for this many rules. A test checks they fit.
+    static let ruleSlots = 512
 
     // Rules that apply anywhere a folder has this name.
     private var nameKeys: UnsafeMutablePointer<UInt64>
@@ -149,8 +151,8 @@ final class RuleBook: @unchecked Sendable {
         stateRule = .allocate(capacity: Self.maxStates)
         nameKeys = .allocate(capacity: Self.nameSlots)
         nameRules = .allocate(capacity: Self.nameSlots)
-        forcedKinds = .allocate(capacity: 512)
-        forcedKinds.initialize(repeating: 255, count: 512)
+        forcedKinds = .allocate(capacity: Self.ruleSlots)
+        forcedKinds.initialize(repeating: 255, count: Self.ruleSlots)
         transitionKeys.initialize(repeating: 0, count: Self.transitionSlots)
         transitionValues.initialize(repeating: 0, count: Self.transitionSlots)
         wildcard.initialize(repeating: 0, count: Self.maxStates)
@@ -176,6 +178,23 @@ final class RuleBook: @unchecked Sendable {
         for (name, rule) in Self.nameRuleList {
             insertName(name, rule: add(rule))
         }
+        fingerprint = Self.fingerprint(of: rules, states: stateCount, neutral: neutralLimit)
+    }
+
+    /// What the numbers in a saved map mean: these rules in this order, the path table they fill, and how a node is laid
+    /// out. A map saved under another fingerprint isn't shown, because its numbers would name the wrong rules, or ones past
+    /// the last.
+    private(set) var fingerprint: UInt64 = 0
+
+    private static func fingerprint(of rules: [Rule], states: Int, neutral: UInt16) -> UInt64 {
+        var hash: UInt64 = 0xCBF2_9CE4_8422_2325
+        func mix(_ text: String) {
+            for byte in text.utf8 { hash = (hash ^ UInt64(byte)) &* 0x0000_0100_0000_01B3 }
+            hash = (hash ^ 0xFF) &* 0x0000_0100_0000_01B3
+        }
+        for rule in rules { mix(rule.title); mix(rule.detail); mix("\(rule.tier) \(rule.kind?.rawValue ?? 255)") }
+        mix("\(states) \(neutral) \(Kind.count) \(MemoryLayout<Node>.stride) \(DiskTree.statStride)")
+        return hash
     }
 
     deinit {
@@ -185,11 +204,13 @@ final class RuleBook: @unchecked Sendable {
 
     /// The kind every file under this rule counts as, read without touching any reference counts.
     @inline(__always) func forcedKind(_ id: UInt16) -> UInt8? {
+        guard Int(id) < Self.ruleSlots else { return nil }
         let k = forcedKinds[Int(id)]
         return k == 255 ? nil : k
     }
 
-    func rule(_ id: UInt16) -> Rule { rules[Int(id)] }
+    /// A number past the last rule, which only a damaged saved map could hold, counts as no rule.
+    func rule(_ id: UInt16) -> Rule { Int(id) < rules.count ? rules[Int(id)] : rules[0] }
 
     /// The rule that applies anywhere a folder has this name.
     func ruleID(titled title: String) -> UInt16? {
@@ -207,7 +228,7 @@ final class RuleBook: @unchecked Sendable {
         rules.append(rule)
         let id = UInt16(rules.count - 1)
         ruleIDs[key] = id
-        if let kind = rule.kind { forcedKinds[Int(id)] = kind.rawValue }
+        if let kind = rule.kind, Int(id) < Self.ruleSlots { forcedKinds[Int(id)] = kind.rawValue }
         return id
     }
 
