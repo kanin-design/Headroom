@@ -125,10 +125,10 @@ it reads nothing at all, so macOS never asks you about a folder: the ring shows 
 Headroom reads the whole disk the moment it may. A build is signed with a certificate called Headroom if your
 keychain has one, and otherwise with your development certificate if you have one, so the permission survives rebuilds.
 
-When there's a new version, Headroom says so at launch and can put it in place itself. Say Not This Version and it waits
-for the one after. **Check for Updates…** in the Headroom menu, or in About, looks again whenever you like. Every
-version is signed with the same certificate, so an update keeps Full Disk Access, and Headroom only takes an update
-signed with it.
+When there's a new version, or the same version again with a newer build, Headroom says so at launch and can put it in
+place itself. Say Not This Version and it waits for the one after. **Check for Updates…** in the Headroom menu, or in
+About, looks again whenever you like. Every version is signed with the same certificate, so an update keeps Full Disk
+Access, and Headroom only takes an update signed with it.
 
 Headroom is a personal project and a showcase, in an early beta. Headroom moves real files, so read what it tells you
 before you press **Clean**.
@@ -180,6 +180,8 @@ How Headroom is designed, with every measurement, is in [DESIGN.md](DESIGN.md).
 - `--locked`, with `--script`, acts as if Full Disk Access were off, to see what that looks like.
 - `--reduce-motion` acts as if Reduce Motion were on, whatever System Settings says.
 - `--remember-window`, with `--script`, keeps the window, the inspector and the view between runs, in your own settings.
-- `./release.sh` makes the release disk image, signed with the certificate called Headroom. A release signed any other
-  way would be turned down by every copy that updates itself.
+- `./release.sh` makes the release disk image, signed with the certificate called Headroom, and a small file beside it
+  with its version and build number. Both go on the release: a copy that updates itself compares build numbers, so a
+  release put out again under the same version still reaches it. A release signed any other way would be turned down by
+  every copy that updates itself.
 - The app icon is an Icon Composer document, `Resources/AppIcon.icon`. After changing it, run `Resources/make-icon.sh`.

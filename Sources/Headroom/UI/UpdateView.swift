@@ -50,7 +50,7 @@ struct UpdateView: View {
                     .keyboardShortcut(.defaultAction)
             }
         case .available(let release):
-            heading("Headroom \(release.shown) is out", "You have \(Updater.currentShown).")
+            heading("Headroom \(Updater.name(of: release)) is out", "You have \(Updater.currentName(besides: release)).")
             whatsNew(release)
             Text("Headroom opens again by itself when it's done.")
                 .font(.system(size: 11))
@@ -71,7 +71,7 @@ struct UpdateView: View {
                     .keyboardShortcut(.defaultAction)
             }
         case .downloading(let release, let received):
-            heading("Downloading \(release.shown)", "\(formatBytes(UInt64(max(received, 0)))) of \(formatBytes(UInt64(max(release.size, 0))))")
+            heading("Downloading \(Updater.name(of: release))", "\(formatBytes(UInt64(max(received, 0)))) of \(formatBytes(UInt64(max(release.size, 0))))")
             ProgressView(value: Double(received), total: Double(max(release.size, 1)))
                 .progressViewStyle(.linear)
                 .padding(.top, 18)
@@ -81,7 +81,7 @@ struct UpdateView: View {
                     .buttonStyle(.glass)
             }
         case .installing(let release):
-            heading("Putting \(release.shown) in place", "Headroom opens again in a moment.")
+            heading("Putting \(Updater.name(of: release)) in place", "Headroom opens again in a moment.")
             ProgressView()
                 .controlSize(.small)
                 .padding(.top, 18)

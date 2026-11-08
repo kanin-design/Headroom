@@ -53,6 +53,50 @@ final class UpdaterTests: XCTestCase {
         XCTAssertNil(Updater.newest(in: Data("{\"message\": \"rate limited\"}".utf8)))
     }
 
+    func testTheBuildNumberTellsTwoCopiesOfOneVersionApart() {
+        XCTAssertTrue(Updater.isNewer([0, 0, 6], build: 130, than: [0, 0, 6], currentBuild: 124), "put out again with a newer build")
+        XCTAssertFalse(Updater.isNewer([0, 0, 6], build: 124, than: [0, 0, 6], currentBuild: 124), "the build you have")
+        XCTAssertFalse(Updater.isNewer([0, 0, 6], build: 110, than: [0, 0, 6], currentBuild: 124), "an older build")
+        XCTAssertFalse(Updater.isNewer([0, 0, 6], build: nil, than: [0, 0, 6], currentBuild: 124), "a release that doesn't say its build")
+        XCTAssertFalse(Updater.isNewer([0, 0, 5], build: 200, than: [0, 0, 6], currentBuild: 124), "never a lower version, whatever its build")
+        XCTAssertTrue(Updater.isNewer([0, 0, 7], build: nil, than: [0, 0, 6], currentBuild: 124), "a higher version is newer by itself")
+        XCTAssertTrue(Updater.isNewer([0, 0, 6, 0], build: 125, than: [0, 0, 6], currentBuild: 124), "0.0.6.0 is 0.0.6")
+        let rebuilt = Updater.Release(version: [0, 0, 6], stage: "beta", notes: "", download: URL(string: "https://example.com/6.dmg")!,
+                                      size: 1, page: URL(string: "https://example.com/6")!, build: 130)
+        XCTAssertEqual(Updater.answer(.success(rebuilt), had: nil, current: [0, 0, 6], currentBuild: 124), .available(rebuilt))
+        XCTAssertEqual(Updater.answer(.success(rebuilt), had: nil, current: [0, 0, 6], currentBuild: 130), .upToDate)
+    }
+
+    func testANoToABuildLastsUntilANewerBuild() {
+        XCTAssertFalse(Updater.shouldOffer([0, 0, 6], build: 130, current: [0, 0, 6], currentBuild: 124, skipped: "0.0.6+130"), "you said no to it")
+        XCTAssertTrue(Updater.shouldOffer([0, 0, 6], build: 131, current: [0, 0, 6], currentBuild: 124, skipped: "0.0.6+130"), "a newer build is asked about")
+        XCTAssertTrue(Updater.shouldOffer([0, 0, 7], build: 140, current: [0, 0, 6], currentBuild: 124, skipped: "0.0.6+130"))
+        XCTAssertEqual(Updater.skippedBuild("0.0.6+130"), 130)
+        XCTAssertNil(Updater.skippedBuild("0.0.6"), "a no from before builds were kept")
+    }
+
+    func testAReleaseSaysItsBuildInAFileBesideItsDiskImage() throws {
+        let json = """
+        [{"tag_name": "v0.0.6-beta", "draft": false, "html_url": "https://example.com/6", "body": "",
+          "assets": [{"name": "Headroom-0.0.6-beta.dmg", "browser_download_url": "https://example.com/6.dmg", "size": 6},
+                     {"name": "Headroom-0.0.6-beta.json", "browser_download_url": "https://example.com/6.json", "size": 40}]}]
+        """
+        let release = try XCTUnwrap(Updater.newest(in: Data(json.utf8)))
+        XCTAssertEqual(release.facts?.absoluteString, "https://example.com/6.json")
+        XCTAssertNil(release.build, "read from that file afterwards")
+        XCTAssertEqual(Updater.build(in: Data(#"{"version": "0.0.6", "build": 124}"#.utf8), version: [0, 0, 6]), 124)
+        XCTAssertEqual(Updater.build(in: Data(#"{"version": "0.0.6", "build": "124"}"#.utf8), version: [0, 0, 6]), 124, "as Info.plist writes it, too")
+        XCTAssertNil(Updater.build(in: Data(#"{"version": "0.0.5", "build": 124}"#.utf8), version: [0, 0, 6]), "about another version")
+        XCTAssertNil(Updater.build(in: Data("not a file of facts".utf8), version: [0, 0, 6]))
+    }
+
+    func testTheWindowNamesTheBuildWhenOnlyTheBuildDiffers() {
+        let rebuilt = Updater.Release(version: [0, 0, 6], stage: "beta", notes: "", download: URL(string: "https://example.com/6.dmg")!,
+                                      size: 1, page: URL(string: "https://example.com/6")!, build: 130)
+        XCTAssertEqual(Updater.name(of: rebuilt, current: [0, 0, 6]), "0.0.6 beta, build 130")
+        XCTAssertEqual(Updater.name(of: rebuilt, current: [0, 0, 5]), "0.0.6 beta", "a new version is named by its version")
+    }
+
     func testTheAccessGuideOpensOncePerVersionUntilYouSayNotNow() {
         XCTAssertTrue(AppModel.showsGuide(declined: nil, version: "0.0.3", scripted: false, locked: false))
         XCTAssertFalse(AppModel.showsGuide(declined: "0.0.3", version: "0.0.3", scripted: false, locked: false), "you said not now")

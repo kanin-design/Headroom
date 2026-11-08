@@ -2,8 +2,9 @@ import AppKit
 import Foundation
 import Security
 
-/// Looks on GitHub for a newer Headroom at launch, and puts it in place of this one when you say so. A version you say no
-/// to isn't offered again, though a newer one is, and Check for Updates always looks.
+/// Looks on GitHub for a newer Headroom at launch, and puts it in place of this one when you say so. Newer is a higher
+/// version, or the same version with a higher build number. A version you say no to isn't offered again, though a newer
+/// one is, and Check for Updates always looks.
 @MainActor @Observable
 final class Updater {
     static let shared = Updater()
@@ -16,6 +17,10 @@ final class Updater {
         var download: URL
         var size: Int64
         var page: URL
+        /// Its build number, from the small file beside its disk image. Nil when it doesn't say.
+        var build: Int? = nil
+        /// That file, which says the release's version and build.
+        var facts: URL? = nil
 
         var number: String { version.map(String.init).joined(separator: ".") }
         var shown: String { number + (stage.map { " " + $0 } ?? "") }
@@ -49,6 +54,8 @@ final class Updater {
 
     static let currentNumber = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
     static let current = parse(currentNumber)
+    /// This copy's build number. It goes up with every build, so it tells two copies of one version apart.
+    static let currentBuild = Int(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "") ?? 0
     static var currentShown: String {
         let number = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
         return number + ((Bundle.main.object(forInfoDictionaryKey: "HeadroomStage") as? String).map { " " + $0 } ?? "")
@@ -73,7 +80,8 @@ final class Updater {
         Task {
             try? await Task.sleep(for: .seconds(4))
             guard let release = try? await Self.newest(),
-                  Self.shouldOffer(release.version, current: Self.current, skipped: UserDefaults.standard.string(forKey: Self.skippedKey)),
+                  Self.shouldOffer(release.version, build: release.build, current: Self.current, currentBuild: Self.currentBuild,
+                                   skipped: UserDefaults.standard.string(forKey: Self.skippedKey)),
                   state == .idle else { return }
             state = .available(release)
             if AppModel.shared.accessGuideShowing { offerWaiting = true } else { windowRequests += 1 }
@@ -106,23 +114,23 @@ final class Updater {
             let found: Result<Release?, Error>
             do { found = .success(try await Self.newest()) } catch { found = .failure(error) }
             guard token == checkToken, state == .checking else { return }
-            state = Self.answer(found, had: had, current: Self.current)
+            state = Self.answer(found, had: had, current: Self.current, currentBuild: Self.currentBuild)
         }
     }
 
     /// What a look ends in. A version found before stays on offer when the look can't get through.
-    static func answer(_ found: Result<Release?, Error>, had: Release?, current: [Int]) -> State {
+    static func answer(_ found: Result<Release?, Error>, had: Release?, current: [Int], currentBuild: Int = 0) -> State {
         switch found {
         case .success(let release):
-            return release.map { isNewer($0.version, than: current) ? .available($0) : .upToDate } ?? .upToDate
+            return release.map { isNewer($0.version, build: $0.build, than: current, currentBuild: currentBuild) ? .available($0) : .upToDate } ?? .upToDate
         case .failure(let error):
             return had.map { .available($0) } ?? .couldNotCheck(say(error))
         }
     }
 
-    /// No to this version: it isn't offered at launch again, only the next one is.
+    /// No to this version: it isn't offered at launch again, only the next one is, or the same version with a newer build.
     func skip(_ release: Release) {
-        UserDefaults.standard.set(release.number, forKey: Self.skippedKey)
+        UserDefaults.standard.set(release.number + (release.build.map { "+\($0)" } ?? ""), forKey: Self.skippedKey)
         state = .idle
     }
 
@@ -135,10 +143,15 @@ final class Updater {
         state = .idle
     }
 
-    nonisolated static func shouldOffer(_ version: [Int], current: [Int], skipped: String?) -> Bool {
-        guard isNewer(version, than: current) else { return false }
+    nonisolated static func shouldOffer(_ version: [Int], build: Int? = nil, current: [Int], currentBuild: Int = 0, skipped: String?) -> Bool {
+        guard isNewer(version, build: build, than: current, currentBuild: currentBuild) else { return false }
         guard let skipped else { return true }
-        return isNewer(version, than: parse(skipped))
+        return isNewer(version, build: build, than: parse(skipped), currentBuild: skippedBuild(skipped) ?? 0)
+    }
+
+    /// The build in a no: "0.0.6+124" is build 124. A no from before builds were kept has none.
+    nonisolated static func skippedBuild(_ text: String) -> Int? {
+        text.split(separator: "+").dropFirst().first.flatMap { Int($0) }
     }
 
     /// "v0.0.3-beta" and "0.0.3" are both 0.0.3.
@@ -157,6 +170,31 @@ final class Updater {
         return false
     }
 
+    nonisolated static func isSame(_ a: [Int], _ b: [Int]) -> Bool { !isNewer(a, than: b) && !isNewer(b, than: a) }
+
+    /// Whether a release is newer than this copy. As in Sparkle, the updater most Mac apps use, the build number decides
+    /// between two copies of one version: it goes up with every build, so a release put out again under the same version
+    /// reaches the copies that have it. A lower version is never offered, whatever its build, and a release that doesn't
+    /// say its build is newer only by its version.
+    nonisolated static func isNewer(_ version: [Int], build: Int?, than current: [Int], currentBuild: Int) -> Bool {
+        if isNewer(version, than: current) { return true }
+        guard isSame(version, current), let build else { return false }
+        return build > currentBuild
+    }
+
+    /// What a release is called: "0.0.6 beta", with its build beside a copy of the same version, since only the build tells
+    /// the two apart then.
+    static func name(of release: Release, current: [Int] = Updater.current) -> String {
+        guard let build = release.build, isSame(release.version, current) else { return release.shown }
+        return "\(release.shown), build \(build)"
+    }
+
+    /// What this copy is called beside a release: with its build when the two are the same version.
+    static func currentName(besides release: Release) -> String {
+        guard release.build != nil, isSame(release.version, current) else { return currentShown }
+        return "\(currentShown), build \(currentBuild)"
+    }
+
     private struct GitHubRelease: Decodable {
         var tag_name: String
         var body: String?
@@ -171,6 +209,14 @@ final class Updater {
         }
     }
 
+    /// The build in a release's small file, `{"version": "0.0.6", "build": 124}`, when it's about that version.
+    nonisolated static func build(in data: Data, version: [Int]) -> Int? {
+        guard let facts = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let said = facts["version"] as? String, isSame(parse(said), version) else { return nil }
+        if let build = facts["build"] as? Int { return build }
+        return (facts["build"] as? String).flatMap { Int($0) }
+    }
+
     /// The newest version that has a disk image to install from, from GitHub's list of releases.
     nonisolated static func newest(in data: Data) -> Release? {
         guard let list = try? JSONDecoder().decode([GitHubRelease].self, from: data) else { return nil }
@@ -178,20 +224,40 @@ final class Updater {
             guard !release.draft, let disk = release.assets.first(where: { $0.name.lowercased().hasSuffix(".dmg") }) else { return nil }
             let tag = release.tag_name.hasPrefix("v") ? release.tag_name.dropFirst() : Substring(release.tag_name)
             let stage = tag.split(separator: "-", maxSplits: 1).dropFirst().first.map(String.init)
+            let facts = release.assets.first { $0.name.lowercased().hasSuffix(".json") }?.browser_download_url
             return Release(version: parse(release.tag_name), stage: stage, notes: release.body ?? "", download: disk.browser_download_url,
-                           size: disk.size, page: release.html_url)
+                           size: disk.size, page: release.html_url, facts: facts)
         }
         return releases.max { isNewer($1.version, than: $0.version) }
     }
 
     private static func newest() async throws -> Release? {
-        if let feedFile { return newest(in: try Data(contentsOf: feedFile)) }
-        var request = URLRequest(url: releases, timeoutInterval: 15)
-        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        let list: Data
+        if let feedFile {
+            list = try Data(contentsOf: feedFile)
+        } else {
+            let (data, response) = try await URLSession.shared.data(for: request(releases, accept: "application/vnd.github+json"))
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw Problem.noAnswer }
+            list = data
+        }
+        guard var release = newest(in: list) else { return nil }
+        if let facts = release.facts { release.build = await build(from: facts, version: release.version) }
+        return release
+    }
+
+    /// The build a release says it is. Nil when it can't be read: the release is then newer only by its version.
+    private static func build(from facts: URL, version: [Int]) async -> Int? {
+        if facts.isFileURL { return (try? Data(contentsOf: facts)).flatMap { build(in: $0, version: version) } }
+        guard let (data, response) = try? await URLSession.shared.data(for: request(facts, accept: "application/json")),
+              (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        return build(in: data, version: version)
+    }
+
+    private static func request(_ url: URL, accept: String) -> URLRequest {
+        var request = URLRequest(url: url, timeoutInterval: 15)
+        request.setValue(accept, forHTTPHeaderField: "Accept")
         request.setValue("Headroom/\(current.map(String.init).joined(separator: "."))", forHTTPHeaderField: "User-Agent")
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw Problem.noAnswer }
-        return newest(in: data)
+        return request
     }
 
     /// The lines of a release's notes that say what's new: its list, or its first paragraph if it has none.
@@ -211,7 +277,7 @@ final class Updater {
                 let disk = try await fetch(release)
                 state = .installing(release)
                 isInstalling = true
-                let app = try await Task.detached(priority: .userInitiated) { try Updater.putInPlace(from: disk, version: release.number) }.value
+                let app = try await Task.detached(priority: .userInitiated) { try Updater.putInPlace(from: disk, version: release.number, build: release.build) }.value
                 isInstalling = false
                 if quitWhenInPlace { return AppModel.shared.quitWhenNothingIsLeft() }
                 Self.reopen(app)
@@ -292,9 +358,9 @@ final class Updater {
         }
     }
 
-    /// Opens the disk image, checks it holds this app at that version, unharmed, and swaps it in. The old version goes to the
-    /// Trash, so it can come back, and it's put back if the swap fails.
-    nonisolated static func putInPlace(from disk: URL, version: String) throws -> URL {
+    /// Opens the disk image, checks it holds this app at that version and build, unharmed, and swaps it in. The old version
+    /// goes to the Trash, so it can come back, and it's put back if the swap fails.
+    nonisolated static func putInPlace(from disk: URL, version: String, build: Int? = nil) throws -> URL {
         let fm = FileManager.default
         let work = fm.temporaryDirectory.appendingPathComponent("Headroom-update-\(UUID().uuidString)")
         let mount = work.appendingPathComponent("disk")
@@ -311,7 +377,8 @@ final class Updater {
         let found = mount.appendingPathComponent("Headroom.app")
         guard let info = NSDictionary(contentsOf: found.appendingPathComponent("Contents/Info.plist")),
               info["CFBundleIdentifier"] as? String == Bundle.main.bundleIdentifier,
-              info["CFBundleShortVersionString"] as? String == version else { throw Problem.notThisApp }
+              info["CFBundleShortVersionString"] as? String == version,
+              build.map({ info["CFBundleVersion"] as? String == String($0) }) ?? true else { throw Problem.notThisApp }
         guard isSignedLikeThis(found) else { throw Problem.damaged }
 
         let target = installTarget()

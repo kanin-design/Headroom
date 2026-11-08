@@ -92,6 +92,10 @@ import SwiftUI
 ///     shot file.png
 ///     film 3 0.1 name          keep photographing in the background without holding anything up: 3 s, every 0.1 s
 ///     memory label             say how much memory is in use, and the most so far
+///     checkupdates             Check for Updates, as from the menu. `--update-feed releases.json` reads GitHub's list of
+///                              releases from that file, and a release's files can be file URLs
+///     updatestate              what the updater found, and what its window says about it
+///     installupdate            put in place what it found
 ///     quit
 /// How busy the main thread is, and the longest it has been away: what you'd feel as a hitch.
 final class MainThreadMeter {
@@ -760,6 +764,9 @@ enum ScriptRunner {
             print("signed like this app: \(Updater.isSignedLikeThis(URL(fileURLWithPath: argument))) — \(argument)")
         case "updatestate":
             print("update state \(Updater.shared.state)")
+            if case .available(let release) = Updater.shared.state {
+                print("update window: Headroom \(Updater.name(of: release)) is out. You have \(Updater.currentName(besides: release)).")
+            }
         case "shotwindow":
             // A picture of another window, by its title: "shotwindow Update Headroom /path.png".
             guard let cut = argument.range(of: " /") else { print("shotwindow needs a title and a path"); return }

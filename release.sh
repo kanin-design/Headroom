@@ -1,6 +1,8 @@
 #!/bin/zsh
 # Makes the release disk image, build/Headroom-<version>-<stage>.dmg: a fresh build signed with the Headroom certificate,
-# in the earlier release's disk image layout, with its background, icon places and volume icon.
+# in the earlier release's disk image layout, with its background, icon places and volume icon. Beside it goes
+# build/Headroom-<version>-<stage>.json, the release's version and build number, and both go on the release: as in Sparkle,
+# a copy that updates itself compares build numbers, so a release put out again under the same version still reaches it.
 # Every release has to be signed with that one certificate. A copy of Headroom only takes an update signed the way it is,
 # so a release signed any other way would be turned down by every one of them.
 set -e
@@ -31,4 +33,7 @@ ditto build/Headroom.app "$WORK/disk/Headroom.app"
 hdiutil detach "$WORK/disk" -quiet
 hdiutil convert "$WORK/layout.dmg" -format UDZO -imagekey zlib-level=9 -ov -o "build/$NAME.dmg" -quiet
 rm -rf "$WORK"
-echo "made build/$NAME.dmg"
+BUILD=$(/usr/libexec/PlistBuddy -c "Print CFBundleVersion" build/Headroom.app/Contents/Info.plist)
+[[ $BUILD == <-> ]] || { echo "The build number isn't a whole number: $BUILD"; exit 1; }
+printf '{"version": "%s", "build": %s}\n' "$VERSION" "$BUILD" > "build/$NAME.json"
+echo "made build/$NAME.dmg and build/$NAME.json, build $BUILD"

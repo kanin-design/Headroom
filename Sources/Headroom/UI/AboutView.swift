@@ -37,7 +37,7 @@ struct AboutView: View {
     @ViewBuilder
     private var update: some View {
         if case .available(let release) = Updater.shared.state {
-            Button("Update to \(release.shown)") { openWindow(id: "update") }
+            Button("Update to \(Updater.name(of: release))") { openWindow(id: "update") }
                 .buttonStyle(.glassProminent)
                 .controlSize(.small)
         } else {
