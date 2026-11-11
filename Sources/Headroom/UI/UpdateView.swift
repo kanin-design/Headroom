@@ -27,7 +27,7 @@ struct UpdateView: View {
     private var content: some View {
         switch updater.state {
         case .idle, .checking:
-            heading("Looking for a new version…", "You have \(Updater.currentShown).")
+            heading("Checking for updates…", "You have \(Updater.currentShown).")
             ProgressView()
                 .controlSize(.small)
                 .padding(.top, 18)
@@ -40,7 +40,7 @@ struct UpdateView: View {
                     .keyboardShortcut(.defaultAction)
             }
         case .couldNotCheck(let why):
-            heading("Couldn't look for a new version", why)
+            heading("Couldn't check for updates", why)
             buttons {
                 Button("OK") { close() }
                     .buttonStyle(.glass)
@@ -50,25 +50,20 @@ struct UpdateView: View {
                     .keyboardShortcut(.defaultAction)
             }
         case .available(let release):
-            heading("Headroom \(Updater.name(of: release)) is out", "You have \(Updater.currentName(besides: release)).")
+            heading("Headroom \(Updater.name(of: release)) is available", "You have \(Updater.currentName(besides: release)).")
             whatsNew(release)
-            Text("Headroom opens again by itself when it's done.")
-                .font(.system(size: 11))
-                .foregroundStyle(.white.opacity(0.45))
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 14)
             buttons {
-                Button("Not This Version") {
+                Button("Skip This Version") {
                     updater.skip(release)
                     dismissWindow()
                 }
                 .buttonStyle(.glass)
-                .help("You'll be asked again when there's a newer one")
+                .help("Don't offer this version again")
                 Spacer()
-                Button("Update") { updater.install(release) }
+                Button("Install Update") { updater.install(release) }
                     .buttonStyle(.glassProminent)
                     .keyboardShortcut(.defaultAction)
+                    .help("Install and relaunch Headroom")
             }
         case .downloading(let release, let received):
             heading("Downloading \(Updater.name(of: release))", "\(formatBytes(UInt64(max(received, 0)))) of \(formatBytes(UInt64(max(release.size, 0))))")
@@ -81,12 +76,12 @@ struct UpdateView: View {
                     .buttonStyle(.glass)
             }
         case .installing(let release):
-            heading("Putting \(Updater.name(of: release)) in place", "Headroom opens again in a moment.")
+            heading("Installing \(Updater.name(of: release))…", "Headroom will relaunch.")
             ProgressView()
                 .controlSize(.small)
                 .padding(.top, 18)
         case .failed(let release, let why):
-            heading("The update didn't go through", why)
+            heading("Update failed", why)
             buttons {
                 Button("Download Page") { openURL(release.page) }
                     .buttonStyle(.glass)

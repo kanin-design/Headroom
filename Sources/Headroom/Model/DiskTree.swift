@@ -66,10 +66,12 @@ final class DiskTree: @unchecked Sendable {
     static let capacity = 48_000_000
     static let namesCapacity = 3_000_000_000
     /// Fields per node in `stats`: bytes per Kind, then recency, all in units of 16 KiB. Recency is what changed in the last
-    /// so many days: 1, 7, 30 and 14, then three months and a year, which say by what's left what's gone untouched.
-    static let statStride = 18
+    /// so many days: 1, 7, 30 and 14, then three months and a year, which say by what's left what's gone untouched. Last, how
+    /// many symbolic links there are, which take no room but say where things point: Copies opens only folders that hold one.
+    static let statStride = 19
     static let statRecent1 = Kind.count, statRecent7 = Kind.count + 1, statRecent30 = Kind.count + 2, statRecent14 = Kind.count + 3
     static let statRecent91 = Kind.count + 4, statRecent365 = Kind.count + 5
+    static let statSymlinks = Kind.count + 6
     /// Each recency field, and how many days back it reaches.
     static let recency: [(field: Int, days: UInt32)] = [(statRecent1, 1), (statRecent7, 7), (statRecent14, 14), (statRecent30, 30),
                                                         (statRecent91, 91), (statRecent365, 365)]
@@ -308,7 +310,8 @@ final class DiskTree: @unchecked Sendable {
             var c = nodes[Int(at)].firstChild
             var found: UInt32?
             while c != 0 {
-                if name(c) == part { found = c; break }
+                // The name on disk: a path says that, even when made-up names are being shown.
+                if rawName(c) == part { found = c; break }
                 c = nodes[Int(c)].nextSibling
             }
             guard let found else { return nil }
@@ -353,10 +356,11 @@ final class DiskTree: @unchecked Sendable {
 
     static func friendly(_ path: String) -> String {
         var p = HiddenNames.isOn ? HiddenNames.madeUp(path: path) : path
+        if let demo = Demo.home, p == demo || p.hasPrefix(demo + "/") { return "~" + p.dropFirst(demo.count) }
         let home = NSHomeDirectory()
         let dataHome = "/System/Volumes/Data" + home
-        if p.hasPrefix(dataHome) { p = "~" + p.dropFirst(dataHome.count) }
-        else if p.hasPrefix(home) { p = "~" + p.dropFirst(home.count) }
+        if PathMath.isInside(p, dataHome) { p = "~" + p.dropFirst(dataHome.count) }
+        else if PathMath.isInside(p, home) { p = "~" + p.dropFirst(home.count) }
         else if p.hasPrefix("/System/Volumes/Data/") { p = String(p.dropFirst("/System/Volumes/Data".count)) }
         return p
     }

@@ -47,6 +47,15 @@ struct Facts: Sendable {
     // AI models
     var models: [Model] = []
 
+    // Screenshots and screen recordings, in the folders macOS saves them to
+    var screenshots: [Screenshot] = []
+
+    struct Screenshot: Sendable {
+        var path: String
+        var bytes: UInt64
+        var changed: Date
+    }
+
     struct Model: Sendable {
         var name: String
         var folder: String
@@ -210,6 +219,8 @@ extension Facts {
             readLeftBehind(into: &facts, home: home, apps: facts.apps, fullAccess: fullAccess)
         }
         facts.gatheredAt = Date()
+        // The Desktop is guarded: without Full Disk Access, looking there would bring up a prompt.
+        facts.screenshots = fullAccess ? readScreenshots(home: NSHomeDirectory()) : []
         readTree(into: &facts, tree: tree, earlier: earlier)
         facts.elsewhere = DiskIndex.loadOthers(than: tree.volumeName)
         // Plex remembers disks too, even when they're away.
@@ -220,6 +231,43 @@ extension Facts {
         }
         facts.knownDisks = known.sorted()
         return facts
+    }
+
+    // MARK: Screenshots
+
+    /// macOS names a screenshot or a screen recording with the date and time it was taken, in any language: `Screenshot
+    /// 2026-11-09 at 12.00.00.png`, `Skjermbilde 2026-11-09 kl. 12.00.00.png`. The word in front is whatever you set.
+    static func isScreenshotName(_ name: String) -> Bool {
+        screenshotName.firstMatch(in: name, range: NSRange(name.startIndex..., in: name)) != nil
+    }
+
+    private static let screenshotName = try! NSRegularExpression(
+        pattern: #"\d{4}-\d{2}-\d{2}\D{1,8}\d{1,2}\.\d{2}\.\d{2}(\s?[AP]M)?( \(\d+\)| \d+)?\.(png|jpe?g|heic|tiff?|pdf|gif|mov|mp4)$"#, options: [.caseInsensitive])
+
+    /// Where screenshots are saved: the folder set in macOS, the Desktop it defaults to, and the usual folders people pick.
+    static func screenshotFolders(home: String) -> [String] {
+        var folders: [String] = []
+        if let set = CFPreferencesCopyAppValue("location" as CFString, "com.apple.screencapture" as CFString) as? String {
+            folders.append((set as NSString).expandingTildeInPath)
+        }
+        folders += [home + "/Desktop", home + "/Pictures/Screenshots", home + "/Documents/Screenshots"]
+        var seen = Set<String>()
+        return folders.map { ($0 as NSString).standardizingPath }.filter { seen.insert($0).inserted }
+    }
+
+    /// One listing of each folder, top level only. Most screenshots are too small to have a place on the map, so this is the
+    /// only way to count them.
+    static func readScreenshots(home: String, folders: [String]? = nil) -> [Screenshot] {
+        var out: [Screenshot] = []
+        let keys: [URLResourceKey] = [.isRegularFileKey, .totalFileAllocatedSizeKey, .contentModificationDateKey]
+        for folder in folders ?? screenshotFolders(home: home) {
+            let files = (try? FileManager.default.contentsOfDirectory(at: URL(fileURLWithPath: folder), includingPropertiesForKeys: keys, options: [.skipsHiddenFiles])) ?? []
+            for file in files where isScreenshotName(file.lastPathComponent) {
+                guard let values = try? file.resourceValues(forKeys: Set(keys)), values.isRegularFile == true, let changed = values.contentModificationDate else { continue }
+                out.append(Screenshot(path: file.path, bytes: UInt64(values.totalFileAllocatedSize ?? 0), changed: changed))
+            }
+        }
+        return out
     }
 
     // MARK: Plex
@@ -282,6 +330,8 @@ extension Facts {
             guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
             let values = SteamText.values(text)
             guard let title = values["name"], let dir = values["installdir"], let appID = values["appid"] else { continue }
+            // A game's folder is one plain name. Anything else could point at the whole library.
+            guard !dir.isEmpty, !dir.contains("/"), dir != ".", dir != ".." else { continue }
             let played = TimeInterval(values["LastPlayed"] ?? "") ?? 0
             facts.games.append(SteamGame(appID: appID, name: title, folder: library + "/common/" + dir, manifest: path,
                                          lastPlayed: played > 0 ? Date(timeIntervalSince1970: played) : nil, size: UInt64(values["SizeOnDisk"] ?? "") ?? 0))
@@ -372,11 +422,11 @@ extension Facts {
                 let maker = parts.prefix(2).joined(separator: ".")
                 if !sharedPrefixes.contains(maker) {
                     if let other = running.first(where: { $0.bundleID.hasPrefix(maker + ".") && $0.bundleID != id }) {
-                        makerNote = "\(other.name), from the same maker, is running."
+                        makerNote = "\(other.name), by the same developer, is running."
                     } else if let process = open.running(containing: maker) {
-                        makerNote = "\(process.process), from the same maker, is running."
+                        makerNote = "\(process.process), by the same developer, is running."
                     } else if startsByItself(maker: maker, home: home) {
-                        makerNote = "Something from the same maker starts by itself."
+                        makerNote = "A background item by the same developer is installed."
                     }
                 }
             }

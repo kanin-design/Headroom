@@ -53,6 +53,13 @@ final class MapEngine: @unchecked Sendable {
     private var emphasisGoal: [Float] = []
     private var dimNow: Float = 0
     private var dimGoal: Float = 0
+    /// One colour for what's lit and the way out to it, so things far apart read as one set, and how much of it shows.
+    private var tintNow: Float = 0
+    private var tintGoal: Float = 0
+    private var tintColorNow = SIMD3<Float>(0, 0, 0)
+    private var tintColorGoal = SIMD3<Float>(0, 0, 0)
+    /// Points: the least a lit piece is drawn across while a tint shows.
+    private static let minLitPoints: Float = 4
 
     // In points, so the ring is right on any display, and when a window moves between displays.
     private var centerNow = SIMD2<Float>(0, 0)
@@ -216,6 +223,8 @@ final class MapEngine: @unchecked Sendable {
             }
         } else {
             dimGoal = 0
+            tintGoal = 0
+            renderer?.liftLit = false
         }
 
         instances = out
@@ -250,8 +259,9 @@ final class MapEngine: @unchecked Sendable {
 
     // MARK: Emphasis
 
-    /// Lifts these pieces and lets the rest step back. Pass nothing to bring everything back.
-    func setEmphasis(primary: Int?, related: [Range<Int>], ancestors: [Int] = []) {
+    /// Lifts these pieces and lets the rest step back. Pass nothing to bring everything back. With a tint, what's lit takes on
+    /// that colour, the folders it's in part of it, and a lit piece too small to see is drawn a few points across.
+    func setEmphasis(primary: Int?, related: [Range<Int>], ancestors: [Int] = [], tint: SIMD3<Float>? = nil) {
         lock.lock()
         guard !emphasisGoal.isEmpty else { lock.unlock(); return }
         for i in emphasisGoal.indices { emphasisGoal[i] = 0 }
@@ -261,6 +271,15 @@ final class MapEngine: @unchecked Sendable {
         for i in ancestors where i < pieceCount { emphasisGoal[i] = max(emphasisGoal[i], 0.62) }
         if let primary, primary < pieceCount { emphasisGoal[primary] = 2 }
         dimGoal = (primary != nil || !related.isEmpty) ? 0.62 : 0
+        if let tint, dimGoal > 0 {
+            // From no tint, it starts in its own colour rather than passing through the last one.
+            if tintNow < 0.01 { tintColorNow = tint }
+            tintColorGoal = tint
+            tintGoal = 1
+        } else {
+            tintGoal = 0
+        }
+        renderer?.liftLit = tintGoal > 0
         lock.unlock()
         requestFrame()
     }
@@ -403,6 +422,23 @@ final class MapEngine: @unchecked Sendable {
             moving = true
         }
 
+        if abs(tintGoal - tintNow) > 0.002 {
+            tintNow += (tintGoal - tintNow) * (tintGoal > tintNow ? rise : fall)
+            moving = true
+        } else if tintNow != tintGoal {
+            tintNow = tintGoal
+            moving = true
+        }
+        // From one set to the next, the colour glides as the old set lets go and the new one lights.
+        let toward = tintColorGoal - tintColorNow
+        if simd_length(toward) > 0.002 {
+            tintColorNow += toward * rise
+            moving = true
+        } else if tintColorNow != tintColorGoal {
+            tintColorNow = tintColorGoal
+            moving = true
+        }
+
         // The window keeps saying where the ring is while it moves it, so there's a next frame.
         if placeChanged {
             placeChanged = false
@@ -452,6 +488,8 @@ final class MapEngine: @unchecked Sendable {
         u.scale = Float(scale)
         u.dim = dimNow
         u.liftPixels = Float(scale) * 5
+        u.tint = SIMD4(tintColorNow, tintNow)
+        u.minLit = Self.minLitPoints
         u.bloom = glowNow
         u.restSaturation = 1 - calmNow * (1 - Self.colourAtRest)
         u.glowAtRest = 1 - calmNow * (1 - Self.glowAtRest)

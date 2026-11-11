@@ -41,7 +41,7 @@ struct AboutView: View {
                 .buttonStyle(.glassProminent)
                 .controlSize(.small)
         } else {
-            Button("Check for Updates") {
+            Button("Check for Updates…") {
                 Updater.shared.checkNow()
                 openWindow(id: "update")
             }

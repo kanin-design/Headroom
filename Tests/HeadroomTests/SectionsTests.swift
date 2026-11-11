@@ -101,7 +101,8 @@ final class SectionsTests: XCTestCase {
         d.finish()
         var one = row("model:google/gemma", d, "/Volumes/Fake/LLM/hub/m", tier: .redownload)
         one.title = "google/gemma"
-        one.subtitle = "Can be downloaded again from Hugging Face. Downloaded Oct 9."
+        one.subtitle = "Re-downloadable from Hugging Face · Downloaded Oct 9"
+        one.box = .models
         let models = try XCTUnwrap(Sections.build(from: [one], tree: d.tree).sections.first { $0.id == "models" })
         XCTAssertEqual(models.rows.first?.title, "gemma")
         XCTAssertEqual(models.rows.first?.subtitle, "Downloaded Oct 9", "It says when it arrived, and doesn't claim it's old")
@@ -148,15 +149,17 @@ final class SectionsTests: XCTestCase {
 
     // MARK: The list
 
-    private func row(_ id: String, _ d: FakeDisk, _ path: String, tier: Tier = .yourCall, quick: Bool = false, action: WinAction = .trash, askFirst: Bool = false) -> WinRow {
+    private func row(_ id: String, _ d: FakeDisk, _ path: String, tier: Tier = .yourCall, quick: Bool = false, action: WinAction = .trash, askFirst: Bool = false, box: BoxKind? = nil) -> WinRow {
         let node = d.node(path)
         var r = WinRow(id: id, title: id, subtitle: "", detail: "", tier: tier, nodes: [node], bytes: d.tree.totals[Int(node)], paperBytes: d.tree.totals[Int(node)], action: action, command: nil, bundleID: nil)
         r.isQuick = quick
         r.askFirst = askFirst
+        // As the finders say it: a model's row is in AI models, and so on.
+        r.box = box ?? (id.hasPrefix("model:") || id == "group:models" ? .models : id.hasPrefix("series:") ? .media : .other)
         return r
     }
 
-    func testWhatYoudMissLeastComesFirst() {
+    func testEachThingGoesInTheBoxItsFinderNamed() {
         let d = FakeDisk()
         d.file("/Volumes/Fake/Trash/a", gb)
         d.file("/Volumes/Fake/app/cache/b", 2 * gb)
@@ -166,9 +169,15 @@ final class SectionsTests: XCTestCase {
         d.file("/Volumes/Fake/film/review/still.png", 4 * gb, kind: .image)
         d.finish()
         let rows = [row("series:show", d, "/Volumes/Fake/TV/Show"), row("model:m", d, "/Volumes/Fake/LLM/model", tier: .redownload),
-                    row("cache", d, "/Volumes/Fake/app/cache", tier: .rebuilds, quick: true), row("trash", d, "/Volumes/Fake/Trash", tier: .noLoss, quick: true, action: .emptyTrash)]
-        let order = Sections.build(from: rows, tree: d.tree).sections.map(\.id)
-        XCTAssertEqual(order, ["trash", "quick", "models", "leftovers", "series"], "Biggest doesn't mean first: the series you haven't watched is last")
+                    row("Spotify cache", d, "/Volumes/Fake/app/cache", tier: .rebuilds, quick: true, box: .caches),
+                    row("trash", d, "/Volumes/Fake/Trash", tier: .noLoss, quick: true, action: .emptyTrash, box: .trash)]
+        let sections = Sections.build(from: rows, tree: d.tree).sections
+        XCTAssertEqual(Set(sections.map(\.id)), ["caches", "trash", "models", "leftovers", "largest"], "No box for the series: a collection isn't a suggestion")
+        XCTAssertEqual(sections.first { $0.id == "largest" }?.rows.map(\.title), ["S01E01.mp4"], "Its one huge episode is among the largest files, though")
+        let boxes = Sections.boxes(from: sections, tree: d.tree, focus: 0, kept: [])
+        XCTAssertEqual(boxes.map(\.id), ["trash", "leftovers", "models", "caches", "largest"], "The Trash first, then biggest first, and the shortlist under them")
+        XCTAssertEqual(boxes.first { $0.id == "trash" }?.isOneThing, true, "The Trash has nothing to open: it's one row with its own tick")
+        XCTAssertEqual(boxes.first { $0.id == "caches" }?.detail, "Spotify", "A cache is named for its app")
     }
 
     func testAGroupOfThingsBecomesOneThingEach() {
@@ -191,34 +200,6 @@ final class SectionsTests: XCTestCase {
         XCTAssertEqual(built.others.map(\.id), ["restart"])
     }
 
-    func testASeriesSplitsIntoWhatYouveWatchedAndWhatYouHavent() throws {
-        let d = FakeDisk()
-        for e in 1...4 { d.file("/Volumes/Fake/TV/Show/Season 01/Show S01E0\(e).mp4", gb, kind: .video) }
-        d.finish()
-        var facts = Facts.none
-        for e in 1...2 { facts.plexFiles["/Volumes/Fake/TV/Show/Season 01/Show S01E0\(e).mp4"] = Facts.PlexFile(views: 1, lastViewed: nil) }
-        for e in 3...4 { facts.plexFiles["/Volumes/Fake/TV/Show/Season 01/Show S01E0\(e).mp4"] = Facts.PlexFile(views: 0, lastViewed: nil) }
-        let built = Sections.build(from: [row("series:show", d, "/Volumes/Fake/TV/Show")], tree: d.tree, facts: facts)
-        let watched = try XCTUnwrap(built.sections.first { $0.id == "watched" }?.rows.first)
-        let rest = try XCTUnwrap(built.sections.first { $0.id == "series" }?.rows.first)
-        XCTAssertEqual(watched.nodes.count, 2)
-        XCTAssertEqual(rest.nodes.count, 2)
-        XCTAssertEqual(watched.bytes, 2 * gb)
-        XCTAssertEqual(rest.subtitle, "2 of 4 not watched")
-        XCTAssertEqual(rest.id, "series:show", "What you've said about the series still holds for what's left of it")
-    }
-
-    func testASeriesWithNothingWatchedStaysWhole() throws {
-        let d = FakeDisk()
-        d.file("/Volumes/Fake/TV/Show/Show S01E01.mp4", gb, kind: .video)
-        d.finish()
-        var facts = Facts.none
-        facts.plexFiles["/Volumes/Fake/TV/Show/Show S01E01.mp4"] = Facts.PlexFile(views: 0, lastViewed: nil)
-        let built = Sections.build(from: [row("series:show", d, "/Volumes/Fake/TV/Show")], tree: d.tree, facts: facts)
-        XCTAssertNil(built.sections.first { $0.id == "watched" })
-        XCTAssertEqual(built.sections.first { $0.id == "series" }?.rows.first?.nodes, [d.node("/Volumes/Fake/TV/Show")])
-    }
-
     // MARK: The picture on screen
 
     private func filmDisk() -> FakeDisk {
@@ -239,8 +220,8 @@ final class SectionsTests: XCTestCase {
     func testOnTheWholeDiskASectionIsOneBox() throws {
         let d = filmDisk()
         let boxes = Sections.boxes(from: filmSections(d), tree: d.tree, focus: 0, kept: [])
-        XCTAssertEqual(boxes.map(\.id), ["models", "leftovers"])
-        let leftovers = try XCTUnwrap(boxes.last)
+        XCTAssertEqual(boxes.map(\.id), ["leftovers", "models"], "Biggest first")
+        let leftovers = try XCTUnwrap(boxes.first)
         XCTAssertEqual(leftovers.kids.map(\.title), ["Review stills and clips", "Working folders"])
         XCTAssertEqual(leftovers.rows.count, 2, "Ticking it takes everything inside")
     }
@@ -262,7 +243,7 @@ final class SectionsTests: XCTestCase {
     func testWhatYoureKeepingLeavesItsBox() {
         let d = filmDisk()
         let boxes = Sections.boxes(from: filmSections(d), tree: d.tree, focus: 0, kept: ["model:a"])
-        XCTAssertEqual(boxes.first?.rows.map(\.id), ["model:b"])
+        XCTAssertEqual(boxes.first { $0.id == "models" }?.rows.map(\.id), ["model:b"])
     }
 
     func testAnAppKeepsItsSettingsWhenYoureLookingAtApplications() throws {

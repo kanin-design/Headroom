@@ -41,7 +41,7 @@ struct RootView: View {
         .toolbarTitleMenu { TitleMenu(model: model) }
         .toolbar { MainToolbar(model: model) }
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
-        .searchable(text: $model.searchText, isPresented: $model.searchActive, placement: .toolbar, prompt: "Find a file or folder")
+        .searchable(text: $model.searchText, isPresented: $model.searchActive, placement: .toolbar, prompt: "Search")
         .onChange(of: model.searchText) { _, text in
             model.runSearch()
             // What's found is listed in the inspector.
@@ -73,10 +73,10 @@ struct RootView: View {
         .preferredColorScheme(.dark)
         .focusEffectDisabled()
         .alert("\(model.busyToSend?.title ?? "This") is in use", isPresented: Binding(get: { model.busyToSend != nil }, set: { if !$0 { model.busyToSend = nil } }), presenting: model.busyToSend) { busy in
-            Button("Send to Trash Anyway", role: .destructive) { model.sendAnyway(busy) }
+            Button("Move to Trash Anyway", role: .destructive) { model.sendAnyway(busy) }
             Button("Cancel", role: .cancel) {}
         } message: { busy in
-            Text(busy.why + " You can undo this until the Trash is emptied.")
+            Text(busy.why + " Undo works until the Trash is emptied.")
         }
         .onAppear { model.start() }
         // A new version found at launch brings its window forward, and so does a launch without Full Disk Access.
@@ -102,8 +102,8 @@ struct RootView: View {
     /// Under the title: how far the scan has got, or how much is free, the same as in the middle of the ring. Inside a
     /// folder, which disk it's on as well.
     private var subtitle: String {
-        if model.isScanning { return model.scanFiles > 0 ? "Reading \(formatCount(model.scanFiles)) files" : "Reading" }
-        if !model.hasFullAccess, model.volume?.isBoot == true { return "Waiting for Full Disk Access" }
+        if model.isScanning { return model.scanFiles > 0 ? "Scanning… \(formatCount(model.scanFiles)) files" : "Scanning…" }
+        if !model.hasFullAccess, model.volume?.isBoot == true { return "Needs Full Disk Access" }
         guard let free = model.tree.map({ $0.totals[Int($0.free)] }) ?? model.volume?.free else { return "" }
         if model.focus != 0 { return "\(model.volume?.shownName ?? "Disk")  ·  \(formatBytes(free)) free" }
         let capacity = model.tree?.capacityBytes ?? model.volume?.capacity ?? 0
@@ -141,7 +141,7 @@ private struct MainToolbar: ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
             Button { model.scan(hurry: true) } label: { Label("Scan Again", systemImage: "arrow.clockwise") }
                 .disabled(model.scanIsHurrying)
-                .help("Read the disk again, at full power")
+                .help("Rescan everything at full speed")
         }
     }
 }
@@ -313,13 +313,9 @@ struct AccessCard: View {
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.75))
             VStack(alignment: .leading, spacing: 2) {
-                Text("Waiting for Full Disk Access")
+                Text("Needs Full Disk Access")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.95))
-                Text("macOS keeps Downloads, Desktop, Documents and other folders private, so Headroom reads nothing until it may read everything.")
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(.white.opacity(0.62))
-                    .fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: 330, alignment: .leading)
             Button("Allow Full Disk Access") { openWindow(id: "access") }

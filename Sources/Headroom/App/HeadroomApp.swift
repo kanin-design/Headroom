@@ -144,7 +144,7 @@ struct HeadroomApp: App {
                 Divider()
                 Button("Open") { AppModel.shared.open(AppModel.shared.actionTarget) }
                     .keyboardShortcut(.openThing)
-                Button("Reveal in Finder") { AppModel.shared.reveal(AppModel.shared.actionTarget) }
+                Button("Show in Finder") { AppModel.shared.reveal(AppModel.shared.actionTarget) }
                     .keyboardShortcut(.revealThing)
                 Button("Quick Look") { AppModel.shared.toggleLook() }
                     .keyboardShortcut(.quickLook)
@@ -152,7 +152,7 @@ struct HeadroomApp: App {
                 Menu("Delete") {
                     SendToTrashCommand()
                     Divider()
-                    Button("Select or Unselect in Free Up") { AppModel.shared.selectCommand() }
+                    Button("Select or Deselect in Free Up") { AppModel.shared.selectCommand() }
                         .keyboardShortcut(.selectThing)
                 }
             }
@@ -184,6 +184,8 @@ struct HeadroomApp: App {
                     .keyboardShortcut("2", modifiers: .command)
                 Button("Free Up") { AppModel.shared.setLens(.freeUp) }
                     .keyboardShortcut("3", modifiers: .command)
+                Button("Copies") { AppModel.shared.setLens(.copies) }
+                    .keyboardShortcut("4", modifiers: .command)
                 Divider()
                 Button("Back") { AppModel.shared.goBack() }
                     .keyboardShortcut("[", modifiers: .command)

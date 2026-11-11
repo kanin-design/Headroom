@@ -7,7 +7,7 @@ A Mac app that shows where your disk space went and how to get it back.
 Most disk maps, Baobab included, answer "what is the folder tree?" You came with other questions.
 They also get the numbers wrong in ways that matter:
 
-- **They show sizes you can't get back.** Two hard links to one film look like two films. A folder of
+- **They show sizes you can't get back.** Two hardlinks to one film look like two films. A folder of
   APFS clones can look like 24 GB and free almost nothing.
 - **They don't add up to the disk.** Swap, a downloaded macOS update and root-only data never appear,
   so the total is short and you can't tell why. Those three moved tens of gigabytes on this Mac in a
@@ -23,12 +23,13 @@ They also get the numbers wrong in ways that matter:
 | "How full am I, and what's biggest?" | One glance | The ring is already there when the window opens, with free space in the middle and the biggest things named around it |
 | "I had 41 GB yesterday. What happened?" | What changed | **Changes** lights up what grew and dims the rest, with a ranked list and a free-space history |
 | "What's just been sitting there?" | What hasn't changed | **Changes**, the other way round, lights up what nothing has changed in for a month, three months or a year |
-| "I need 20 GB now, without breaking anything" | Safe wins, ranked by risk | **Free Up** is a short stack of boxes, with what you'd miss least on top. One click selects a whole box, and the ring shows it before anything happens |
+| "I have this film in three places" | Duplicates, and what only looks like one | **Copies** gives each set of duplicates its own colour on the ring. Keep one, then delete, hardlink or symlink the rest |
+| "I need 20 GB now, without breaking anything" | Safe wins, ranked by risk | **Free Up** is a short stack of boxes, safest first. One click selects a whole box, and the ring shows it before anything happens |
 | "Which of these do I still need?" | Evidence, not a guess | Each suggestion says what's known: last opened, watched in Plex, last commit, no sign of use for 7 months |
-| "Wait, I want to keep that" | To change my mind | Nothing happens until you press Clean. One click unticks anything, and Keep stops suggesting it. After that it's in the Trash, and Undo puts it back |
-| "What is this folder? Can I delete it?" | A plain answer | Hover: name, size, what it is, what you'd really get back |
+| "Wait, I want to keep that" | To change my mind | Nothing happens until you press Clean. One click deselects anything, and Keep stops suggesting it. After that it's in the Trash, and Undo puts it back |
+| "What is this folder? Can I delete it?" | A plain answer | Hover: name, size, what it is, what deleting it really frees |
 | "Why doesn't it add up?" | The whole disk | The ring always sums to the real disk: macOS, swap, updates, hidden data, free |
-| "What's inside here?" | To go deeper | Click to zoom, click the middle to go back. Reveal in Finder, or Space for a card, a window of its own, that shows what's inside at once and plays a film where it is |
+| "What's inside here?" | To go deeper | Click to zoom, click the middle to go back. Show in Finder, or Space for a card, a window of its own, that shows what's inside at once and plays a film where it is |
 
 ## Principles
 
@@ -39,19 +40,23 @@ They also get the numbers wrong in ways that matter:
 2. **Colour means something.** In **Map**, it shows what belongs together. In **Changes**, it's how much of a
    piece is new or changed, red for a little and yellow for all of it, or how much of it is untouched, deep blue for a
    little and pale ice for all of it. In
-   **Free Up**, each box in the list has a colour and its files wear it, so the list is the legend. One geometry, three questions: changing the question recolours the
-   same picture, so you never lose your place.
+   **Free Up**, each box in the list has a colour and its files wear it, so the list is the legend. In **Copies**, each set of
+   copies has a colour and every copy wears it, so the same colour in two places is the same file. One geometry, four
+   questions: changing the question recolours the same picture, so you never lose your place.
 3. **Name things directly.** Big things are labelled on the map, so you don't need a legend or a hover
    to read it.
-4. **Sizes are true.** Hard links and clones count once. Every size on screen is space on the disk.
+4. **Sizes are true.** Hardlinks and clones count once. Every size on screen is space on the disk.
 5. **Free space is a real shape.** It's a visible part of the ring, and it's what grows when you clean
    up. That's the reward.
 6. **Nothing happens until you say so.** Ticks only select. Clean moves what's selected to the Trash, which stays visible on the map until you empty it, because space
-   isn't back until then. Emptying is always its own click. The one exception is Send to Trash, two steps into the Delete menu, for one thing you've
+   isn't back until then. Emptying is always its own click. The one exception is Move to Trash, two steps into the Delete menu, for one thing you've
    decided about: it goes at once, and Undo brings it back.
 7. **No waiting.** The window opens with a picture you can use. With a saved scan that's the whole map,
    refreshed quietly behind it. Without one, it's what the disk itself reports, and the big things arrive
    within about a second. Hover answers within the frame.
+8. **Standard terms, short labels.** Trash, duplicate, cache, hardlink, symlink: the words a Mac user already knows.
+   Labels, not sentences, and no captions under buttons. An explanation goes once, behind a **?** or in a tooltip. Rows
+   state facts, not verdicts.
 
 ## The hero: an answer you can read at a glance
 
@@ -72,7 +77,7 @@ sunburst in the reference:
   rest, with only a faint glow. Pointing at something brings it to full colour with its glow, lifts it and dims
   the rest, and related items light up together.
 
-## The three views
+## The four views
 
 - **Map:** you can read the structure from colour alone. Each big thing in view has its own colour from the
   whole spectrum, kept far from the pieces beside it. Headroom remembers it, so a folder keeps its colour
@@ -93,20 +98,47 @@ sunburst in the reference:
   old its files: an app you opened, a film Plex says you watched, a game Steam started, a video Spotlight saw you open.
   macOS's own parts and what Headroom leaves alone never count. Both scales in the inspector are drawn from the ring's own
   colours, starting from the quiet grey of a piece with none of it.
-- **Free Up:** a short stack of boxes, each one kind of thing, with what you'd miss least on top: the Trash, caches and
-  build output, AI models, project leftovers, installers, episodes you've watched, apps you don't seem to use, and so on
-  down to series you haven't watched. Biggest doesn't mean first: the order is what you'd miss least, then biggest.
+- **Free Up:** things you may want to delete, in boxes named for what they are: Caches, Junk, Developer, AI models, Games,
+  Unused apps, Leftover app data, iPhone backups, Old installers, Screenshots, Project leftovers. Biggest first, and
+  only the boxes this Mac has something for. A box earns its place by size, or by being something you'd clear anyway:
+  junk shows from 1 MB. Films and series aren't listed: nobody clears a collection from a cleanup list.
+
+  Each rule and each finder names its box (`BoxKind`), so a new kind of thing is one rule or one finder, with a test on a
+  made-up disk. Finding costs nothing extra: it uses the paths, names, sizes and dates the scan already has, plus one
+  listing of the folders screenshots are saved to. Old means 14 days for an installer and 7 for a
+  download that stopped.
+
+  **Select recommended** ticks caches not in use and junk, and nothing is ticked before it's pressed except the Trash.
+  Pointing at it shows what it would take. A tick on a box skips what's in use. **Largest files** is a shortlist under
+  the boxes: the 20 biggest files over 1 GB in your own folders that no box covers. It has no tick of its own and no
+  total, and it's never recommended.
 
   Boxes span folders, so `node_modules` in 14 projects lights up all 14 places at once. Name-based rules only apply inside
   your own folders. The same name inside an app, Homebrew or a tool's install is part of something that would stop
   working without it.
+- **Copies:** duplicates by content, plus the hardlinks, clones and symlinks already on the disk. Sets are rows like Free
+  Up's boxes, each with its own colour, which every copy wears on the ring. A folder that's mostly one set wears it too.
+  Pointing at a set lights its copies in that colour and tints the folders leading to each, more toward the copy; a lit
+  piece is drawn at least 4 pt wide, on top, so a copy too small to draw still shows. Ring labels give each copy's last two
+  folders, plus the folder where two paths differ when they'd read the same, and mark the copy to keep. The row says the
+  same in one line. Duplicates of many files in the same folders are one set, and a set keeps its colour while others
+  change.
+
+  An open set lists every copy: folder, name, date, size, with **Keep** on the one to keep. Clicking another copy keeps it
+  instead, and Headroom remembers. **Delete**, **Hardlink** and **Symlink** act on the rest. Ticking a set instead puts
+  its duplicates in the plan, for the next Clean. A **?** at the top says what each action does, in a line each. Labels use
+  the standard terms and say no more than they need to.
+
+  Hardlinks, clones and symlinks are folded below the duplicates. A hardlink or clone family has no original, since the disk
+  doesn't record which came first. Only files big enough to have their own piece are compared, and only when Copies is
+  opened, never at launch.
 
 ## Easy, with full control
 
 Someone opening a disk tool is asking "what can I get rid of that I won't miss?" So Headroom estimates regret, not
 just size. It asks four things about anything on the disk: what is it, can it come back, are you done with it, and what
-would you really get back? The sentence on screen comes from the answers, and it states facts: "6 episodes, 8.9 GB each,
-nearly 5x your other series. Opened Nov 1. Not watched in Plex."
+would you really get back? The line on screen comes from the answers, and it states facts: "6 episodes, 8.9 GB each,
+nearly 5x your other series · Opened Nov 1 · Not watched in Plex"
 
 **One set of data, shown two ways.** A section is a list of files and folders. The inspector shows its name, size and what
 it's made of, and the ring shows where those files are. Pointing or ticking in one shows in the other, because there's
@@ -121,7 +153,7 @@ of something bigger, lights the piece that holds it, so pointing at something al
 2. **A piece of its bar.** Each piece is one thing, to scale. Point at it to see what it is, and click to take just that.
 3. **Inside a box.** Open it to see each thing, with its evidence, Keep and Move. Open a thing to tick single files.
 4. **The ring.** A click on any piece selects it, and a double-click opens it, as in the Finder. What isn't part of any
-   box appears at the top as Picked by hand, so it can be seen and taken back.
+   box appears at the top as Selected manually, so it can be seen and deselected.
 
 **The ring shows what's selected.** Solid stays, striped goes, with a thin bright edge. The Free wedge grows in the
 colours of what's making room, in the order of the list, and the middle number rolls to the "after" figure. Hold Option
@@ -137,9 +169,9 @@ with the ring showing what each press did.
 
 **Checks run as you tick.** Each selected thing is looked at as soon as the ticking stops, and again just before anything
 moves. Is it still there? Is something running from it, or holding a file open in it? Has it changed since you selected it?
-Is the other disk plugged in, with room? Whatever needs a look shows at the top of the inspector with a reason and a fix (Quit
+Is the other disk connected, with room? Whatever needs attention shows at the top of the inspector with a reason and a fix (Quit
 Chrome, Clean anyway). Whatever isn't ready stays ticked, and everything else goes ahead. A check never has the last word on
-something that can be put back: something using a folder is a reason to ask, and the answer is yours. Send to Trash asks the
+something that can be put back: something using a folder is a reason to ask, and the answer is yours. Move to Trash asks the
 same thing straight away.
 
 **You can see it go.** Pieces leave as they're moved, and the Trash piece grows, labelled and striped. Free space
@@ -182,13 +214,23 @@ seconds a folder, and it rated a folder of finished films as the likeliest thing
   would be a guess.
 - If any sign says an app was used lately, it isn't suggested. The mistake this can make is staying quiet.
 - A file with another path gives nothing back until that path goes too, and the row says so. A torrent's copy goes with it,
-  unless it finished in the last 7 days and may still be sharing. Then it has its own tick, and the box offers to include
+  unless it finished in the last 7 days and may still be seeding. Then it has its own tick, and the box offers to include
   them all. Any other copy is only ever yours to tick.
 - Leftovers go by name and contents. "test", "work" or "old" only count inside a project, in a folder that's mostly
   pictures, video or sound, so a folder of code called `test` stays. Anything named saved, keep, master, gold or best stays,
   and so do other copies of a project in `.claude/worktrees`, because only git can say what's in those.
 - What only its own app can manage safely, such as a Photos library or Mail, gets an explanation and a button to that
   app, never a tick.
+- Copies never touches the copy to keep. By default that's the one not in Downloads, on the Desktop or in the Trash, nor in
+  a cache or build folder; then not named like a copy (`film copy.mov`, `Installer (1).dmg`, a folder `Photos copy`), even
+  in the same folder; then the older one, by a day or more; then the one in the folder with more files. Duplicates in the
+  same folders all keep their copies in the same one of them. On the startup disk only your own folders are compared, the
+  ones Free Up's names apply in; on any other disk, everything but the inside of apps and packages. A file that's only in
+  iCloud is never read, since reading it would download it.
+- Delete, Hardlink and Symlink read every byte of both files first, so a file that changed since it was compared is left
+  alone. Each copy is checked as anything cleaned is, then goes to the Trash on record before a link takes its place; if
+  the link can't be made, the copy comes straight back. A hardlink needs the same disk; a symlink holds the kept file's
+  full path. Undo removes the link only while it's still a hardlink or symlink to the kept file, then puts the copy back.
 - Moving to another disk copies, reads the copy back and compares every byte, and only then sends the original to the
   Trash. It never replaces a file that's already there. If it stops halfway, the original hasn't been touched.
 - Caches and build output only holds what really comes back by itself: build output with its recipe next to it, caches of apps
@@ -204,9 +246,9 @@ seconds a folder, and it rated a folder of finished films as the likeliest thing
   a mount point. Sealed system volumes come from APFS itself.
 - **The sum must reconcile.** Whatever the scan can't see becomes a labelled Hidden piece, so the ring
   always equals the disk.
-- **Hard links count once,** in the place you'd think of as home. "Downloads 7 GB, plus 88 GB of links
+- **Hardlinks count once,** in the place you'd think of as home. "Downloads 7 GB, plus 88 GB of hardlinks
   to Media" is the true answer.
-- **"You'd get back" is its own number.** Deleting either copy of a hard-linked file frees nothing.
+- **"Frees" is its own number.** Deleting either copy of a hardlinked file frees nothing.
   Deleting both frees it all. The cleanup preview does this sum for whatever you've ticked.
 
 ## Speed
@@ -217,7 +259,7 @@ folder's listing already says how many entries each subfolder has, so the scan k
 opening it.
 
 1. **First frame.** Free space, macOS and swap come straight from the disk, so they're exact. Everything else
-   is one hatched "Still reading" piece.
+   is one hatched "Not scanned yet" piece.
 2. **First look, under two seconds at full power.** Folders are read fewest entries first, with build
    folders and caches last. `~/Media` has 43 files holding 98 GB, so it's done within milliseconds.
 3. **The rest, in the background.** Three threads at low priority read the tiny files, and the hatched piece
@@ -233,7 +275,7 @@ Two details keep it honest while it runs:
 
 - The interface only ever reads a copy of the tables, taken every so often. So hovering, zooming and the inspector
   all work during the scan, and nothing can read a number that's being written.
-- A hard link in Downloads or a cache doesn't claim its file's bytes during the scan, because that's rarely the
+- A hardlink in Downloads or a cache doesn't claim its file's bytes during the scan, because that's rarely the
   file's home. Without this, 90 GB of films would sit under Downloads until the last moment, then jump to Media.
 
 Underneath:
@@ -271,7 +313,7 @@ Underneath:
   the ones with something changed in the last day, so that day stays exact to the minute, and any that couldn't be read.
   Everything else is copied from the map. A folder found inside one that's read again only counts as the same one if it
   hasn't been touched, moved or renamed since and holds as many things, so a folder put in another's place is read as new.
-  Everything is read once a day, and whenever you press ⌘R. A new hard link to a file in a copied folder could count that
+  Everything is read once a day, and whenever you press ⌘R. A new hardlink to a file in a copied folder could count that
   file twice, so then the refresh is thrown away and everything is read.
 - What only the scan needs lives in mapped tables too, so it goes back the moment the scan ends, where a heap allocation
   would stay with the app. While a scan runs, a picture is a copy of the whole tree, so there's never a second one waiting
@@ -302,6 +344,14 @@ Underneath:
   more than a few. Going deepest first also means one answer, whatever order the copies were found in, with nothing named
   twice. The biggest copy comes first, because that's the one the inspector names.
 - A folder's thumbnails are asked for together, and each shows as soon as it's ready.
+- Finding duplicates starts from sizes already in the map, so a file with no other of its size is never opened. Files of one
+  size are read side by side, a piece at a time, on four threads, biggest sets first: the first 16 KB, then the last 16 KB,
+  where many files that start alike differ, then the middle in pieces growing to 4 MB. A file drops out the moment it's like
+  no other, so most cost one small read, and nothing is read twice. What's left at the end is the same byte for byte, with no
+  hash to take on trust, and a file that changed while it was read drops out. Reads skip the file cache, so what you have open
+  stays fast. Each file is remembered with its size, date and set, so a later look reads only sets with something new.
+- Aliases are counted in each folder as the scan reads it, in the numbers that add up the tree, which a refresh already copies.
+  So finding them opens only the folders that hold one, and reads where each points then.
 
 Measured on this Mac, an M5 MacBook Air with 2.1 million files and a 494 GB disk, without Full Disk Access:
 
@@ -338,6 +388,8 @@ And with Full Disk Access, for what happens after the scan:
 | Copying 1,000 small files, compared and on the disk for good | 0.9 s |
 | Finding the other copies of 1,500 clones | About 30 ms |
 | Six thumbnails | About 160 ms |
+| Finding duplicates among 465 files of the same sizes, 5.6 GB, none of it in the file cache | 1.3 s, reading at 4.2 GB/s on four threads, for 152 sets. Ten files alike but for their last byte cost two 16 KB reads each |
+| Copies again, nothing changed | The sets come back from memory, with nothing read, in under a millisecond |
 
 The scan's limit is APFS itself: about 15 µs per file in the kernel, whichever attributes are requested. Folders
 store no total size, and Spotlight only knows part of the disk. So the design makes the wait not matter, rather than

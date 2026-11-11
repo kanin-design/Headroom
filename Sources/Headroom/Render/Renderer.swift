@@ -30,7 +30,9 @@ struct UniformsGPU {
     var previewShare: Float = 0     // what the thing you're pointing at would add to that
     var ghostCount: Float = 0       // how many colours it has
     var freeOuter: Float = 1        // how far out the free wedge reaches, as a share of the radius
+    var minLit: Float = 0           // points: the least a lit piece is drawn across while a tint shows
     var previewColor: SIMD4<Float> = .zero
+    var tint: SIMD4<Float> = .zero  // the colour lit pieces take on, and in w how much
     // Each colour's RGB, and in w where it ends, as a share of the whole. As long as `MapEngine.ghostSliceLimit`.
     var ghostSlices: (SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>)
         = (.zero, .zero, .zero, .zero, .zero, .zero, .zero, .zero, .zero, .zero, .zero, .zero)
@@ -159,9 +161,15 @@ final class MapRenderer {
         values.withUnsafeBytes { raw in
             (emphasisBuffer.contents() + emphasisOffset).copyMemory(from: raw.baseAddress!, byteCount: bytes)
         }
-        // Past 1, emphasis lifts a piece outward: see the segment shader.
-        lifted = values.indices.filter { values[$0] > 1 }.sorted { values[$0] < values[$1] }
+        // Past 1, emphasis lifts a piece outward: see the segment shader. While a tint shows, what's lit is drawn over its
+        // neighbours too, since it may be drawn wider than its place; when that's a great many pieces, only the lifted ones.
+        let over = liftLit ? values.indices.filter { values[$0] > 0.9 } : []
+        let onTop = !over.isEmpty && over.count <= 256 ? over : values.indices.filter { values[$0] > 1 }
+        lifted = onTop.sorted { values[$0] < values[$1] }
     }
+
+    /// Whether lit pieces are drawn over the others: while a tint shows.
+    var liftLit = false
 
     private func prepareTargets(width: Int, height: Int) {
         if renderSize == (width, height), piecesTexture != nil { return }

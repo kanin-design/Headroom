@@ -201,6 +201,8 @@ struct CleanedThing: Codable, Equatable {
     var bytes: UInt64
     /// Which file this is, so something else that later has the same name in the Trash can't be mistaken for it.
     var identity: String? = nil
+    /// A copy replaced by a hard link to this path, the copy that stayed. Putting it back takes that link away first.
+    var linkedTo: String? = nil
 }
 
 /// What's kept on disk between launches.

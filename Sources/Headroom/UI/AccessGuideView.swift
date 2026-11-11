@@ -13,7 +13,7 @@ struct AccessGuideView: View {
                 .resizable()
                 .frame(width: 84, height: 84)
             VStack(spacing: 6) {
-                Text("Let Headroom see the whole disk")
+                Text("Allow Full Disk Access")
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.95))
                 Text(why)
@@ -25,7 +25,7 @@ struct AccessGuideView: View {
             }
             .padding(.top, 12)
             steps
-            Text("Headroom uses it to measure, and nothing about your disk leaves your Mac.")
+            Text("Nothing about your disk leaves your Mac.")
                 .font(.system(size: 11))
                 .foregroundStyle(.white.opacity(0.45))
                 .multilineTextAlignment(.center)
@@ -34,7 +34,7 @@ struct AccessGuideView: View {
             HStack(spacing: 10) {
                 Button("Not Now") { notNow() }
                     .buttonStyle(.glass)
-                    .help("The card on the map stays, and this comes back with the next version")
+                    .help("Hide until the next version")
                 Spacer()
                 Button("Open System Settings") { model.openFullDiskAccess() }
                     .buttonStyle(.glassProminent)
@@ -58,14 +58,13 @@ struct AccessGuideView: View {
     }
 
     /// What's private, and why Headroom waits rather than ask about each folder.
-    private let why = "macOS keeps Desktop, Documents, Downloads, Mail, Messages and other apps' data private. Rather than ask "
-        + "you about each folder, Headroom reads nothing until it may read everything."
+    private let why = "Required to scan Desktop, Documents, Downloads, Mail, Messages and other app data. Without it, Headroom reads nothing."
 
     private var steps: some View {
         VStack(alignment: .leading, spacing: 12) {
-            step(1, "Open System Settings, at Privacy & Security, Full Disk Access.")
-            step(2, "Switch on Headroom. If it's on already, switch it off and on again. If it isn't in the list, click + and choose it.")
-            step(3, "If macOS offers Quit & Reopen, take it. Headroom then reads the whole disk by itself.")
+            step(1, "Open System Settings › Privacy & Security › Full Disk Access.")
+            step(2, "Turn on Headroom. If it's already on, turn it off and on again. If it's not listed, click + and add it.")
+            step(3, "If asked, click Quit & Reopen. The scan starts by itself.")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)

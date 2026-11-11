@@ -11,6 +11,8 @@ struct Section {
     var rows: [WinRow] = []
     /// Kinds within this kind. Looking inside a folder, they become boxes of their own.
     var kids: [Section] = []
+    /// A short list to pick from, not a suggestion: it's never ticked as a whole, and its total isn't a promise.
+    var isShortlist = false
 
     var allRows: [WinRow] { rows + kids.flatMap(\.allRows) }
 }
@@ -26,15 +28,20 @@ struct Box: Identifiable {
     var kids: [Box] = []
     /// It stands for one thing, so it has that thing's name, and what you can do to that thing.
     var isOneThing = false
+    /// A short list to pick from, such as the largest files: no tick for the lot, and it sits under the suggestions.
+    var isShortlist = false
 
     var bytes: UInt64 { rows.reduce(0) { $0 &+ $1.gain } }
 
     /// What a tick on the box takes. What you set up by hand, or may be sorry to lose, stays for a tick of its own, unless
     /// that's all there is: then you can only mean that.
     var rowsATickTakes: [WinRow] {
-        let plain = rows.filter { !$0.askFirst }
+        let plain = rows.filter { !$0.askFirst && $0.inUse == nil }
         return plain.isEmpty ? rows : plain
     }
+
+    /// What Select recommended would tick in this box.
+    var recommended: [WinRow] { isShortlist ? [] : rows.filter(\.isRecommended) }
 }
 
 /// Everything that could go in the picture, sorted by what it is, what you'd miss least first.
@@ -52,102 +59,146 @@ enum Sections {
     /// A leftover has to be at least this big to be worth a line.
     static let smallestLeftover: UInt64 = 5_000_000
 
+    /// An installer is old once it has sat for this long: a fresh download may not be installed yet.
+    static let installerOldDays: UInt32 = 14
+    /// The largest files are the ones this big and up, and no more of them than this.
+    static let largeFile: UInt64 = 1_000_000_000
+    static let mostLargeFiles = 20
+
+    /// Every box of Free Up, from what was found. A row says which box it's in, so this only names the boxes and says what's
+    /// in each. Boxes with nothing in them don't exist: a Mac without games has no Games.
     static func build(from wins: [WinRow], tree: DiskTree, facts: Facts = .none, now: Date = Date()) -> Suggestions {
         var flat: [WinRow] = []
         for row in wins {
             if row.parts.isEmpty { flat.append(row) } else { flat += row.parts }
         }
-        var trash: [WinRow] = [], quick: [WinRow] = [], models: [WinRow] = [], series: [WinRow] = [], films: [WinRow] = [], apps: [WinRow] = []
-        var games: [WinRow] = [], android: [WinRow] = [], frames: [WinRow] = [], repos: [WinRow] = [], left: [WinRow] = [], used: [WinRow] = [], other: [WinRow] = []
+        var found: [BoxKind: [WinRow]] = [:]
         var others: [WinRow] = []
         for row in flat {
             guard row.isPlannable else {
                 others.append(row)
                 continue
             }
-            let path = row.nodes.first.flatMap { tree.path($0) } ?? ""
-            if row.action == .emptyTrash { trash.append(row) }
-            else if row.isQuick { quick.append(row) }
-            else if row.id.hasPrefix("model:") || path.contains("/LLM/") { models.append(modelRow(row, tree: tree)) }
-            else if row.id.hasPrefix("series:") { series.append(row) }
-            else if row.id.hasPrefix("film:") { films.append(row) }
-            else if row.id.hasPrefix("app:") { apps.append(row) }
-            else if row.id.hasPrefix("steam:") { games.append(row) }
-            else if path.contains("/Android/") || path.contains("/.android/") { android.append(row) }
-            else if row.id.hasPrefix("frames:") { frames.append(row) }
-            else if row.id.hasPrefix("repo:") { repos.append(row) }
-            else if row.id.hasPrefix("left:") { left.append(row) }
-            // Found again below, file by file, wherever they are.
-            else if row.id == "group:installers" { continue }
-            else if row.tier == .rebuilds { used.append(row) }
-            else { other.append(row) }
-        }
-
-        var watched: [WinRow] = [], unwatched: [WinRow] = []
-        var seenEpisodes = 0
-        var videos: [UInt32] = []
-        if !series.isEmpty, !facts.plexFiles.isEmpty {
-            for i in 1..<max(tree.count, 1) {
-                let n = tree.nodes[i]
-                if n.kind == Kind.video.rawValue, n.flags & (NodeFlag.directory | NodeFlag.synthetic | NodeFlag.alias | NodeFlag.gone) == 0 { videos.append(UInt32(i)) }
-            }
-        }
-        for row in series {
-            let split = splitByWatched(row, videos: videos, tree: tree, facts: facts, now: now)
-            if let seen = split.seen { watched.append(seen); seenEpisodes += split.seenCount }
-            if let rest = split.rest { unwatched.append(rest) }
+            found[row.box, default: []].append(row.box == .models ? modelRow(row, tree: tree) : row)
         }
 
         // What's left over in your own folders, by what it is. The advisor's numbered frames join in, unless the names found them.
-        let found = Leftovers.find(in: tree)
-        let foundSet = NodeSet(found.map(\.node), in: tree)
+        let leftovers = Leftovers.find(in: tree)
+        let leftoverSet = NodeSet(leftovers.map(\.node), in: tree)
         var kinds: [Leftovers.Role: [WinRow]] = [:]
-        var fresh: [WinRow] = found.map { leftoverRow($0, tree: tree) }
+        var fresh: [WinRow] = leftovers.map { leftoverRow($0, tree: tree) }
         Wins.settleReclaim(&fresh, tree: tree)
-        for (row, one) in zip(fresh, found) where row.gain >= smallestLeftover { kinds[one.role, default: []].append(row) }
-        for row in frames where !row.nodes.allSatisfy({ foundSet.contains($0) }) { kinds[.scenes, default: []].append(row) }
-        // A big old file is its own suggestion, unless it's already part of a folder of leftovers.
-        other.removeAll { $0.nodes.allSatisfy { foundSet.contains($0) } }
+        let installerCutoff = UInt32(seconds: now.timeIntervalSince1970) &- installerOldDays * 86_400
+        for (row, one) in zip(fresh, leftovers) where row.gain >= smallestLeftover {
+            // A download from this week may still be waiting to be installed.
+            if one.role == .installers, tree.nodes[Int(one.node)].modTime >= installerCutoff { continue }
+            kinds[one.role, default: []].append(row)
+        }
+        for row in found[.leftovers] ?? [] where !row.nodes.allSatisfy({ leftoverSet.contains($0) }) { kinds[.scenes, default: []].append(row) }
+        found[.installers] = kinds[.installers]
 
         var kids: [Section] = []
         for role in Leftovers.Role.inOrder {
             guard let rows = kinds[role], !rows.isEmpty else { continue }
-            kids.append(Section(id: "leftovers." + role.key, title: role.title, detail: rows.count == 1 ? "1 place" : "\(rows.count) places", color: role.color, rows: biggestFirst(rows)))
+            kids.append(Section(id: "leftovers." + role.key, title: role.title, detail: rows.count == 1 ? "1 folder" : "\(rows.count) folders", color: role.color, rows: biggestFirst(rows)))
         }
 
         var out: [Section] = []
-        func add(_ id: String, _ title: String, _ detail: String, note: String? = nil, _ color: Lab, _ rows: [WinRow]) {
-            guard !rows.isEmpty else { return }
-            out.append(Section(id: id, title: title, detail: detail, note: note, color: color, rows: biggestFirst(rows)))
+        func add(_ box: BoxKind, _ title: String, _ color: Lab, detail: ([WinRow]) -> String) {
+            guard let rows = found[box], !rows.isEmpty else { return }
+            out.append(Section(id: box.rawValue, title: title, detail: detail(rows), color: color, rows: biggestFirst(rows)))
         }
-        add("trash", "Trash", "Already thrown away", Palette.Box.trash, trash)
-        add("quick", "Caches and build output", "Rebuilds itself. Nothing you'd miss", Palette.Box.quick, quick)
-        add("models", "AI models", models.count == 1 ? "Downloads again if needed" : "\(models.count) models. They download again if needed", Palette.Box.models, models)
+        func counted(_ one: String, _ many: String) -> ([WinRow]) -> String {
+            { rows in rows.count == 1 ? "1 \(one)" : "\(rows.count) \(many)" }
+        }
+        // How many files a box of files holds, on the map or too small for it.
+        func files(_ rows: [WinRow]) -> String {
+            let count = rows.reduce(0) { $0 + $1.nodes.count + $1.extraPaths.count }
+            return count == 1 ? "1 file" : "\(count) files"
+        }
+        add(.trash, "Trash", Palette.Box.trash, detail: names)
+        add(.caches, "Caches", Palette.Box.quick, detail: names)
+        add(.junk, "Junk", Palette.Box.junk, detail: names)
+        add(.developer, "Developer", Palette.Box.android, detail: names)
+        add(.models, "AI models", Palette.Box.models, detail: counted("model", "models"))
+        add(.games, "Games", Palette.Box.games, detail: counted("game", "games"))
+        add(.apps, "Unused apps", Palette.Box.apps, detail: counted("app", "apps"))
+        add(.removedApps, "Leftover app data", Palette.Box.left, detail: counted("removed app", "removed apps"))
+        add(.backups, "iPhone backups", Palette.Box.watched) { rows in
+            let count = rows.flatMap(\.nodes).reduce(0) { $0 + tree.children($1).filter { tree.nodes[Int($0)].has(NodeFlag.directory) }.count }
+            return count == 1 ? "1 backup" : "\(count) backups"
+        }
+        add(.installers, "Old installers", Palette.Box.installers, detail: files)
+        add(.screenshots, "Screenshots", Palette.Box.screenshots, detail: files)
+        add(.other, "Other", Palette.Box.other, detail: names)
         if !kids.isEmpty {
-            out.append(Section(id: "leftovers", title: "Project leftovers", detail: "Old versions, renders, review stills", color: Palette.Box.leftovers, kids: kids))
+            out.append(Section(id: BoxKind.leftovers.rawValue, title: "Project leftovers", detail: "Old versions, renders, review stills", color: Palette.Box.leftovers, kids: kids))
         }
-        let installers = kinds[.installers] ?? []
-        add("installers", "Installers and archives", installers.count == 1 ? "A file you may be done with" : "\(installers.count) files you may be done with", Palette.Box.installers, installers)
-        add("watched", "Episodes you've watched", seenEpisodes == 1 ? "1 episode, going by Plex" : "\(seenEpisodes) episodes, going by Plex", Palette.Box.watched, watched)
-        add("apps", "Apps you don't seem to use", "No sign of use for 6 months", Palette.Box.apps, apps)
-        add("left", "Left behind by old apps", "The app isn't on this Mac", Palette.Box.left, left)
-        add("used", "Caches you've used lately", "Rebuild themselves, but apps start slower", Palette.Box.used, used)
-        let androidRunning = android.contains { $0.inUse?.contains("running") == true }
-        add("android", "Android tools and emulator", "Download again if needed", note: androidRunning ? "Running now" : nil, Palette.Box.android, android)
-        add("games", "Games", "Steam can download these again", Palette.Box.games, games)
-        add("repos", "Projects you could clone again", "Everything is pushed", Palette.Box.repos, repos)
-        add("films", "Films", names(films), Palette.Box.films, films)
-        add("other", "Other big things", names(other), Palette.Box.other, other)
-        add("series", "Series you haven't watched", names(unwatched), Palette.Box.series, unwatched)
+
+        // Last, the largest files that aren't in a box already: where the one huge thing you forgot turns up.
+        let large = largestFiles(tree: tree, besides: out.flatMap(\.allRows) + others, facts: facts, now: now)
+        if !large.isEmpty {
+            let detail = large.count == 1 ? "1 file" : "\(large.count) files"
+            out.append(Section(id: BoxKind.largest.rawValue, title: "Largest files", detail: detail, color: Palette.Box.other, rows: large, isShortlist: true))
+        }
         return Suggestions(sections: out, others: others)
     }
 
+    /// The biggest single files in your own folders that nothing else lists. Apps, libraries and anything with a rule of its
+    /// own are left out: these are files you'd know by name.
+    static func largestFiles(tree: DiskTree, besides listed: [WinRow], facts: Facts, now: Date) -> [WinRow] {
+        let nodes = tree.nodes
+        let taken = NodeSet(listed.flatMap(\.nodes), in: tree)
+        var big: [UInt32] = []
+        for i in 1..<max(tree.count, 1) {
+            let n = nodes[i]
+            guard n.flags & (NodeFlag.directory | NodeFlag.synthetic | NodeFlag.alias | NodeFlag.gone) == 0, n.rule == 0, tree.totals[i] >= largeFile else { continue }
+            // On the startup disk, only your own folders. On any other disk, anything that isn't inside a package.
+            if tree.home != 0 ? !nodes[Int(n.parent)].has(NodeFlag.projects) : isInsidePackage(UInt32(i), tree: tree) { continue }
+            if taken.contains(UInt32(i)) { continue }
+            big.append(UInt32(i))
+        }
+        big.sort { tree.totals[Int($0)] > tree.totals[Int($1)] }
+        let videoLinks = tree.links.filter { $0.kind == Kind.video.rawValue }
+        return big.prefix(mostLargeFiles).compactMap { node in
+            guard let path = tree.path(node), Safety.canTrash(path) else { return nil }
+            let total = tree.totals[Int(node)]
+            let folder = DiskTree.friendly((tree.friendlyPath(node) as NSString).deletingLastPathComponent)
+            let when = nodes[Int(node)].modTime == 0 ? "" : " · " + Titles.dayText(Date(timeIntervalSince1970: TimeInterval(nodes[Int(node)].modTime)), now: now)
+            var row = WinRow(id: "largest:" + tree.friendlyPath(node), title: tree.name(node), subtitle: folder + when, detail: tree.friendlyPath(node), tier: .yourCall,
+                             nodes: [node], bytes: Accounting.reclaimable([node], in: tree), paperBytes: total, action: .trash, command: nil, bundleID: nil)
+            row.box = .largest
+            row.previewPath = path
+            // A film that's also a torrent's copy frees nothing until that goes too, and the row says so.
+            if nodes[Int(node)].kind == Kind.video.rawValue {
+                Advisors.addOtherCopies(to: &row, title: row.title, links: videoLinks, tree: tree, facts: facts, now: now)
+            }
+            return row
+        }
+    }
+
+    /// Whether a file sits inside something macOS shows as one thing: an app, a library, a project bundle.
+    private static func isInsidePackage(_ node: UInt32, tree: DiskTree) -> Bool {
+        var a = tree.nodes[Int(node)].parent
+        while a != 0 {
+            let n = tree.nodes[Int(a)]
+            if n.has(NodeFlag.anchor) || n.has(NodeFlag.synthetic) { return false }
+            if packageEndings.contains((tree.name(a) as NSString).pathExtension.lowercased()) { return true }
+            a = n.parent
+        }
+        return false
+    }
+
+    private static let packageEndings: Set<String> = ["app", "bundle", "framework", "plugin", "kext", "photoslibrary", "musiclibrary", "tvlibrary", "imovielibrary", "fcpbundle",
+                                                      "logicx", "band", "sparsebundle", "backupbundle", "xcarchive", "pkg", "vmwarevm", "pvm", "utm"]
+
     private static func biggestFirst(_ rows: [WinRow]) -> [WinRow] { rows.sorted { $0.gain > $1.gain } }
 
+    /// The biggest few by name, then how many more: "Spotify, Chrome +14". A cache is named for its app.
     private static func names(_ rows: [WinRow]) -> String {
         let sorted = biggestFirst(rows)
-        let first = sorted.prefix(2).map(\.title).joined(separator: ", ")
-        return sorted.count > 2 ? "\(first) and \(sorted.count - 2) more" : first
+        let first = sorted.prefix(3).map { $0.title.hasSuffix(" cache") ? String($0.title.dropLast(6)) : $0.title }.joined(separator: ", ")
+        return sorted.count > 3 ? "\(first) +\(sorted.count - 3)" : first
     }
 
     /// What a model is called, without who made it, and when it arrived. macOS can't say when a file was last used, so nothing here
@@ -155,7 +206,7 @@ enum Sections {
     private static func modelRow(_ row: WinRow, tree: DiskTree) -> WinRow {
         var copy = row
         copy.title = row.title.split(separator: "/").last.map(String.init) ?? row.title
-        let bits = row.subtitle.components(separatedBy: ". ")
+        let bits = row.subtitle.components(separatedBy: " · ")
         var when = bits.last { $0.hasPrefix("Downloaded") } ?? ""
         if when.hasSuffix(".") { when.removeLast() }
         if when.isEmpty, let node = row.nodes.first, tree.nodes[Int(node)].modTime != 0 {
@@ -181,33 +232,6 @@ enum Sections {
         let title = found.role == .installers ? tree.name(node) : (reached ? parts : Array(parts.suffix(3))).joined(separator: " › ")
         return WinRow(id: "leftover:" + path, title: title, subtitle: DiskTree.friendly((path as NSString).deletingLastPathComponent), detail: found.role.detail, tier: .yourCall,
                       nodes: [node], bytes: total, paperBytes: total, action: .trash, command: nil, bundleID: nil)
-    }
-
-    /// A series is two decisions once you've seen part of it: what you've watched, and what you haven't.
-    static func splitByWatched(_ row: WinRow, videos: [UInt32], tree: DiskTree, facts: Facts, now: Date) -> (seen: WinRow?, rest: WinRow?, seenCount: Int) {
-        guard !facts.plexFiles.isEmpty else { return (nil, row, 0) }
-        let set = NodeSet(row.nodes, in: tree)
-        var seen: [UInt32] = [], rest: [UInt32] = []
-        for video in videos where set.contains(video) {
-            guard let path = tree.path(video).map(Facts.visible) else { continue }
-            if (facts.plexFiles[path]?.views ?? 0) > 0 { seen.append(video) } else { rest.append(video) }
-        }
-        let count = seen.count + rest.count
-        if seen.isEmpty { return (nil, row, 0) }
-        if rest.isEmpty {
-            var whole = row
-            whole.id = "watched:" + row.id
-            whole.subtitle = count == 1 ? "Watched" : "All \(count) episodes"
-            return (whole, nil, count)
-        }
-        let links = tree.links.filter { $0.kind == Kind.video.rawValue }
-        func part(_ id: String, _ nodes: [UInt32], _ text: String) -> WinRow {
-            let bytes = nodes.reduce(UInt64(0)) { $0 &+ tree.totals[Int($1)] }
-            var one = WinRow(id: id, title: row.title, subtitle: text, detail: row.detail, tier: row.tier, nodes: nodes, bytes: bytes, paperBytes: bytes, action: .trash, command: nil, bundleID: nil)
-            Advisors.addOtherCopies(to: &one, title: row.title, links: links, tree: tree, facts: facts, now: now)
-            return one
-        }
-        return (part("watched:" + row.id, seen, "\(seen.count) of \(count) episodes"), part(row.id, rest, "\(rest.count) of \(count) not watched"), seen.count)
     }
 
     // MARK: The picture on screen
@@ -240,13 +264,18 @@ enum Sections {
         for section in sections {
             if section.kids.isEmpty {
                 let inside = ranked(rows(section.rows))
-                if !inside.isEmpty { out.append(Box(id: section.id, title: section.title, detail: section.detail, note: section.note, color: section.color, rows: inside)) }
+                if section.id == BoxKind.trash.rawValue, let row = inside.first {
+                    // Nothing to open: the Trash is one thing, with its own tick.
+                    out.append(Box(id: section.id, title: row.title, detail: row.subtitle, color: section.color, rows: [row], isOneThing: true))
+                } else if !inside.isEmpty {
+                    out.append(Box(id: section.id, title: section.title, detail: section.detail, note: section.note, color: section.color, rows: inside, isShortlist: section.isShortlist))
+                }
                 continue
             }
             let kids = section.kids.compactMap { kid -> Box? in
                 let inside = ranked(rows(kid.rows))
                 guard !inside.isEmpty else { return nil }
-                return Box(id: kid.id, title: kid.title, detail: inside.count == 1 ? "1 place" : "\(inside.count) places", color: focus == 0 ? section.color : kid.color, rows: inside)
+                return Box(id: kid.id, title: kid.title, detail: inside.count == 1 ? "1 folder" : "\(inside.count) folders", color: focus == 0 ? section.color : kid.color, rows: inside)
             }
             guard !kids.isEmpty else { continue }
             if focus == 0 {
@@ -255,7 +284,11 @@ enum Sections {
                 out += kids
             }
         }
-        if focus != 0, out.count == 1, out[0].kids.isEmpty, out[0].rows.count > 1, out[0].rows.count <= 16 {
+        // The Trash first: it's what you've already thrown away. Then biggest first, whatever it is, and the shortlist under
+        // them, since it isn't a suggestion.
+        func place(_ box: Box) -> Int { box.id == BoxKind.trash.rawValue ? 0 : box.isShortlist ? 2 : 1 }
+        out.sort { a, b in place(a) != place(b) ? place(a) < place(b) : a.bytes > b.bytes }
+        if focus != 0, out.count == 1, out[0].kids.isEmpty, !out[0].isShortlist, out[0].rows.count > 1, out[0].rows.count <= 16 {
             return out[0].rows.enumerated().map { at, row in
                 Box(id: "thing:" + row.id, title: row.title, detail: row.subtitle, note: row.inUse, color: Palette.Box.spread[at % Palette.Box.spread.count], rows: [row], isOneThing: true)
             }
@@ -324,15 +357,15 @@ enum Leftovers {
 
         var detail: String {
             switch self {
-            case .tests: "Named as a test or a scratch folder, and mostly pictures, video or sound."
-            case .scenes: "Named as scene renders or frames. They can be made again if you still have what made them."
-            case .review: "Named as stills or clips for checking work. They can be made again if you still have what made them."
-            case .olderVersions: "A newer version of this is nearby. Anything named saved, keep or master is left out."
-            case .oldFolders: "A folder of an earlier version, or an older one of a numbered set."
-            case .working: "A working folder, mostly pictures, video or sound. Look before you decide."
-            case .backups: "A backup inside a project. Look before you decide."
-            case .olderFinals: "An older version in a folder of finals. A newer one is there too."
-            case .installers: "A disk image or an archive. Once it's installed or unpacked, you rarely need it."
+            case .tests: "Test or scratch folder, mostly media files."
+            case .scenes: "Scene renders or frames. They can be rendered again from the project."
+            case .review: "Review stills or clips. They can be rendered again from the project."
+            case .olderVersions: "A newer version is nearby. Names with saved, keep or master are skipped."
+            case .oldFolders: "An earlier version's folder, or an older one in a numbered set."
+            case .working: "Working folder, mostly media files. Review before deleting."
+            case .backups: "Backup inside a project. Review before deleting."
+            case .olderFinals: "Older version among finals. A newer one is there too."
+            case .installers: "Disk image or archive. Rarely needed once installed or unpacked."
             default: ""
             }
         }

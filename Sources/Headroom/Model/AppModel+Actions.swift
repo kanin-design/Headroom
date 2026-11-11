@@ -117,13 +117,13 @@ extension AppModel {
         add(paths.count == 1 ? "Copy Path" : "Copy Paths", "doc.on.doc", .copyPath) { self.copyPath(of: thing) }
 
         guard let node = thing.single, let path = paths.first else {
-            add("Reveal in Finder", "folder", .revealThing, startsGroup: true) { self.reveal(thing) }
+            add("Show in Finder", "folder", .revealThing, startsGroup: true) { self.reveal(thing) }
             if thing.toggle != nil { list.append(selectAction(for: thing, startsGroup: true, tree: tree)) }
             return list
         }
 
         add("Open", "arrow.up.forward.app", .openThing, startsGroup: true) { self.open(thing) }
-        add("Reveal in Finder", "folder", .revealThing) { self.reveal(thing) }
+        add("Show in Finder", "folder", .revealThing) { self.reveal(thing) }
         add("Quick Look", "eye", .quickLook) { self.openLook(thing) }
         if node == 0 || tree.nodes[Int(node)].has(NodeFlag.directory) {
             add("Open in Terminal", "terminal") { self.openInTerminal(path) }
@@ -155,11 +155,11 @@ extension AppModel {
         guard let tree, let node = thing.single, node != 0, let raw = tree.path(node) else { return [] }
         guard Safety.canTrash(raw) else {
             let isFolder = tree.nodes[Int(node)].firstChild != 0
-            let why = isFolder ? "Can't go as a whole. Open this folder to choose what's inside." : "Protected, so this can't go."
+            let why = isFolder ? "Protected folder: open it to choose items" : "Protected"
             return [ThingAction(title: why, symbol: "lock", isNote: true)]
         }
         return [
-            ThingAction(title: "Send to Trash", symbol: "trash", run: stillThisScan(tree) { self.sendToTrash(thing) }),
+            ThingAction(title: "Move to Trash", symbol: "trash", run: stillThisScan(tree) { self.sendToTrash(thing) }),
             ThingAction(title: freesText(node, in: tree), symbol: "info.circle", isNote: true),
             selectAction(for: thing, startsGroup: true, tree: tree),
         ]
@@ -169,7 +169,7 @@ extension AppModel {
         let isOn = plannedTest()
         let planned = thing.nodes.allSatisfy { isOn($0) }
         let place = lens == .freeUp ? "" : " in Free Up"
-        return ThingAction(title: (planned ? "Unselect" : "Select") + place, symbol: planned ? "minus.circle" : "plus.circle", shortcut: .selectThing,
+        return ThingAction(title: (planned ? "Deselect" : "Select") + place, symbol: planned ? "minus.circle" : "plus.circle", shortcut: .selectThing,
                            startsGroup: startsGroup, run: stillThisScan(tree) { self.toggleSelection(of: thing) })
     }
 
@@ -179,7 +179,7 @@ extension AppModel {
         guard !tree.links.isEmpty else { return "Frees \(formatBytes(size)) once the Trash is emptied" }
         let story = Accounting.story(node, in: tree)
         if Double(story.reclaim) < Double(size) * 0.9, let place = story.sharedPlace {
-            return "Frees \(formatBytes(story.reclaim)): the same files are in \(place)"
+            return "Frees \(formatBytes(story.reclaim)): hardlinked or cloned with \(place)"
         }
         return "Frees \(formatBytes(story.reclaim)) once the Trash is emptied"
     }
@@ -246,7 +246,7 @@ extension AppModel {
     func copyPath(of thing: NamedThing) {
         let paths = thing.nodes.compactMap(realPath(of:)).map { HiddenNames.isOn ? DiskTree.friendly($0) : $0 }
         guard let first = paths.first else {
-            showTip("\(thing.title ?? thing.single.map(displayName) ?? "This") isn't a place on the disk.")
+            showTip("\(thing.title ?? thing.single.map(displayName) ?? "This") has no path.")
             return
         }
         copy(paths.joined(separator: "\n"), saying: paths.count == 1 ? "Copied: \(first)" : "Copied \(paths.count) paths")
@@ -254,10 +254,10 @@ extension AppModel {
 
     func copyList() {
         guard let list = listText() else {
-            showTip("There's no list to copy here.")
+            showTip("Nothing to copy.")
             return
         }
-        copy(list.text, saying: "Copied the list: \(list.count) \(list.count == 1 ? "line" : "lines")")
+        copy(list.text, saying: "Copied \(list.count) \(list.count == 1 ? "line" : "lines")")
     }
 
     /// What the side panel is listing, as text.
@@ -278,11 +278,19 @@ extension AppModel {
                 let own = tree.nodes[Int(folder)].bytes
                 if focus != 0, own > 0 { rows.append(("Smaller items here", formatBytes(own))) }
             case .changes:
-                title = focus == 0 ? "What changed" : "What changed in " + displayName(RingLayout.chainTail(tree: tree, focus))
+                title = focus == 0 ? "Changes" : "Changes in " + displayName(RingLayout.chainTail(tree: tree, focus))
                 rows = changeRows.prefix(most).map { ($0.title, "+" + formatBytes(UInt64(max($0.delta, 0)))) }
             case .freeUp:
                 title = "Free Up"
                 rows = boxes.flatMap(\.rows).prefix(most).map { ($0.title, formatBytes($0.gain)) }
+            case .copies:
+                title = focus == 0 ? "Copies" : "Copies in " + displayName(RingLayout.chainTail(tree: tree, focus))
+                // Every copy and name of each, where it is, so the list says everything the panel does.
+                rows = copyGroupsHere.prefix(most).flatMap { g -> [(name: String, size: String)] in
+                    let value = g.kind == .duplicate ? formatBytes(g.back) + " back" : g.kind.title.lowercased()
+                    let places = g.nodes.map { "  " + tree.friendlyPath($0) }
+                    return [(g.title, value)] + places.map { ($0, "") }
+                }
             }
         }
         guard !rows.isEmpty else { return nil }
@@ -410,7 +418,7 @@ extension AppModel {
 
     var trashTitle: String {
         let node = selected ?? focus
-        return node == 0 ? "Send to Trash" : "Send “\(realName(of: node))” to Trash"
+        return node == 0 ? "Move to Trash" : "Move “\(realName(of: node))” to Trash"
     }
 
     // MARK: Back and forward
@@ -512,7 +520,7 @@ extension AppModel {
         let before = isPlanned(node)
         Motion.animate(.snappy(duration: 0.2)) { togglePiece(node) }
         guard isPlanned(node) != before else { return }
-        showTip(before ? "Taken out: \(displayName(node))" : "Selected: \(displayName(node)). Nothing goes until you clean.")
+        showTip(before ? "Deselected: \(displayName(node))" : "Selected: \(displayName(node))")
     }
 
     // MARK: The menu bar

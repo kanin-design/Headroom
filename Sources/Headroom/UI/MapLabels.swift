@@ -72,6 +72,8 @@ enum LabelPlacer {
         var title: String
         var value: String
         var score: Double
+        /// Tells apart names that share a piece, such as two copies too small to show apart.
+        var salt: UInt64 = 0
     }
 
     /// `only` names just these at the sides: what you're pointing at in the panel.
@@ -144,6 +146,45 @@ enum LabelPlacer {
                     candidates.append(Candidate(index: i, title: row.title, value: sign + formatBytes(UInt64(max(row.delta, 0))), score: Double(row.delta)))
                 }
             }
+        case .copies:
+            if let id = model.pointedCopyGroup, let group = model.copyGroupsHere.first(where: { $0.id == id }) {
+                // Pointing at a set: where each of its copies is, and which one stays, as pointing at a box names its things. A row
+                // of many files in the same folders names the folders.
+                let byFolder = group.files > 1 || (group.kind != .duplicate && group.keepers.count > 1)
+                let nodes = byFolder ? (group.homes.isEmpty ? [group.home] : group.homes) + group.others : (group.kind == .duplicate ? group.keepers + group.extras : group.nodes)
+                let parents = nodes.map { tree.nodes[Int($0)].parent }
+                let shown = Array(nodes.prefix(10))
+                // Where each one is, said so that no two read the same.
+                let places = CopiesMap.places(shown.map { tree.nodes[Int($0)].has(NodeFlag.directory) ? $0 : tree.nodes[Int($0)].parent }, in: tree, short: true)
+                for (at, node) in shown.enumerated() where node != 0 {
+                    // Copies too small to show apart, or side by side, can share a piece of the ring: each still gets its own name.
+                    guard let i = visiblePiece(for: node, layout: layout, tree: tree) else { continue }
+                    let n = tree.nodes[Int(node)]
+                    let isFolder = n.has(NodeFlag.directory)
+                    // Copies side by side in one folder are named by their own names, which is what tells them apart; the others
+                    // by where they are, which a folder's name alone wouldn't say.
+                    let beside = !isFolder && parents.filter { $0 == n.parent }.count > 1
+                    let title = beside ? model.displayName(node) : places[at]
+                    let stays = node == group.home || group.homes.contains(node) || group.keepers.contains(node)
+                    let bytes = byFolder ? group.extras.filter { tree.nodes[Int($0)].parent == node }.reduce(UInt64(0)) { $0 &+ tree.nodes[Int($1)].bytes } : n.bytes
+                    let value = switch group.kind {
+                    case .duplicate: stays ? "keep" : formatBytes(bytes)
+                    case .sameFile: "hardlink"
+                    case .sharedCopy: "clone"
+                    case .alias, .broken: stays ? "target" : "symlink"
+                    }
+                    candidates.append(Candidate(index: i, title: title, value: value, score: Double(bytes) + (stays ? 1e15 : 0),
+                                                salt: UInt64(node) &* 0x9E37_79B9_7F4A_7C15))
+                }
+            } else {
+                // The biggest sets, named at the copy to keep. Hardlinks, clones and symlinks take no extra space, so they're
+                // named when you point at them.
+                for group in model.copyGroupsHere.prefix(24) where group.kind == .duplicate {
+                    if let i = visiblePiece(for: group.home, layout: layout, tree: tree), !candidates.contains(where: { $0.index == i }) {
+                        candidates.append(Candidate(index: i, title: group.title, value: formatBytes(group.back), score: Double(group.back)))
+                    }
+                }
+            }
         case .freeUp:
             // Things spread over many places are lit up from the panel. A line to just one of them would mislead.
             let bar = Double(max(tree.capacityBytes, 1)) * 0.002
@@ -163,13 +204,15 @@ enum LabelPlacer {
         }
         }
         candidates.sort { $0.score > $1.score }
-        // A name just outside a piece that's already named would say nearly the same thing.
+        // A name just outside a piece that's already named would say nearly the same thing. Not a copy's: each is a place of
+        // its own, however near the others it is.
+        let eachCounts = lens == .copies && model.pointedCopyGroup != nil
         var kept: [Candidate] = []
         for c in candidates {
             let p = layout.pieces[c.index]
             var a = p.parent
             var repeats = false
-            while a >= 0 {
+            while a >= 0 && !eachCounts {
                 let q = layout.pieces[Int(a)]
                 if kept.contains(where: { $0.index == Int(a) }) && Double(p.bytes) > Double(q.bytes) * 0.72 { repeats = true }
                 a = q.parent
@@ -242,7 +285,7 @@ enum LabelPlacer {
                 let nameEnd = columnX - side * 7
                 bend = right ? min(max(bend, anchor.x + 6), nameEnd - 8) : max(min(bend, anchor.x - 6), nameEnd + 8)
                 // A name that changes sides is a new label, so it fades across instead of flying over the ring.
-                out.append(MapLabel(id: p.key ^ (right ? 0xABCD : 0xDCBA), pieceIndex: slot.c.index, node: p.node, title: slot.c.title, value: slot.c.value,
+                out.append(MapLabel(id: p.key ^ (right ? 0xABCD : 0xDCBA) ^ slot.c.salt, pieceIndex: slot.c.index, node: p.node, title: slot.c.title, value: slot.c.value,
                                     position: CGPoint(x: columnX, y: slot.y), anchor: anchor, elbow: CGPoint(x: bend, y: slot.y),
                                     place: right ? .right : .left, dark: false, large: false))
             }
@@ -395,6 +438,8 @@ struct CenterReadout: View {
                 folderContent(tree, size: size)
             } else if model.lens == .changes, model.changeUsesHistory || model.changeTotal > 0 {
                 changesContent(size: size)
+            } else if model.lens == .copies, model.copies != nil {
+                copiesContent(size: size)
             } else {
                 diskContent(size: size)
             }
@@ -467,7 +512,7 @@ struct CenterReadout: View {
                 EmptyView()
             } below: {
                 VStack(spacing: size * 0.012) {
-                    Text(planning ? "free after this" : "free of \(formatBytes(capacity))")
+                    Text(planning ? "free after cleaning" : "free of \(formatBytes(capacity))")
                         .font(.system(size: size * 0.058, weight: .medium))
                         .foregroundStyle(.white.opacity(0.55))
                     if let pointing = model.pointing, model.lens == .freeUp {
@@ -497,6 +542,32 @@ struct CenterReadout: View {
         return note.hasPrefix("−") ? Palette.cool.swiftUI : Palette.grew.swiftUI
     }
 
+    /// In Copies the middle says how much the duplicates take, in white as free space is. Pointing at a set in the inspector says
+    /// that set's, in its colour, as Free Up does for a box.
+    private func copiesContent(size: CGFloat) -> some View {
+        let groups = model.copyGroupsHere
+        let hot = model.pointedCopyGroup.flatMap { id in groups.first { $0.id == id } }
+        let back = hot.map { $0.kind == .duplicate ? $0.back : $0.size } ?? groups.reduce(UInt64(0)) { $0 &+ $1.back }
+        let colour = hot?.colour.swiftUI ?? .white
+        return slots(size, number: bigNumber(back, size: size, color: colour)) {
+            EmptyView()
+        } below: {
+            VStack(spacing: size * 0.012) {
+                Text(hot.map(\.title) ?? (model.copiesReading ? "in duplicates so far" : "in duplicates"))
+                    .font(.system(size: size * 0.058, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.55))
+                if let hot {
+                    let outside = model.copiesOutside(hot)
+                    Text(outside > 0 ? "+\(outside) outside this folder" : hot.kind == .duplicate ? "reclaimable" : "no extra space")
+                        .font(.system(size: size * 0.05, weight: .medium))
+                        .foregroundStyle(colour.opacity(0.8))
+                }
+            }
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+        }
+    }
+
     private func changesContent(size: CGFloat) -> some View {
         let window = model.changeWindow
         let when = window == .lastScan ? "since the last scan" : "in the last \(window.title)"
@@ -509,11 +580,11 @@ struct CenterReadout: View {
             EmptyView()
         } below: {
             VStack(spacing: size * 0.012) {
-                Text(window.isUntouched ? "untouched \(window.span)" : history ? "free space \(when)" : "touched \(when)")
+                Text(window.isUntouched ? "untouched \(window.span)" : history ? "free space \(when)" : "modified \(when)")
                     .font(.system(size: size * 0.058, weight: .medium))
                     .foregroundStyle(.white.opacity(0.55))
                 if !history {
-                    Text("going by file dates")
+                    Text("by date modified")
                         .font(.system(size: size * 0.05, weight: .medium))
                         .foregroundStyle(.white.opacity(0.36))
                 }

@@ -30,7 +30,9 @@ struct Uniforms {
     float previewShare;     // what the thing you're pointing at would add to the free space
     float ghostCount;       // how many colours the new free space has
     float freeOuter;        // how far out the free wedge reaches, as a share of the radius
+    float minLit;           // points: the least a lit piece is drawn across while a tint shows, so a small one can be seen
     float4 previewColor;
+    float4 tint;            // the colour lit pieces and the folders they're in take on, and in w how much
     float4 ghostSlices[12]; // each colour, and in w where it ends, as a share of the whole
 };
 
@@ -69,6 +71,17 @@ vertex SegmentOut segment_vertex(uint vid [[vertex_id]],
     float a0 = g.x, a1 = g.y;
     float r0 = max(g.z * u.radius, 0.0);
     float r1 = max(g.w * u.radius, r0) + lift;
+    // While a tint shows, a lit piece too thin to see is drawn a few points across, so a small file still shows where it is.
+    float shown = smoothstep(0.62, 1.0, e) * u.tint.w;
+    if (shown > 0.0 && u.minLit > 0.0) {
+        float least = 0.5 * u.minLit * u.scale / max((r0 + r1) * 0.5, 1.0);
+        float halfWidth = (a1 - a0) * 0.5;
+        if (halfWidth < least) {
+            float mid = (a0 + a1) * 0.5, wide = mix(halfWidth, least, shown);
+            a0 = mid - wide;
+            a1 = mid + wide;
+        }
+    }
     // Its fade past the edge, if it goes on, is part of what's drawn.
     float reach = r1 + (s.params.w > 0.0 ? u.scale * tailPoints : 0.0);
 
@@ -152,7 +165,11 @@ fragment PieceOut segment_fragment(SegmentOut in [[stage_in]], constant Uniforms
     float e = saturate(in.emphasis);
     float recede = (1.0 - e) * u.dim;
     float radial = saturate((r - in.r0) / max(width, 1.0));
-    float3 base = in.color.rgb;
+    // A tint paints what's lit in one colour, all of it, and the folders it's in part of the way, faintly near the middle and
+    // more toward the edge, so the way out to each lit thing reads as one colour that gathers where it ends.
+    float outward = smoothstep(0.3, 0.95, in.r0 / max(u.radius, 1.0));
+    float tinted = u.tint.w * (saturate(e / 0.62) * mix(0.14, 0.42, outward) + smoothstep(0.62, 1.0, e) * (1.0 - mix(0.14, 0.42, outward)));
+    float3 base = mix(in.color.rgb, u.tint.rgb, tinted);
     float3 color;
     float alpha = in.color.a;
 
@@ -190,7 +207,8 @@ fragment PieceOut segment_fragment(SegmentOut in [[stage_in]], constant Uniforms
         color += (base * 0.55 + float3(0.035)) * outer * outer;
         color += base * 0.10 * edge;
         // Smaller items stay in their wedge's colour, only quieter, so the wedge still reads as one group.
-        if (in.style == StyleSmaller) color = mix(color, float3(dot(color, float3(0.3, 0.6, 0.1))), 0.3) * 0.55;
+        // A tinted one is lit for what's in it, so it keeps its full colour.
+        if (in.style == StyleSmaller) color = mix(mix(color, float3(dot(color, float3(0.3, 0.6, 0.1))), 0.3) * 0.55, color, tinted);
         // At rest, colours sit a step below full, and tiny pieces lower still. Pointing at something brings it all the way up.
         float strength = mix(u.restSaturation * (1.0 - 0.5 * in.calm), 1.0, e);
         color = mix(float3(dot(color, float3(0.3, 0.6, 0.1))), color, strength);

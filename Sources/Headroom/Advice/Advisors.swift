@@ -18,14 +18,23 @@ enum Advisors {
     /// Adds what can be worked out about whole things, and tidies what the folder rules said about parts of them.
     static func add(to rows: inout [WinRow], tree: DiskTree, rules: RuleBook, facts: Facts, now: Date = Date()) {
         guard tree.count > 1 else { return }
+        // Each finder's things go in one box of Free Up, named here and nowhere else.
+        func boxed(_ box: BoxKind, _ found: [WinRow]) -> [WinRow] {
+            found.map { row in
+                var row = row
+                row.box = box
+                for at in row.parts.indices { row.parts[at].box = box }
+                return row
+            }
+        }
         var new: [WinRow] = []
-        new += media(tree: tree, facts: facts, now: now)
-        new += apps(tree: tree, facts: facts, now: now)
-        new += games(tree: tree, facts: facts, now: now)
-        new += models(tree: tree, facts: facts, rows: &rows)
-        new += projects(tree: tree, facts: facts, now: now)
-        new += frames(tree: tree, facts: facts)
-        new += leftBehind(tree: tree, facts: facts)
+        new += boxed(.apps, apps(tree: tree, facts: facts, now: now))
+        new += boxed(.games, games(tree: tree, facts: facts, now: now))
+        new += boxed(.models, models(tree: tree, facts: facts, rows: &rows))
+        new += boxed(.developer, projects(tree: tree, facts: facts, now: now))
+        new += boxed(.leftovers, frames(tree: tree, facts: facts))
+        new += boxed(.removedApps, leftBehind(tree: tree, facts: facts))
+        new += boxed(.screenshots, screenshots(tree: tree, facts: facts, now: now))
         new += handOffs(tree: tree)
 
         // What's said about a whole thing replaces what a rule said about it.
@@ -44,11 +53,12 @@ enum Advisors {
         guard parts.count >= 2 else { return }
         let ids = Set(parts.map(\.id))
         rows.removeAll { ids.contains($0.id) }
-        var group = WinRow(id: "group:android", title: "Android tools", subtitle: "\(parts.count) versions and system images. Android Studio downloads them again.",
-                           detail: "Android's build tools and the system images its emulator runs on. A project that asks for one downloads it again, but an emulator using one won't start until it does.",
+        var group = WinRow(id: "group:android", title: "Android tools", subtitle: "\(parts.count) SDK versions and system images",
+                           detail: "Android SDK tools and emulator system images. Android Studio re-downloads them when needed.",
                            tier: .redownload, nodes: parts.flatMap(\.nodes), bytes: parts.reduce(0) { $0 &+ $1.bytes }, paperBytes: parts.reduce(0) { $0 &+ $1.paperBytes }, action: .trash, command: nil, bundleID: nil)
         group.parts = parts.sorted { $0.bytes > $1.bytes }
         group.inUse = parts.compactMap(\.inUse).first
+        group.box = .developer
         rows.append(group)
     }
 
@@ -64,9 +74,9 @@ enum Advisors {
             // A series or an app says what it knows in its own words. A recent download isn't a sign of use.
             if row.id.hasPrefix("series:") || row.id.hasPrefix("film:") || row.id.hasPrefix("app:") || row.id.hasPrefix("group:quiet-apps") { return }
             if androidBusy, row.nodes.contains(where: { (tree.path($0) ?? "").contains("/Android/") || (tree.path($0) ?? "").contains("/.android/") }) {
-                row.inUse = facts.androidRunning ? "Android tools are running" : "Android's emulator was used in the last two weeks"
+                row.inUse = facts.androidRunning ? "Android tools are running" : "Emulator used in the last 2 weeks"
             } else if row.parts.isEmpty, row.nodes.contains(where: { tree.statRow($0)[DiskTree.statRecent14] > 0 }) {
-                row.inUse = "Changed in the last two weeks"
+                row.inUse = "Changed in the last 2 weeks"
             }
         }
         for at in rows.indices {
@@ -176,7 +186,7 @@ enum Advisors {
             }
 
             var row = WinRow(id: "series:" + show.key, title: show.name, subtitle: sentence(bits),
-                             detail: "A series on your disk. If it's in a Plex library, Plex stops showing whatever goes.", tier: .yourCall, nodes: nodesOfRow, bytes: paper, paperBytes: paper,
+                             detail: "TV series. Deleted episodes disappear from Plex.", tier: .yourCall, nodes: nodesOfRow, bytes: paper, paperBytes: paper,
                              action: .trash, command: nil, bundleID: nil)
             row.previewPath = paths.first
             addOtherCopies(to: &row, title: show.name, links: videoLinks, tree: tree, facts: facts, now: now)
@@ -197,12 +207,12 @@ enum Advisors {
             let parts = same.sorted { nodes[Int($0)].bytes > nodes[Int($1)].bytes }.map { version -> WinRow in
                 let file = tree.name(version)
                 let bytes = nodes[Int(version)].bytes
-                return WinRow(id: "film:" + (tree.path(version) ?? file), title: (file as NSString).deletingPathExtension, subtitle: "One of \(same.count) versions in this folder.",
-                              detail: "The same film in another quality. Plex shows both as one film, with a choice of versions.", tier: .yourCall, nodes: [version], bytes: bytes, paperBytes: bytes,
+                return WinRow(id: "film:" + (tree.path(version) ?? file), title: (file as NSString).deletingPathExtension, subtitle: "1 of \(same.count) versions",
+                              detail: "Same film, another quality. Plex shows the versions as one film.", tier: .yourCall, nodes: [version], bytes: bytes, paperBytes: bytes,
                               action: .trash, command: nil, bundleID: nil)
             }
-            var group = WinRow(id: "versions:" + (tree.path(folder) ?? name), title: "\(name): \(same.count) versions", subtitle: parts.map { formatBytes($0.bytes) }.joined(separator: " and ") + ". You could keep just one.",
-                               detail: "The same film in more than one quality. Open this row to choose which to remove.", tier: .yourCall, nodes: parts.flatMap(\.nodes), bytes: parts.reduce(0) { $0 &+ $1.bytes },
+            var group = WinRow(id: "versions:" + (tree.path(folder) ?? name), title: "\(name): \(same.count) versions", subtitle: parts.map { formatBytes($0.bytes) }.joined(separator: " · "),
+                               detail: "Same film in several qualities. Open to choose which to delete.", tier: .yourCall, nodes: parts.flatMap(\.nodes), bytes: parts.reduce(0) { $0 &+ $1.bytes },
                                paperBytes: parts.reduce(0) { $0 &+ $1.paperBytes }, action: .trash, command: nil, bundleID: nil)
             group.parts = parts
             out.append(group)
@@ -226,9 +236,9 @@ enum Advisors {
             if let disk = also(on: facts, name: fileName, size: bytes) { bits.append("Same name and size on \(disk)") }
             if let opened = facts.lastOpened[path] { bits.append("Opened \(Titles.dayText(opened, now: now))") }
             if let plex = facts.plexFiles[path] { bits.append(plex.views > 0 ? "Watched in Plex" : "Not watched in Plex") }
-            if bits.isEmpty { bits.append("A video in \(DiskTree.friendly((path as NSString).deletingLastPathComponent))") }
+            if bits.isEmpty { bits.append("In \(DiskTree.friendly((path as NSString).deletingLastPathComponent))") }
             var row = WinRow(id: "film:" + (tree.path(node) ?? title), title: title, subtitle: sentence(bits),
-                             detail: "A film on your disk. If it's in a Plex library, Plex stops showing it once it's gone.", tier: .yourCall, nodes: [node], bytes: tree.totals[Int(node)],
+                             detail: "Film. Deleting it removes it from Plex.", tier: .yourCall, nodes: [node], bytes: tree.totals[Int(node)],
                              paperBytes: tree.totals[Int(node)], action: .trash, command: nil, bundleID: nil)
             row.previewPath = path
             addOtherCopies(to: &row, title: title, links: videoLinks, tree: tree, facts: facts, now: now)
@@ -238,7 +248,7 @@ enum Advisors {
     }
 
     private static func sentence(_ bits: [String]) -> String {
-        bits.joined(separator: ". ") + (bits.isEmpty ? "" : ".")
+        bits.joined(separator: " · ")
     }
 
     /// The same files in another folder: a torrent's, usually. They only free space once both are gone, so the row says
@@ -254,21 +264,21 @@ enum Advisors {
         let torrents = paths.compactMap { facts.torrent(holding: Facts.visible($0)) }
         if !torrents.isEmpty {
             row.otherCopiesIsTorrent = true
-            row.otherCopiesTitle = found.folders.count > 1 ? "Also remove the \(found.folders.count) torrent copies" : "Also remove the torrent copy"
-            var note = "That's when you get \(formatBytes(row.paperBytes)) back. Transmission stops sharing \(found.folders.count > 1 ? "those torrents" : "that torrent")."
+            row.otherCopiesTitle = found.folders.count > 1 ? "Include the \(found.folders.count) torrent copies" : "Include the torrent copy"
+            var note = "Frees \(formatBytes(row.paperBytes)). Transmission stops seeding \(found.folders.count > 1 ? "them" : "it")."
             // The newest one is the one that may still be sharing.
             if let finished = torrents.compactMap(\.finished).max() {
                 let days = Int(now.timeIntervalSince(finished) / 86_400)
                 if days < seedingDays {
                     let when = days == 0 ? "today" : (days == 1 ? "yesterday" : "\(days) days ago")
-                    note = "That's when you get \(formatBytes(row.paperBytes)) back, but \(found.folders.count > 1 ? "the newest torrent" : "the torrent") only finished \(when), so it may still be sharing."
-                    row.otherCopiesCaution = "\(found.folders.count > 1 ? "The newest torrent" : "The torrent") only finished \(when), so it may still be sharing."
+                    note = "Frees \(formatBytes(row.paperBytes)). \(found.folders.count > 1 ? "The newest torrent" : "The torrent") finished \(when) and may still be seeding."
+                    row.otherCopiesCaution = "\(found.folders.count > 1 ? "Newest torrent" : "Torrent") finished \(when), may still be seeding."
                 }
             }
             row.otherCopiesNote = note
         } else {
-            row.otherCopiesTitle = "Also remove the copy in \(tree.name(tree.nodes[Int(found.folders[0])].parent))"
-            row.otherCopiesNote = "That's when you get \(formatBytes(row.paperBytes)) back."
+            row.otherCopiesTitle = "Include the copy in \(tree.name(tree.nodes[Int(found.folders[0])].parent))"
+            row.otherCopiesNote = "Frees \(formatBytes(row.paperBytes))."
         }
     }
 
@@ -283,8 +293,8 @@ enum Advisors {
         guard !parts.isEmpty else { return [] }
         parts.sort { $0.bytes > $1.bytes }
         if parts.count == 1 { return parts }
-        var group = WinRow(id: "group:quiet-apps", title: "\(parts.count) apps with no sign of use for 6 months", subtitle: parts.prefix(4).map(\.title).joined(separator: ", ") + (parts.count > 4 ? " and \(parts.count - 4) more." : "."),
-                           detail: "Going by each app's own settings, caches and saved state, and by Spotlight. Open this row to decide about each one.", tier: .yourCall, nodes: parts.flatMap(\.nodes),
+        var group = WinRow(id: "group:quiet-apps", title: "\(parts.count) apps, no sign of use in 6 months", subtitle: parts.prefix(4).map(\.title).joined(separator: ", ") + (parts.count > 4 ? " and \(parts.count - 4) more" : ""),
+                           detail: "Based on each app's settings, caches, saved state and Spotlight. Open to review each app.", tier: .yourCall, nodes: parts.flatMap(\.nodes),
                            bytes: parts.reduce(0) { $0 &+ $1.bytes }, paperBytes: parts.reduce(0) { $0 &+ $1.paperBytes }, action: .uninstall, command: nil, bundleID: nil)
         group.parts = parts
         return [group]
@@ -311,18 +321,18 @@ enum Advisors {
         }
         let bytes = nodes.reduce(UInt64(0)) { $0 &+ tree.totals[Int($1)] }
         var bits = ["No sign of use for \(Titles.monthsText(since: newest, now: now))"]
-        if app.fromAppStore { bits.append("You can download this again from the App Store") }
+        if app.fromAppStore { bits.append("Re-downloadable from the App Store") }
         if let note = app.makerNote { bits.append(String(note.dropLast())) }
         var row = WinRow(id: "app:" + app.bundleID, title: app.name, subtitle: sentence(bits),
-                         detail: "Uninstalling moves the app, its settings and its caches to the Trash. Going by the app's own files and by Spotlight, so this may be wrong about an app that only runs in the background.",
+                         detail: "Uninstall moves the app, its settings and caches to the Trash. Apps that only run in the background may show no sign of use.",
                          tier: .yourCall, nodes: nodes, bytes: bytes, paperBytes: bytes, action: .uninstall, command: nil, bundleID: app.bundleID)
         row.appPath = app.path
         row.extraPaths = extras
         let dataBytes = dataNodes.reduce(UInt64(0)) { $0 &+ tree.totals[Int($1)] }
         if dataBytes >= 1_000_000 {
             row.alsoNodes = dataNodes
-            row.alsoTitle = "Also remove its data: \(formatBytes(dataBytes))"
-            row.alsoNote = "May hold your own work, so this stays unless you say so."
+            row.alsoTitle = "Include its data: \(formatBytes(dataBytes))"
+            row.alsoNote = "May hold your own work."
         }
         return row
     }
@@ -335,15 +345,15 @@ enum Advisors {
             guard let node = tree.find(path: "/System/Volumes/Data" + game.folder) ?? tree.find(path: game.folder) else { continue }
             var bits: [String] = []
             if let played = game.lastPlayed { bits.append("Last played \(Titles.dayText(played, now: now))") }
-            bits.append("Steam can download this again")
+            bits.append("Re-downloadable from Steam")
             let bytes = tree.totals[Int(node)]
             var row = WinRow(id: "steam:" + game.appID, title: game.name, subtitle: sentence(bits),
-                             detail: "Check first that your saves are in Steam Cloud. Steam shows this game as not installed afterwards, and you can install the game again from there.", tier: .redownload, nodes: [node], bytes: bytes, paperBytes: bytes,
+                             detail: "Check that your saves are in Steam Cloud first. Steam then lists the game as not installed.", tier: .redownload, nodes: [node], bytes: bytes, paperBytes: bytes,
                              action: .trash, command: nil, bundleID: "com.valvesoftware.steam")
             row.extraPaths = [game.manifest]
             // Saves may only be on this Mac, so a game only goes on a tick of your own.
             row.askFirst = true
-            if let played = game.lastPlayed, now.timeIntervalSince(played) < 14 * 86_400 { row.inUse = "Played in the last two weeks" }
+            if let played = game.lastPlayed, now.timeIntervalSince(played) < 14 * 86_400 { row.inUse = "Played in the last 2 weeks" }
             out.append(row)
         }
         return out
@@ -365,9 +375,9 @@ enum Advisors {
             let onTheMap = nodes.reduce(UInt64(0)) { $0 &+ tree.totals[Int($1)] }
             let bytes = max(onTheMap, model.blobBytes)
             guard bytes >= 50_000_000, !nodes.isEmpty else { continue }
-            var bits = ["Can be downloaded again from Hugging Face"]
+            var bits = ["Re-downloadable from Hugging Face"]
             if let changed = model.changed { bits.append("Downloaded \(Titles.dayText(changed))") }
-            var row = WinRow(id: "model:" + model.name, title: model.name, subtitle: sentence(bits), detail: "AI model weights. It downloads again the next time something asks for it.",
+            var row = WinRow(id: "model:" + model.name, title: model.name, subtitle: sentence(bits), detail: "AI model weights. Re-downloaded on next use.",
                              tier: .redownload, nodes: nodes, bytes: bytes, paperBytes: bytes, action: .trash, command: nil, bundleID: nil)
             row.extraPaths = extras
             parts.append(row)
@@ -380,8 +390,8 @@ enum Advisors {
             row.isPlannable && row.tier == .redownload && row.nodes.count == 1 && taken.contains { tree.isInside($0, row.nodes[0]) }
         }
         if parts.count == 1 { return parts }
-        var group = WinRow(id: "group:models", title: "\(parts.count) AI models", subtitle: parts.prefix(3).map { $0.title.split(separator: "/").last.map(String.init) ?? $0.title }.joined(separator: ", ") + (parts.count > 3 ? " and \(parts.count - 3) more." : "."),
-                           detail: "AI model weights from Hugging Face. Each one downloads again the next time something asks for it.", tier: .redownload, nodes: taken,
+        var group = WinRow(id: "group:models", title: "\(parts.count) AI models", subtitle: parts.prefix(3).map { $0.title.split(separator: "/").last.map(String.init) ?? $0.title }.joined(separator: ", ") + (parts.count > 3 ? " and \(parts.count - 3) more" : ""),
+                           detail: "AI model weights from Hugging Face. Each is re-downloaded on next use.", tier: .redownload, nodes: taken,
                            bytes: parts.reduce(0) { $0 &+ $1.bytes }, paperBytes: parts.reduce(0) { $0 &+ $1.paperBytes }, action: .trash, command: nil, bundleID: nil)
         group.parts = parts
         return [group]
@@ -399,16 +409,16 @@ enum Advisors {
             if tree.statRow(node)[DiskTree.statRecent30] > 0 { continue }
             let bytes = tree.totals[Int(node)]
             let row = WinRow(id: "repo:" + repo.path, title: tree.name(node),
-                             subtitle: "Last commit \(Titles.monthsText(since: last, now: now)) ago. Everything is pushed, so you can clone this project again from \(shortRemote(remote)).",
-                             detail: "Files that git ignores aren't in that copy: settings, data and anything you generated. Open this row to check what's there.", tier: .yourCall, nodes: [node], bytes: bytes, paperBytes: bytes,
+                             subtitle: "Last commit \(Titles.monthsText(since: last, now: now)) ago · Pushed to \(shortRemote(remote))",
+                             detail: "Ignored files, such as settings, data and generated files, aren't on the remote. Check them first.", tier: .yourCall, nodes: [node], bytes: bytes, paperBytes: bytes,
                              action: .trash, command: nil, bundleID: nil)
             parts.append(row)
         }
         guard !parts.isEmpty else { return [] }
         parts.sort { $0.bytes > $1.bytes }
         if parts.count == 1 { return parts }
-        var group = WinRow(id: "group:quiet-projects", title: "\(parts.count) projects you could clone again", subtitle: "Nothing changed for 6 months, and everything is pushed.",
-                           detail: "Only projects with no uncommitted work, every branch pushed, and nothing in a stash. Files that git ignores aren't in that copy.", tier: .yourCall, nodes: parts.flatMap(\.nodes),
+        var group = WinRow(id: "group:quiet-projects", title: "\(parts.count) pushed projects", subtitle: "Idle for 6 months · Clean and pushed",
+                           detail: "No uncommitted changes, every branch pushed, no stashes. Ignored files aren't on the remote.", tier: .yourCall, nodes: parts.flatMap(\.nodes),
                            bytes: parts.reduce(0) { $0 &+ $1.bytes }, paperBytes: parts.reduce(0) { $0 &+ $1.paperBytes }, action: .trash, command: nil, bundleID: nil)
         group.parts = parts
         return [group]
@@ -433,15 +443,15 @@ enum Advisors {
             var text = "\(folder.frames.formatted()) numbered frames"
             if let video = folder.video { text += " next to \(video)" }
             let above = tree.name(tree.nodes[Int(tree.nodes[Int(node)].parent)].parent)
-            parts.append(WinRow(id: "frames:" + folder.path, title: "\(above) › \(parent) › \(tree.name(node))", subtitle: text + ".",
-                                detail: "Numbered images like these are often rendered frames, which can be made again if you still have what made them. Look before you decide.", tier: .yourCall, nodes: [node], bytes: bytes, paperBytes: bytes,
+            parts.append(WinRow(id: "frames:" + folder.path, title: "\(above) › \(parent) › \(tree.name(node))", subtitle: text,
+                                detail: "Likely rendered frames. They can be rendered again from the project.", tier: .yourCall, nodes: [node], bytes: bytes, paperBytes: bytes,
                                 action: .trash, command: nil, bundleID: nil))
         }
         guard !parts.isEmpty else { return [] }
         parts.sort { $0.bytes > $1.bytes }
         if parts.count == 1 { return parts }
-        var group = WinRow(id: "group:frames", title: "\(parts.count) folders of numbered frames", subtitle: parts.prefix(3).map(\.title).joined(separator: ", ") + (parts.count > 3 ? " and \(parts.count - 3) more." : "."),
-                           detail: "Numbered images like these are often rendered frames, which can be made again if you still have what made them. Look before you decide.", tier: .yourCall, nodes: parts.flatMap(\.nodes),
+        var group = WinRow(id: "group:frames", title: "\(parts.count) folders of numbered frames", subtitle: parts.prefix(3).map(\.title).joined(separator: ", ") + (parts.count > 3 ? " and \(parts.count - 3) more" : ""),
+                           detail: "Likely rendered frames. They can be rendered again from the project.", tier: .yourCall, nodes: parts.flatMap(\.nodes),
                            bytes: parts.reduce(0) { $0 &+ $1.bytes }, paperBytes: parts.reduce(0) { $0 &+ $1.paperBytes }, action: .trash, command: nil, bundleID: nil)
         group.parts = parts
         return [group]
@@ -451,23 +461,47 @@ enum Advisors {
 
     /// Some things only their own app can look after. Removing files from inside them would break them, so these get an
     /// explanation and a way there, and never a tick.
+    /// Screenshots and screen recordings, a row for each folder they're in, newest first. Most are too small to be on the map,
+    /// so they go by path.
+    static func screenshots(tree: DiskTree, facts: Facts, now: Date) -> [WinRow] {
+        guard tree.home != 0 else { return [] }
+        var byFolder: [String: [Facts.Screenshot]] = [:]
+        for shot in facts.screenshots.sorted(by: { $0.changed > $1.changed }) where Safety.canTrash(shot.path) {
+            byFolder[(shot.path as NSString).deletingLastPathComponent, default: []].append(shot)
+        }
+        return byFolder.map { folder, shots in
+            var nodes: [UInt32] = [], small: [String] = []
+            for shot in shots {
+                if let node = tree.find(path: "/System/Volumes/Data" + shot.path) ?? tree.find(path: shot.path) { nodes.append(node) } else { small.append(shot.path) }
+            }
+            let bytes = shots.reduce(UInt64(0)) { $0 &+ $1.bytes }
+            var row = WinRow(id: "screenshots:" + folder, title: DiskTree.friendly(folder),
+                             subtitle: shots.count == 1 ? "1 file" : "\(shots.count) files",
+                             detail: "Screenshots and screen recordings.", tier: .yourCall, nodes: nodes, bytes: bytes, paperBytes: bytes,
+                             action: .trash, command: nil, bundleID: nil)
+            row.extraPaths = small
+            row.previewPath = folder
+            return row
+        }.sorted { $0.bytes > $1.bytes }
+    }
+
     static func handOffs(tree: DiskTree) -> [WinRow] {
         guard tree.home != 0 else { return [] }
         struct HandOff { var path: String; var id: String; var title: String; var app: String; var detail: String }
         let list = [
             HandOff(path: "Pictures/Photos Library.photoslibrary", id: "com.apple.Photos", title: "Photos library", app: "Photos",
-                    detail: "Only Photos can look after this safely. If you use iCloud Photos, Optimize Mac Storage in its settings keeps smaller copies here."),
+                    detail: "Manage it in Photos. With iCloud Photos, Optimize Mac Storage keeps smaller copies here."),
             HandOff(path: "Library/Messages", id: "com.apple.MobileSMS", title: "Messages", app: "Messages",
-                    detail: "Messages can delete old messages and attachments itself: see Keep Messages in its settings."),
+                    detail: "Manage it in Messages: Settings › General › Keep Messages."),
             HandOff(path: "Library/Mail", id: "com.apple.mail", title: "Mail", app: "Mail",
-                    detail: "Only Mail can look after this safely. Removing a mailbox or an account in Mail is what frees this space."),
+                    detail: "Manage it in Mail. Deleting mailboxes or accounts frees this space."),
             HandOff(path: "Music/Music", id: "com.apple.Music", title: "Music library", app: "Music",
-                    detail: "Only Music can look after this safely. Remove downloads from inside Music."),
+                    detail: "Manage it in Music by removing downloads."),
         ]
         var out: [WinRow] = []
         for thing in list {
             guard let node = tree.find(path: "/System/Volumes/Data" + NSHomeDirectory() + "/" + thing.path), tree.totals[Int(node)] >= 1_000_000_000 else { continue }
-            var row = WinRow(id: "handoff:" + thing.id, title: thing.title, subtitle: "Managed by \(thing.app), so this isn't something to remove by hand.", detail: thing.detail, tier: .handsOff, nodes: [node],
+            var row = WinRow(id: "handoff:" + thing.id, title: thing.title, subtitle: "Managed by \(thing.app)", detail: thing.detail, tier: .handsOff, nodes: [node],
                              bytes: tree.totals[Int(node)], paperBytes: tree.totals[Int(node)], action: .openApp, command: nil, bundleID: thing.id)
             row.openAppName = thing.app
             out.append(row)
@@ -482,15 +516,15 @@ enum Advisors {
         for thing in facts.leftBehind {
             guard let node = tree.find(path: "/System/Volumes/Data" + thing.path) ?? tree.find(path: thing.path), tree.totals[Int(node)] >= 50_000_000, Safety.canTrash(thing.path) else { continue }
             let bytes = tree.totals[Int(node)]
-            parts.append(WinRow(id: "left:" + thing.path, title: Wins.appName(forFolder: thing.bundleID), subtitle: "\(thing.bundleID), in \(thing.place). The app isn't on this Mac.",
-                                detail: "An app's data, with no app to go with it. It may be from an app you've removed, or one that's on a disk that isn't plugged in.", tier: .yourCall, nodes: [node], bytes: bytes, paperBytes: bytes,
+            parts.append(WinRow(id: "left:" + thing.path, title: Wins.appName(forFolder: thing.bundleID), subtitle: "\(thing.bundleID) · \(thing.place)",
+                                detail: "App data with no matching app. The app may have been deleted, or be on a disk that isn't connected.", tier: .yourCall, nodes: [node], bytes: bytes, paperBytes: bytes,
                                 action: .trash, command: nil, bundleID: nil))
         }
         guard !parts.isEmpty else { return [] }
         parts.sort { $0.bytes > $1.bytes }
         if parts.count == 1 { return parts }
-        var group = WinRow(id: "group:left-behind", title: "Left behind by apps you no longer have", subtitle: parts.prefix(3).map(\.title).joined(separator: ", ") + (parts.count > 3 ? " and \(parts.count - 3) more." : "."),
-                           detail: "Only folders named with a full app ID, where that app isn't on this Mac. An app on a disk that isn't plugged in would look the same.", tier: .yourCall, nodes: parts.flatMap(\.nodes),
+        var group = WinRow(id: "group:left-behind", title: "Leftover app data", subtitle: parts.prefix(3).map(\.title).joined(separator: ", ") + (parts.count > 3 ? " and \(parts.count - 3) more" : ""),
+                           detail: "Folders named with an app ID whose app isn't installed. An app on a disconnected disk looks the same.", tier: .yourCall, nodes: parts.flatMap(\.nodes),
                            bytes: parts.reduce(0) { $0 &+ $1.bytes }, paperBytes: parts.reduce(0) { $0 &+ $1.paperBytes }, action: .trash, command: nil, bundleID: nil)
         group.parts = parts
         return [group]

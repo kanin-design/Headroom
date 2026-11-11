@@ -491,11 +491,11 @@ final class Updater {
 
         var errorDescription: String? {
             switch self {
-            case .noAnswer: "GitHub didn't answer as it should. Try again in a while."
-            case .notADisk: "The download isn't a disk image that opens."
-            case .notThisApp: "The download doesn't hold the version it should."
-            case .damaged: "The new version isn't signed the way this one is, so it wasn't put in place."
-            case .cantWrite: "Headroom couldn't put the new version where this one is."
+            case .noAnswer: "GitHub sent an unexpected response. Try again later."
+            case .notADisk: "The download isn't a valid disk image."
+            case .notThisApp: "The download contains a different version."
+            case .damaged: "The new version's signature doesn't match, so it wasn't installed."
+            case .cantWrite: "Headroom couldn't replace the installed version."
             }
         }
     }
@@ -504,8 +504,8 @@ final class Updater {
         if let problem = error as? Problem { return problem.errorDescription ?? "" }
         if let error = error as? URLError {
             switch error.code {
-            case .notConnectedToInternet, .networkConnectionLost: return "This Mac isn't online."
-            case .timedOut: return "GitHub took too long to answer."
+            case .notConnectedToInternet, .networkConnectionLost: return "No internet connection."
+            case .timedOut: return "The connection to GitHub timed out."
             default: break
             }
         }

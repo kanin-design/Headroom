@@ -173,6 +173,8 @@ enum Palette {
         static let films = Lab(lch: 0.82, 0.085, 10)
         static let other = Lab(lch: 0.66, 0.015, 260)
         static let series = Lab(lch: 0.85, 0.165, 92)
+        static let screenshots = Lab(lch: 0.78, 0.13, 180)
+        static let junk = Lab(lch: 0.80, 0.10, 75)
         /// What you picked yourself on the ring.
         static let hand = Lab(lch: 0.95, 0, 0)
         /// A folder that's all one kind of thing has a colour for each thing, from all around the wheel.

@@ -20,6 +20,7 @@ struct SidePanel: View {
                         case .map: MapPanel(model: model)
                         case .changes: ChangesPanel(model: model)
                         case .freeUp: FreeUpPanel(model: model)
+                        case .copies: CopiesPanel(model: model)
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -91,6 +92,8 @@ struct NodeRow: View {
     var valueColor: Color = .white.opacity(0.82)
     /// Where the keyboard is, in a list you can walk through.
     var isLit = false
+    /// A list with no sizes to compare, such as aliases, has no bar.
+    var showsBar = true
     let onHover: (Bool) -> Void
     let onTap: () -> Void
     @State private var isHovered = false
@@ -121,13 +124,15 @@ struct NodeRow: View {
                         .font(.system(size: 12, weight: .medium).monospacedDigit())
                         .foregroundStyle(valueColor)
                 }
-                GeometryReader { g in
-                    Capsule()
-                        .fill(color.opacity(0.75))
-                        .frame(width: max(g.size.width * min(share, 1), 2), height: 2)
+                if showsBar {
+                    GeometryReader { g in
+                        Capsule()
+                            .fill(color.opacity(0.75))
+                            .frame(width: max(g.size.width * min(share, 1), 2), height: 2)
+                    }
+                    .frame(height: 2)
+                    .padding(.leading, 16)
                 }
-                .frame(height: 2)
-                .padding(.leading, 16)
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
@@ -188,15 +193,15 @@ struct MapPanel: View {
         let free = tree.totals[Int(tree.free)]
         let fullness = 1 - Double(free) / Double(max(tree.capacityBytes, 1))
         let biggest = model.flatTop(tree).first
-        let canGo = model.suggestions.everything.filter { $0.isQuick }.reduce(UInt64(0)) { $0 &+ $1.bytes }
+        let canGo = model.suggestions.everything.filter(\.isRecommended).reduce(UInt64(0)) { $0 &+ $1.bytes }
         return VStack(alignment: .leading, spacing: 10) {
             if !model.hasFullAccess {
-                Text("Your disk is \(Int((fullness * 100).rounded()))% full. What's on it shows once Headroom has Full Disk Access.")
+                Text("\(Int((fullness * 100).rounded()))% full · Needs Full Disk Access")
                     .font(.system(size: 13))
                     .foregroundStyle(.white.opacity(0.78))
                     .fixedSize(horizontal: false, vertical: true)
             } else if let biggest {
-                Text("Your disk is \(Int((fullness * 100).rounded()))% full. \(model.displayName(biggest)) is the biggest thing \(tree.isPartial ? "found so far" : "on it"), at \(formatBytes(tree.totals[Int(biggest)])).")
+                Text("\(Int((fullness * 100).rounded()))% full · Largest\(tree.isPartial ? " so far" : ""): \(model.displayName(biggest)), \(formatBytes(tree.totals[Int(biggest)]))")
                     .font(.system(size: 13))
                     .foregroundStyle(.white.opacity(0.78))
                     .fixedSize(horizontal: false, vertical: true)
@@ -207,7 +212,7 @@ struct MapPanel: View {
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "sparkles")
-                        Text(tree.isPartial ? "\(formatBytes(canGo)) so far you wouldn't miss" : "About \(formatBytes(canGo)) you wouldn't miss")
+                        Text(tree.isPartial ? "\(formatBytes(canGo)) safe to clear so far" : "About \(formatBytes(canGo)) safe to clear")
                     }
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Color(red: 0.5, green: 0.98, blue: 0.7))
@@ -221,7 +226,7 @@ struct MapPanel: View {
     private func description(_ tree: DiskTree, _ subject: UInt32) -> some View {
         let node = tree.nodes[Int(subject)]
         if tree.isPartial && subject == tree.hidden {
-            Text("Space that hasn't been read yet. This piece shrinks as the scan goes on, and whatever is left at the end is space Headroom can't look inside.")
+            Text("Not scanned yet. What's left when the scan ends is space Headroom can't read.")
                 .font(.system(size: 12.5))
                 .foregroundStyle(.white.opacity(0.72))
                 .fixedSize(horizontal: false, vertical: true)
@@ -253,26 +258,28 @@ struct MapPanel: View {
                 if story.sharedOut >= enough {
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(alignment: .firstTextBaseline, spacing: 4) {
-                            Text("Removing this frees")
+                            Text("Frees")
                                 .font(.system(size: 12, weight: .medium))
                                 .foregroundStyle(.white.opacity(0.65))
                             Text(formatBytes(story.reclaim))
                                 .font(.system(size: 14, weight: .semibold, design: .rounded).monospacedDigit())
                                 .foregroundStyle(Color(red: 1, green: 0.74, blue: 0.42))
                         }
-                        Text("\(formatBytes(story.sharedOut)) of this is the same files as \(story.sharedPlace ?? "another folder"). That space only comes back when both are gone.")
+                        Text("\(formatBytes(story.sharedOut)) hardlinked or cloned with \(story.sharedPlace ?? "another folder")")
                             .font(.system(size: 12))
                             .foregroundStyle(.white.opacity(0.68))
                             .fixedSize(horizontal: false, vertical: true)
+                            .help("Freed only when both are deleted")
                         goTo(story.sharedPlace, story.sharedPlaceNode)
                     }
                 }
                 if story.linkedIn >= enough {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("This also holds \(formatBytes(story.linkedIn)) of links to files counted under \(story.linkedPlace ?? "another folder"). They take no extra space here.")
+                        Text("Plus \(formatBytes(story.linkedIn)) hardlinked or cloned, counted under \(story.linkedPlace ?? "another folder")")
                             .font(.system(size: 12))
                             .foregroundStyle(.white.opacity(0.68))
                             .fixedSize(horizontal: false, vertical: true)
+                            .help("Takes no extra space here")
                         goTo(story.linkedPlace, story.linkedPlaceNode)
                     }
                 }
@@ -356,7 +363,7 @@ struct MapPanel: View {
             LazyVStack(spacing: 0) {
                 ForEach(top, id: \.self) { node in
                     NodeRow(title: model.displayName(node),
-                            subtitle: linksWorthNaming(tree, node) ? "plus \(formatBytes(tree.aliasTotals[Int(node)])) of links" : subtitle(tree, node),
+                            subtitle: linksWorthNaming(tree, node) ? "plus \(formatBytes(tree.aliasTotals[Int(node)])) hardlinked or cloned" : subtitle(tree, node),
                             value: tree.sizeText(node),
                             share: Double(tree.totals[Int(node)]) / biggest,
                             color: model.listColor(node, in: tree),
@@ -404,7 +411,7 @@ struct MapPanel: View {
                 Button {
                     model.reveal(subject)
                 } label: {
-                    Label("Reveal in Finder", systemImage: "folder")
+                    Label("Show in Finder", systemImage: "folder")
                 }
                 .buttonStyle(.glass)
                 if Safety.canTrash(path) {
@@ -567,12 +574,12 @@ struct ChangesPanel: View {
     private var rows: some View {
         if model.tree != nil {
             HStack(alignment: .center) {
-                SectionHeading(text: (untouched ? "Untouched" : model.changeUsesHistory ? "Grew" : "Touched") + place)
+                SectionHeading(text: (untouched ? "Untouched" : model.changeUsesHistory ? "Grew" : "Modified") + place)
                 if !model.changeRows.isEmpty { scale }
             }
             if model.changeRows.isEmpty {
-                Text(!model.hasFullAccess ? "What changed shows once Headroom has Full Disk Access."
-                     : untouched ? "Nothing big has been left that long." : model.changeUsesHistory ? "Nothing grew by much." : "Nothing much was touched.")
+                Text(!model.hasFullAccess ? "Needs Full Disk Access"
+                     : untouched ? "Nothing large untouched that long" : model.changeUsesHistory ? "Nothing grew much" : "Nothing large modified")
                     .font(.system(size: 12.5))
                     .foregroundStyle(.white.opacity(0.55))
             } else {
@@ -635,7 +642,7 @@ struct SearchPanel: View {
                 VStack(alignment: .leading, spacing: 10) {
                     // Like the list on the Map, it says when there's more than it shows.
                     PanelTitle(title: "\(model.searchResults.count.formatted()) found",
-                               subtitle: model.searchResults.count > 120 ? "The biggest 120 are listed" : nil)
+                               subtitle: model.searchResults.count > 120 ? "Top 120 shown" : nil)
                     let top = model.searchResults.prefix(120)
                     let biggest = Double(max(top.first.map { tree.totals[Int($0)] } ?? 1, 1))
                     LazyVStack(spacing: 0) {

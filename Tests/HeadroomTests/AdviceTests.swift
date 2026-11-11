@@ -243,9 +243,9 @@ final class MediaAdviceTests: XCTestCase {
         var facts = Facts()
         facts.torrents = [Facts.Torrent(path: "/Volumes/Fake/Downloads/Torrents/Big.Show.S01", name: "Big.Show.S01", finished: now.addingTimeInterval(-86_400 * 2), uploaded: 0, isPaused: false)]
         let big = try XCTUnwrap(Advisors.media(tree: disk.tree, facts: facts, now: now).first { $0.title == "Big Show" })
-        XCTAssertEqual(big.otherCopiesTitle, "Also remove the torrent copy")
-        XCTAssertTrue(big.otherCopiesNote?.contains("may still be sharing") == true, big.otherCopiesNote ?? "")
-        XCTAssertTrue(big.otherCopiesCaution?.contains("may still be sharing") == true, "It's said again at the last look")
+        XCTAssertEqual(big.otherCopiesTitle, "Include the torrent copy")
+        XCTAssertTrue(big.otherCopiesNote?.contains("may still be seeding") == true, big.otherCopiesNote ?? "")
+        XCTAssertTrue(big.otherCopiesCaution?.contains("may still be seeding") == true, "It's said again at the last look")
     }
 
     func testAnOldTorrentJustSaysWhatHappens() throws {
@@ -253,7 +253,7 @@ final class MediaAdviceTests: XCTestCase {
         var facts = Facts()
         facts.torrents = [Facts.Torrent(path: "/Volumes/Fake/Downloads/Torrents/Big.Show.S01", name: "Big.Show.S01", finished: now.addingTimeInterval(-86_400 * 30), uploaded: 0, isPaused: false)]
         let big = try XCTUnwrap(Advisors.media(tree: disk.tree, facts: facts, now: now).first { $0.title == "Big Show" })
-        XCTAssertTrue(big.otherCopiesNote?.contains("stops sharing") == true, big.otherCopiesNote ?? "")
+        XCTAssertTrue(big.otherCopiesNote?.contains("stops seeding") == true, big.otherCopiesNote ?? "")
         XCTAssertNil(big.otherCopiesCaution)
     }
 
@@ -345,8 +345,8 @@ final class AppAdviceTests: XCTestCase {
 
     func testItSaysWhenItsMakerIsStillAround() throws {
         let d = disk()
-        let row = try XCTUnwrap(Advisors.appRow(fact(newest: now.addingTimeInterval(-300 * day), maker: "Helper, from the same maker, is running."), tree: d.tree, now: now))
-        XCTAssertTrue(row.subtitle.contains("from the same maker"), row.subtitle)
+        let row = try XCTUnwrap(Advisors.appRow(fact(newest: now.addingTimeInterval(-300 * day), maker: "Helper, by the same developer, is running."), tree: d.tree, now: now))
+        XCTAssertTrue(row.subtitle.contains("by the same developer"), row.subtitle)
     }
 
     func testWordingStatesFactsNotVerdicts() throws {
@@ -541,7 +541,7 @@ final class WinsTests: XCTestCase {
         XCTAssertFalse(lost.isQuick)
         XCTAssertEqual(lost.tier, .yourCall)
         XCTAssertEqual(lost.nodes, [disk.node("/Volumes/Fake/lost/node_modules")])
-        XCTAssertTrue(lost.subtitle.contains("Nothing says what's in this folder"))
+        XCTAssertTrue(lost.subtitle.contains("No manifest"))
     }
 
     func testARecipeCanBeAnyOfSeveralNames() throws {
@@ -898,7 +898,7 @@ final class CleanerTests: XCTestCase {
         var item = PlanItem(id: "a", title: "a", note: "", tierRaw: Tier.yourCall.rawValue, paths: [String(cString: real)])
         var check = PlanChecks.run(items: [item], trueBytes: [:], otherCopy: [:], runningApps: [])["a"]
         XCTAssertEqual(check?.canGo, false)
-        XCTAssertEqual(check?.problems.first { if case .inUse = $0 { return true } else { return false } }?.text, "helper is running from here, and may stop working if this goes.")
+        XCTAssertEqual(check?.problems.first { if case .inUse = $0 { return true } else { return false } }?.text, "helper is running from here.")
         XCTAssertEqual(check?.heldPaths, [String(cString: real)])
 
         // You saw that, and still want it gone.
@@ -934,9 +934,9 @@ final class CleanerTests: XCTestCase {
     }
 
     func testSeveralProgramsUsingAFolderAreCounted() {
-        XCTAssertEqual(CheckProblem.inUse(process: "node", pid: 1, others: 43, runFromHere: true).text, "node and 43 more are running from here, and may stop working if this goes.")
-        XCTAssertEqual(CheckProblem.inUse(process: "Preview", pid: 1).text, "Preview has a file open in here, and may stop working if this goes.")
-        XCTAssertEqual(CheckProblem.inUse(process: "Preview", pid: 1, others: 1).text, "Preview and 1 more have files open in here, and may stop working if this goes.")
+        XCTAssertEqual(CheckProblem.inUse(process: "node", pid: 1, others: 43, runFromHere: true).text, "node and 43 more are running from here.")
+        XCTAssertEqual(CheckProblem.inUse(process: "Preview", pid: 1).text, "Preview has a file open here.")
+        XCTAssertEqual(CheckProblem.inUse(process: "Preview", pid: 1, others: 1).text, "Preview and 1 more have files open here.")
     }
 
     func testAMissingDiskKeepsItPlanned() throws {
@@ -973,7 +973,7 @@ final class FinderAskTests: XCTestCase {
             guard case .couldntGo(let why, _) = Cleaner.whyItFailed(failure) else { return XCTFail("\(failure) has no reason") }
             XCTAssertFalse(why.isEmpty)
         }
-        XCTAssertEqual(Cleaner.whyItFailed(FinderAsk.Failure.notAllowed), .couldntGo("macOS stopped Headroom from asking the Finder to move this. You can allow that in System Settings.", askSettings: true))
+        XCTAssertEqual(Cleaner.whyItFailed(FinderAsk.Failure.notAllowed), .couldntGo("Headroom isn't allowed to control the Finder.", askSettings: true))
     }
 
     func testWhatFailedWaitsForYouToSayTryAgain() {

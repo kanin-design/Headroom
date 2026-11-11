@@ -20,12 +20,14 @@ enum Lens: String, CaseIterable, Identifiable {
     case map = "Map"
     case changes = "Changes"
     case freeUp = "Free Up"
+    case copies = "Copies"
     var id: String { rawValue }
     var help: String {
         switch self {
-        case .map: "What's on the disk, by kind"
-        case .changes: "What changed lately, and what hasn't for a long time"
-        case .freeUp: "Get space back, what you'd miss least first"
+        case .map: "Disk usage by kind"
+        case .changes: "Recent changes and untouched files"
+        case .freeUp: "Space you can free, safest first"
+        case .copies: "Duplicates, hardlinks, clones and symlinks"
         }
     }
 }
@@ -138,13 +140,52 @@ final class AppModel {
     var pointing: Pointing?
     /// What's under the pointer on the ring, so the panel can say so too.
     var hotBox: String?
+    /// The pointer is on Select recommended: the boxes it would tick light up.
+    var recommendedHot = false
     var hotRow: String?
     var message: String?
     /// The link story behind whatever the panel is showing.
     var story: LinkStory?
 
+    // Copies
+    /// What's on the disk more than once, for the tree on screen. Hard links, clones and aliases are known at once, and
+    /// duplicates arrive as they're found.
+    var copies: CopiesMap?
+    /// The groups that touch the folder in view.
+    var copyGroupsHere: [CopyGroup] = []
+    /// The search for duplicates: how much it has read, and how many groups of same-size files are done.
+    var copiesReading = false
+    var copiesBytesRead: UInt64 = 0
+    var copiesGroupsDone = 0
+    var copiesGroupsTotal = 0
+    /// How long the last search took, and how much of it was remembered from before.
+    var copiesSeconds: Double?
+    var copiesRemembered = 0
+    /// The set being pointed at, in the inspector or on the ring, so its row lights.
+    var hotCopyGroup: String?
+    /// The row being pointed at in the inspector: the names around the ring and the middle say where its copies are.
+    var pointedCopyGroup: String?
+    /// The one copy pointed at in an open row, or 0: leaving it for the row's head lights the whole row again.
+    @ObservationIgnored var pointedCopy: UInt32 = 0
+    /// Which of Copies' folded lists and sets are open.
+    var copiesOpen: Set<String> = []
+    /// Whether the ? at the top of Copies is showing what delete, hardlink and symlink do.
+    var copiesHelpShown = false
+    /// The copies you said stay, by path: a set keeps the copy you picked, whatever the rules would pick.
+    var keptCopies: Set<String> = AppModel.loadKeptCopies()
+    /// What the last search found, so the sets can be worked out again when something changes, with nothing read.
+    @ObservationIgnored var copiesFound: [Duplicates.Found] = []
+    /// The colour each set wears, so it keeps it while others come and go.
+    @ObservationIgnored var copyColours: [String: Int] = [:]
+    @ObservationIgnored var copiesAliasesFound: [Aliases.Found] = []
+    @ObservationIgnored var copiesStop: LockedFlag?
+    @ObservationIgnored var copiesScanID: UUID?
+    @ObservationIgnored let duplicateMemory = DuplicateMemory()
+
     // Planned actions
     var plan = PlanList()
+    /// Goes up whenever the plan changes, so anything showing a tick redraws, even when what it asks is cached out of sight.
+    var planVersion = 0
     /// What you'd really get back.
     var planBytes: UInt64 = 0
     var planBytesByItem: [String: UInt64] = [:]
@@ -170,6 +211,8 @@ final class AppModel {
 
     @ObservationIgnored var planNodes: [String: [UInt32]] = [:]
     @ObservationIgnored var planExcluded: [UInt32] = []
+    /// Planned files too small to be on the map, by item: a screenshot, say. They count, and show as ticked, by their paths.
+    @ObservationIgnored var planLoose: [String: [String]] = [:]
     @ObservationIgnored var planSet: NodeSet?
     @ObservationIgnored var planBack: NodeSet?
     @ObservationIgnored var nodeOfPath: [String: UInt32] = [:]
@@ -197,6 +240,8 @@ final class AppModel {
     @ObservationIgnored var effectGeneration = 0
     @ObservationIgnored var tipTask: Task<Void, Never>?
     @ObservationIgnored var focusBeforeExpanding: UInt32?
+    /// The folder the ring went to when a row was opened. While it's there, the list stays as it was: only the ring moved.
+    @ObservationIgnored var expandedFocus: UInt32?
     @ObservationIgnored var cleanStop = LockedFlag()
     @ObservationIgnored var takenOut: [(node: UInt32, bytes: UInt64, tree: DiskTree, heldBy: UInt32?, heldBytes: UInt64)] = []
     @ObservationIgnored var clearedItems: [PlanItem] = []
@@ -475,6 +520,8 @@ final class AppModel {
             relayout(.appear)
             if isSearching { runSearch() }
             workOutInsights(from: picture)
+            // A saved map is whole at once, so Copies, if that's the view you left, can look straight away.
+            if lens == .copies { refreshCopies() }
             return
         }
         guard current.isPartial else { return }
@@ -499,6 +546,7 @@ final class AppModel {
             focus = 0
             trail = []
             selected = nil
+            forgetOpenedRow()
             resetVisits()
             nameCache = [:]
             suggestions = Suggestions()
@@ -513,6 +561,9 @@ final class AppModel {
             reclaim = nil
             changeRows = []
             changeShrank = []
+            stopCopies()
+            copies = nil
+            copyGroupsHere = []
         }
         tree = picture
         treeVersion += 1
@@ -641,6 +692,7 @@ final class AppModel {
                     newFocus = keepPath.flatMap { newTree.find(path: $0) } ?? 0
                     self.trail = []
                     self.selected = nil
+                    self.forgetOpenedRow()
                 }
                 self.tree = newTree
                 self.nameCache = [:]
@@ -649,6 +701,8 @@ final class AppModel {
                 if let newFocus { self.focus = newFocus }
                 self.resolvePlanSynchronously(in: newTree)
                 self.adopt(map, wins, change, rows, for: window)
+                // Copies looks again whenever there's a new map of the whole disk, remembering what hasn't changed.
+                if self.lens == .copies { self.refreshCopies() }
                 // What was read for a saved map is read again once the scan after it has finished.
                 var isFresh = true
                 if case .appear = transition { isFresh = false }
@@ -703,6 +757,13 @@ final class AppModel {
         return running
     }
 
+    /// A new tree numbers its folders afresh, so the row that was open, and the folders remembered for it, mean nothing in it.
+    func forgetOpenedRow() {
+        expandedRow = nil
+        expandedFocus = nil
+        focusBeforeExpanding = nil
+    }
+
     func switchVolume(_ facts: VolumeFacts) {
         guard facts.mountPath != volume?.mountPath else { return }
         stopScan()
@@ -720,7 +781,7 @@ final class AppModel {
         winsScanID = nil
         otherCopies = [:]
         takenOut = []
-        expandedRow = nil
+        forgetOpenedRow()
         focus = 0
         trail = []
         selected = nil
@@ -787,6 +848,8 @@ final class AppModel {
             await MainActor.run {
                 guard self.treeVersion == version, self.tree === tree else { return }
                 self.adopt(map, wins, change, rows, for: window)
+                // What went to the Trash isn't a copy any more.
+                if self.copies != nil { self.rebuildCopies() }
                 if self.lens != .map { self.relayout(.recolor) }
             }
         }
@@ -834,6 +897,7 @@ final class AppModel {
         guard let tree else { return }
         let layout = drawing(tree)
         engine.apply(layout, transition)
+        if lens == .copies { refreshCopyGroups() }
         mapView?.voiceOverLayoutChanged()
         lastHoverIndex = nil
         hover = nil
@@ -868,6 +932,9 @@ final class AppModel {
         case .freeUp:
             guard let reclaim else { return Lenses.kindColorer(tree: tree) }
             return Lenses.reclaimColorer(map: reclaim, colours: mapColours, planned: plannedTest())
+        case .copies:
+            guard let copies, copies.scanID == tree.scanID else { let quiet = Palette.quiet.linearP3; return { _ in quiet } }
+            return Lenses.copiesColorer(map: copies, tree: tree)
         }
     }
 
@@ -990,6 +1057,7 @@ final class AppModel {
         linksTask?.cancel()
         guard let index, let tree, index < engine.layout.pieces.count else {
             engine.setEmphasis(primary: nil, related: [])
+            if lens == .copies { hotCopyGroup = nil }
             hover = nil
             hotBox = nil
             hotRow = nil
@@ -1011,7 +1079,9 @@ final class AppModel {
             chain.append(Int(a))
             a = layout.pieces[Int(a)].parent
         }
-        engine.setEmphasis(primary: index, related: [index..<Int(p.end)], ancestors: chain)
+        // In Copies, every copy of what's under the pointer lights up with it, in its set's colour.
+        let copiesLit = copyLight(for: index)
+        engine.setEmphasis(primary: index, related: [index..<Int(p.end)] + copiesLit.full, ancestors: chain + copiesLit.holding, tint: copiesLit.tint)
         var info = describe(p, index: index, tree: tree)
         hover = info
         // Whether its files also have another path, and when it was last used, are worked out off the main thread from
@@ -1033,6 +1103,10 @@ final class AppModel {
     }
 
     private func describe(_ p: Piece, index: Int, tree: DiskTree) -> HoverInfo {
+        // In Copies the line under the size says what it is there: an extra copy, the copy that stays, how much is extra.
+        if lens == .copies, !p.isSmaller, let copies, copies.scanID == tree.scanID, let text = copies.note(for: p.node, total: p.bytes, in: tree) {
+            return HoverInfo(pieceIndex: index, node: p.node, title: displayName(piece: p), bytes: p.bytes, share: "", note: text, links: nil)
+        }
         let n = tree.nodes[Int(p.node)]
         let base = tree.totals[Int(focus)]
         let percent = base > 0 ? Double(p.bytes) / Double(base) * 100 : 0
@@ -1040,7 +1114,7 @@ final class AppModel {
         let scope = focus == 0 ? "of the disk" : "of \(displayName(focus))"
         var share = "\(percentText) \(scope)"
         if tree.isPartial, !p.isSmaller {
-            if p.node == tree.hidden { share = "not read yet" }
+            if p.node == tree.hidden { share = "not scanned yet" }
             else if tree.isStillGrowing(p.node) { share = "so far" }
         }
         var note = ""
@@ -1102,6 +1176,16 @@ final class AppModel {
         hotRow = nil
         let lit = engine.layout.lit(by: nodes, tree: tree)
         engine.setEmphasis(primary: nil, related: lit.full, ancestors: lit.holding)
+    }
+
+    /// Lights what the inspector worked out itself, as `highlight(nodes:)` does for a list of things, in one colour if it has one.
+    func lightFromPanel(related: [Range<Int>], ancestors: [Int], primary: Int? = nil, tint: SIMD3<Float>? = nil) {
+        ringLitIt = false
+        lastHoverIndex = nil
+        hover = nil
+        hotBox = nil
+        hotRow = nil
+        engine.setEmphasis(primary: primary, related: related, ancestors: ancestors, tint: tint)
     }
 
     func highlight(kind: Kind?) {
@@ -1302,12 +1386,14 @@ final class AppModel {
         pointedThing = nil
         hotBox = nil
         hotRow = nil
-        engine.setCalm(new == .map ? 1 : (new == .freeUp ? 0.55 : 0))
+        engine.setCalm(new == .map ? 1 : (new == .freeUp || new == .copies ? 0.55 : 0))
         engine.setGlow(new == .changes ? 0.35 : 1)
         engine.setPreview(0, color: .zero)
         refreshGhost()
+        hotCopyGroup = nil
         if new == .freeUp, !plan.isEmpty { runChecks() }
         relayout(.recolor, labelDelay: 0.2)
+        if new == .copies { refreshCopies() }
         // Free Up and Changes want the whole picture, so now you're waiting on the scan.
         if tree?.isPartial == true, !scanIsHurrying { activeScan?.scanner.setHurry(new != .map) }
     }
@@ -1436,16 +1522,21 @@ enum Safety {
         return visible.hasPrefix(NSHomeDirectory() + "/Library/Preferences/") && visible.hasSuffix(".plist")
     }
 
+    private static let home = NSHomeDirectory()
+    private static let protected: Set<String> = [
+        "/", home, "/Users", "/Applications", "/Library", "/System", "/private", "/usr", "/opt", "/bin", "/sbin", "/etc", "/var",
+        home + "/Library", home + "/Desktop", home + "/Documents", home + "/Downloads", home + "/Pictures", home + "/Movies",
+        home + "/Music", home + "/.Trash", home + "/Library/Application Support", home + "/Library/Caches", home + "/Library/Preferences",
+        home + "/Library/Containers", home + "/Library/Group Containers", home + "/.config", home + "/.ssh", home + "/dev",
+    ]
+
     static func canTrash(_ path: String) -> Bool {
         if HiddenNames.isOn { return false }
-        let visible = path.hasPrefix("/System/Volumes/Data/") ? String(path.dropFirst("/System/Volumes/Data".count)) : path
-        let home = NSHomeDirectory()
-        let protected: Set<String> = [
-            "/", home, "/Users", "/Applications", "/Library", "/System", "/private", "/usr", "/opt", "/bin", "/sbin", "/etc", "/var",
-            home + "/Library", home + "/Desktop", home + "/Documents", home + "/Downloads", home + "/Pictures", home + "/Movies",
-            home + "/Music", home + "/.Trash", home + "/Library/Application Support", home + "/Library/Caches", home + "/Library/Preferences",
-            home + "/Library/Containers", home + "/Library/Group Containers", home + "/.config", home + "/.ssh", home + "/dev",
-        ]
+        var visible = PathMath.visible(path)
+        // One spelling for each place: `/Users/me/` and `/Users/me//x` mustn't slip past a check written for `/Users/me`.
+        while visible.count > 1, visible.hasSuffix("/") { visible.removeLast() }
+        guard visible.hasPrefix("/"), !visible.dropFirst().split(separator: "/", omittingEmptySubsequences: false).contains(where: { $0.isEmpty || $0 == "." || $0 == ".." })
+        else { return false }
         if protected.contains(visible) { return false }
         for keep in ["/.Trash", "/.ssh", "/.gnupg", "/Library/Keychains", "/Library/Preferences", "/Library/Mail", "/Library/Messages", "/Library/Safari",
                      "/Library/Mobile Documents", "/Library/CloudStorage", "/Library/Calendars", "/Library/Reminders", "/Library/Accounts", "/Library/Cookies",

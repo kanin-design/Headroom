@@ -23,11 +23,11 @@ final class HoverLineTests: XCTestCase {
     }
 
     func testAFolderOfHardLinksSaysSoAndWhere() {
-        XCTAssertEqual(line(series(), show), "Hard links to /Volumes/Fake/Downloads")
+        XCTAssertEqual(line(series(), show), "Hardlinks to /Volumes/Fake/Downloads")
     }
 
     func testOneFileIsOneHardLink() {
-        XCTAssertEqual(line(series(), show + "/e1.mkv"), "Hard link to /Volumes/Fake/Downloads")
+        XCTAssertEqual(line(series(), show + "/e1.mkv"), "Hardlink to /Volumes/Fake/Downloads")
     }
 
     func testClonesAreCalledClones() {
@@ -40,7 +40,7 @@ final class HoverLineTests: XCTestCase {
         disk.linked(show + "/e1.mkv", release + "/e1.mkv", 3 * gigabyte)
         disk.file(show + "/extras.mkv", 1 * gigabyte)
         disk.finish()
-        XCTAssertEqual(line(disk, show), "\(formatBytes(3 * gigabyte)) is hard links to /Volumes/Fake/Downloads")
+        XCTAssertEqual(line(disk, show), "\(formatBytes(3 * gigabyte)) in hardlinks to /Volumes/Fake/Downloads")
     }
 
     func testOnlyWhatsSharedWithTheNamedPlaceIsCounted() {
@@ -48,7 +48,7 @@ final class HoverLineTests: XCTestCase {
         disk.linked(show + "/e1.mkv", release + "/e1.mkv", 3 * gigabyte)
         disk.linked(show + "/e2.mkv", "/Volumes/Fake/Backup/e2.mkv", 2 * gigabyte)
         disk.finish()
-        XCTAssertEqual(line(disk, show), "\(formatBytes(3 * gigabyte)) is hard links to /Volumes/Fake/Downloads")
+        XCTAssertEqual(line(disk, show), "\(formatBytes(3 * gigabyte)) in hardlinks to /Volumes/Fake/Downloads")
     }
 
     func testTheBiggerSortIsTheOneNamed() {
@@ -72,7 +72,7 @@ final class HoverLineTests: XCTestCase {
         disk.linked(show + "/e1.mkv", show + "/Season 1/e1.mkv", 2 * gigabyte)
         disk.finish()
         XCTAssertNil(line(disk, show), "Removing it frees all of it")
-        XCTAssertEqual(line(disk, show + "/e1.mkv"), "Hard link to \(show)/Season 1")
+        XCTAssertEqual(line(disk, show + "/e1.mkv"), "Hardlink to \(show)/Season 1")
     }
 
     func testAFolderWithNoLinksSaysNothing() {
@@ -100,7 +100,7 @@ final class HoverLineTests: XCTestCase {
             }
             disk.finish()
             let before = line(disk, show)
-            XCTAssertEqual(before, clone ? "Clones of /Volumes/Fake/Downloads" : "Hard links to /Volumes/Fake/Downloads")
+            XCTAssertEqual(before, clone ? "Clones of /Volumes/Fake/Downloads" : "Hardlinks to /Volumes/Fake/Downloads")
             Accounting.merge(&disk.tree.links)
             XCTAssertEqual(disk.tree.links.count, 2)
             XCTAssertEqual(line(disk, show), before)

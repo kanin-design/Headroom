@@ -24,94 +24,109 @@ Measured on an M5 MacBook Air with 2.1 million files on a 494 GB disk:
 | Opening Headroom again | The map is on screen in about 0.2 s, from the last scan |
 | Bringing the map up to date | Only what changed since is read, in about a third of the time it takes to read everything |
 | A first launch | Half of the disk is placed in 0.4 s, and about three quarters within a second |
-| Reading the whole disk again (⌘R) | 6.9 s. `du` takes 40 s on the same disk, and collects less |
+| Rescanning the whole disk (⌘R) | 6.9 s. `du` takes 40 s on the same disk, and collects less |
 | Searching every name on the map | 2 to 14 ms per keystroke, across about 324,000 folders and files |
 | Sizing up `~/Library`, 376,000 files | 1.7 s |
-| Checking 47 things before a clean | 0.35 s, then 9 ms each time you tick one more |
-| Sitting open | 0% CPU and 130–150 MB of memory |
+| Checking 47 items before a clean | 0.35 s, then 9 ms for each one you add |
+| Finding duplicates among 465 files of the same sizes, 5.6 GB | 1.3 s, reading straight from the disk at 4.2 GB/s. The next look remembers them |
+| Idle | 0% CPU and 130–150 MB of memory |
 
 ## Honest about space
 
-- **What you'd really get back.** Before anything goes, Headroom says how much space you'd really get back, which can be
-  far less than a folder's size.
-- **Hard links and clones count once.** A film that's both in your library and in a torrent folder is one file with two
-  names, not a duplicate. Removing one of the names frees nothing, and Headroom says so, then offers the other name too.
+- **Reclaimable space, not just size.** Before anything goes, Headroom shows how much space it actually frees, which can
+  be far less than a folder's size.
+- **Hardlinks and clones count once.** A film in both your library and a torrent folder is one file with two paths, not a
+  duplicate. Deleting one path frees nothing: Headroom says so and offers to include the other.
 - **The ring adds up to the whole disk.** Free space, macOS, memory swap and whatever can't be read are pieces of their
   own, so nothing is left unexplained.
 
 ## Safe by design
 
-- **Nothing is deleted straight away.** Everything goes to the Trash first, **Undo** puts it all back, and emptying the
-  Trash is always a click of its own.
-- **Checks before anything moves.** Headroom makes sure each thing is still there and isn't being used by a program,
-  and that anything which doesn't rebuild itself hasn't changed since you picked it. If a program is using it, Headroom
-  says which one and lets you decide.
-- **Protected places.** macOS's own folders, your home folder's standard folders such as Documents and Library, and
-  places like your keychains and mail can't be removed.
-- **Moves you can trust.** Moving something to another disk copies it, reads every byte back to compare, and only then
-  sends the original to the Trash.
+- **Nothing is deleted right away.** Everything goes to the Trash first, **Undo** puts it all back, and emptying the Trash
+  is always a separate step.
+- **Checks before anything moves.** Each item must still exist and not be in use, and anything that doesn't rebuild
+  itself must be unchanged since you selected it. If an app is using it, Headroom names the app and lets you decide.
+- **Protected locations.** macOS folders, your home folder's standard folders such as Documents and Library, and your
+  keychains and mail can't be deleted.
+- **Verified moves.** Moving an item to another disk copies it, compares every byte, and only then moves the original to
+  the Trash.
 
 ## Private
 
-What Headroom reads stays on your Mac. The only time it goes online is to ask GitHub whether there's a newer version, at
-launch or when you choose Check for Updates, and to download it if you say yes. Nothing about your disk goes with the
-question. To say more about what's yours, it reads Plex's watched state, Transmission's torrents, Steam's last played
-dates and git, if you have them, and only ever reads.
+What Headroom reads stays on your Mac. It only goes online to check GitHub for a newer version, at launch or when you
+choose Check for Updates, and to download it if you agree. Nothing about your disk is sent. For better suggestions it
+reads Plex's watched state, Transmission's torrents, Steam's last-played dates and git, if you have them, and never
+writes to them.
 
 ## What you can do
 
 ### Map
 
-Every folder is a piece of the ring, sized by the space it takes and coloured by what it belongs to, so whatever belongs
-together stays together. Point at anything to see its name, its size and when you last used it. Click a folder to go
-into it, and click the middle to go back up.
+Every folder is a piece of the ring, sized by the space it uses and coloured by the group it belongs to, so related
+folders stay together. Point at anything to see its name, size and when it was last used. Click a folder to open it, and
+click the middle to go back up.
 
 ### Free Up
 
 ![Free Up: a short stack of boxes, such as installers, caches and films, with the files of the box being pointed at lit up on the ring](docs/free-up.jpg)
 
-A short stack of boxes, with what you'd miss least on top: caches and build output, installers and archives, project
-leftovers, episodes you've watched, apps you don't use and more. Point at a box and its files light up on the ring. Tick a
-box to select everything in it, or open the box to pick one thing at a time. Nothing happens until you press **Clean**.
+Things you may want to delete, in boxes named for what they are, biggest first: Caches, Junk, Developer, AI models,
+Unused apps, iPhone backups, Old installers, Screenshots and more. A Mac only gets the boxes it has something for.
+Open a box to see what's in it, one row per app or thing. **Select recommended** ticks what's safe without a second
+thought: caches not in use, and junk. **Largest files**, at the end, lists the biggest files nothing else covers. Point
+at a box and its files light up on the ring. Nothing happens until you click **Clean**.
 
 ### Changes
 
 ![Changes: what was new or changed in the last seven days, each folder coloured from red for a little to yellow for all of it, with a list of the folders responsible](docs/changes.jpg)
 
 What grew since the last scan, or in the last day, week or month. Each piece is coloured by how much of it is new or
-changed, red for a little and yellow for all of it. The middle says how much free space changed, when there's an earlier
-scan to compare with, or otherwise how much was touched, going by file dates. The inspector lists what grew or was touched
-in the folder you're in.
+changed, from red for a little to yellow for all of it. The middle shows how much free space changed since an earlier
+scan, or, without one, the size of the files modified in that time. The inspector lists what grew or was modified in the
+folder you're in.
 
-Or the other way round: what nothing has changed in for a month, three months or a year, deep blue for a little and
-pale ice for all of it. An app you opened, a film you watched or a game you played in that time counts as touched,
-however old its files are.
+**Untouched** turns it round: what hasn't changed in a month, three months or a year, from deep blue for a little to pale
+ice for all of it. An app you opened, a film you watched or a game you played in that time counts as touched, however old
+its files are.
+
+### Copies
+
+![Copies: each set of copies in a colour of its own on the ring, with the three copies of one film lit up and named, and a short stack of sets in the inspector](docs/copies.jpg)
+
+Duplicates, by content. Each set has its own colour on the ring. Point at a set to see where every copy is, even ones too
+small to draw, with the copy to keep marked **Keep**. Open a set to pick a different one to keep, then **Delete**,
+**Hardlink** or **Symlink** the rest. Each copy is compared byte for byte first and goes to the Trash on record, so Undo puts
+it back. Or tick the set to delete the duplicates with the next Clean. Duplicates of many files in the same folders, such as
+an exported photo folder, are one set.
+
+Hardlinks, clones and symlinks are listed below the duplicates; they take no extra space. Files are only read when you open
+Copies, and never one that's only in iCloud.
 
 ### Search
 
 ![Search: 69 matches for "mkv", each with its path and size, all of them lit up on the ring](docs/search.jpg)
 
-Press ⌘F and type. The matches are listed as you type, biggest first, each with its path and size, and they light up on
-the ring. Capitals and accents don't matter, in any alphabet.
+Press ⌘F and type. Matches are listed as you type, largest first, with their path and size, and light up on the ring.
+Search ignores case and accents, in any alphabet.
 
 ### A closer look
 
 ![A card over the ring about one folder, listing what's inside it, biggest first](docs/card.jpg)
 
-Press Space on anything for a card: a folder's size and what's inside, with pictures when the folder is mostly photos or
-video, or a file's own preview. A film plays where it is: click the picture. The card is a window of its own, so drag it
-where you like and resize it from its edges, and it opens there next time. It says when the thing was last opened and
-what deleting it would free, and for a film its length, size and frame rate. Tick it for Free Up or send it to the Trash
-from there. What the card shows is selected, so the inspector shows it too.
+Press Space on anything for a card: a folder's size and contents, with thumbnails when it's mostly photos or video, or a
+file's preview. Click a film to play it in place. The card is a window of its own: move it, resize it, and it reopens
+where you left it. It shows when the item was last opened and how much deleting it frees, and for a film its duration,
+resolution and frame rate. Select it for Free Up or move it to the Trash from there. The card's item is selected in the
+inspector too.
 
-Double-click a file on the ring to open it. Right-click anything to copy its name or path, open it, reveal it in the
-Finder, open it in Terminal or send it to the Trash.
+Double-click a file on the ring to open it. Right-click anything to copy its name or path, open it, show it in Finder,
+open it in Terminal or move it to the Trash.
 
 ## Get started
 
-Headroom needs macOS 26 or later on a Mac with Apple silicon. Download the disk image from [Releases](../../releases),
-open it and drag Headroom to Applications. This beta isn't notarized by Apple, so the first time you open Headroom, macOS
-stops it. Open **System Settings → Privacy & Security**, click **Open Anyway** next to Headroom, and open Headroom again.
+Headroom requires macOS 26 or later on a Mac with Apple silicon. Download the disk image from [Releases](../../releases),
+open it and drag Headroom to Applications. This beta isn't notarized, so macOS blocks the first launch: open
+**System Settings → Privacy & Security**, click **Open Anyway** next to Headroom, and open Headroom again.
 
 To build Headroom yourself, clone this repository and use Xcode's command line tools. In the repository's folder:
 
@@ -120,37 +135,37 @@ To build Headroom yourself, clone this repository and use Xcode's command line t
 open build/Headroom.app
 ```
 
-The first time, Headroom explains what macOS keeps private and shows you where to switch on Full Disk Access. Until then
-it reads nothing at all, so macOS never asks you about a folder: the ring shows only what the disk itself reports, and
-Headroom reads the whole disk the moment it may. A build is signed with a certificate called Headroom if your
-keychain has one, and otherwise with your development certificate if you have one, so the permission survives rebuilds.
+On first launch, Headroom shows how to turn on Full Disk Access. Until then it reads nothing at all, so macOS never
+prompts about a folder: the ring shows only what the disk itself reports, and the scan starts as soon as access is
+granted. A build is signed with a certificate named Headroom if your keychain has one, otherwise with your development
+certificate, so the permission survives rebuilds.
 
-When there's a new version, or the same version again with a newer build, Headroom says so at launch and can put it in
-place itself. Say Not This Version and it waits for the one after. **Check for Updates…** in the Headroom menu, or in
-About, looks again whenever you like. Every version is signed with the same certificate, so an update keeps Full Disk
-Access, and Headroom only takes an update signed with it.
+When there's a new version, or a newer build of the same version, Headroom offers it at launch and installs it itself.
+**Skip This Version** waits for the next one. **Check for Updates…** in the Headroom menu or in About checks at any time.
+Every version is signed with the same certificate, so an update keeps Full Disk Access, and Headroom only installs an
+update signed with it.
 
-Headroom is a personal project and a showcase, in an early beta. Headroom moves real files, so read what it tells you
-before you press **Clean**.
+Headroom is a personal project and a showcase, in early beta. It moves real files, so check what it shows before you
+click **Clean**.
 
 ## Keys
 
 | | |
 |---|---|
-| ⌘1, ⌘2, ⌘3 | Map, Changes, Free Up |
+| ⌘1, ⌘2, ⌘3, ⌘4 | Map, Changes, Free Up, Copies |
 | ⇧⌘↑ | Back to the whole disk |
 | ⌃⌘I | Show or hide the inspector |
-| ⌘F | Find a file or folder |
-| Space | A closer look at what you're pointing at |
+| ⌘F | Search |
+| Space | Quick Look |
 | Esc | Back out, the way you came in |
-| ⌘↑ | The folder this one is in |
-| ⌘←, ⌘→ or ⌘[, ⌘] | Back and forward through where you've been, as the arrows at the top do |
-| ⌘C, ⌥⌘C | Copy the name, or the path |
-| ⌘O, ⌥⌘R | Open, or reveal in the Finder |
-| ⌘⌫ | Select or unselect it in Free Up |
-| ⌘Z | Undo the last Send to Trash or clean |
-| ⌘R | Read the disk again, at full power |
-| Hold ⌥ in Free Up | See the disk as it will be afterwards |
+| ⌘↑ | Enclosing folder |
+| ⌘←, ⌘→ or ⌘[, ⌘] | Back and forward |
+| ⌘C, ⌥⌘C | Copy name, copy path |
+| ⌘O, ⌥⌘R | Open, show in Finder |
+| ⌘⌫ | Select or deselect in Free Up |
+| ⌘Z | Undo the last Move to Trash or clean |
+| ⌘R | Rescan at full speed |
+| Hold ⌥ in Free Up | Preview the disk after cleaning |
 
 Keys apply to what you're pointing at, otherwise to what's selected, otherwise to the folder you're in.
 
@@ -168,6 +183,8 @@ How Headroom is designed, with every measurement, is in [DESIGN.md](DESIGN.md).
 | `Advice/Walker.swift` | Looking closely at one folder: its size, newest change, largest file and files with more than one name |
 | `Advice/Cleaner.swift` | Everything that touches files, behind one set of checks |
 | `Advice/Sections.swift` | The Free Up boxes |
+| `Model/Duplicates.swift` | Finding duplicates: same size from the map, then files of a size read side by side in growing pieces |
+| `Model/Copies.swift` | Copies: duplicate sets, hardlinks, clones and symlinks, which copy to keep, and their colours |
 | `Render/Shaders.metal` | Each piece's shape and light, the glow and the scale |
 | `App/Updater.swift` | New versions from GitHub's releases, taken only when signed with the same certificate |
 
@@ -179,6 +196,8 @@ How Headroom is designed, with every measurement, is in [DESIGN.md](DESIGN.md).
 - `--no-cache` starts without the saved scan, to see what a first launch looks like.
 - `--locked`, with `--script`, acts as if Full Disk Access were off, to see what that looks like.
 - `--reduce-motion` acts as if Reduce Motion were on, whatever System Settings says.
+- `--demo-scale 200` and `--demo-disks /a:/b`, with `--script`, are for recording a demo on made-up disk images: every size
+  is multiplied, so a few gigabytes read as a full Mac, and only those disks are listed.
 - `--remember-window`, with `--script`, keeps the window, the inspector and the view between runs, in your own settings.
 - `./release.sh` makes the release disk image, signed with the certificate called Headroom, and a small file beside it
   with its version and build number. Both go on the release: a copy that updates itself compares build numbers, so a

@@ -56,6 +56,11 @@ struct WinRow: Identifiable, Equatable {
     var openAppName: String? = nil
     /// It could come back, but it may cost you more than a download, so only a tick of your own takes it.
     var askFirst = false
+    /// Where it's listed in Free Up.
+    var box: BoxKind = .other
+
+    /// What Select recommended takes: safe without a second thought, and not in use right now.
+    var isRecommended: Bool { isQuick && inUse == nil && isPlannable }
 
     var isPlannable: Bool { action == .trash || action == .uninstall || action == .emptyTrash }
     /// What this could give back, counting another copy of the same files if there is one.
@@ -104,6 +109,11 @@ final class ReclaimMap: @unchecked Sendable {
 
 enum Wins {
     static let smallestRow: UInt64 = 50_000_000
+    /// Junk shows from this little: clearing it is about tidying as much as space.
+    static let smallestJunk: UInt64 = 1_000_000
+    /// A download that hasn't moved for this long isn't going to finish.
+    static let unfinishedAfterDays: UInt32 = 7
+    static let unfinishedEndings: Set<String> = ["crdownload", "download", "part", "partial", "opdownload"]
     static let smallerCachesID = "group:smaller-caches"
 
     static func appName(forFolder name: String) -> String {
@@ -163,6 +173,18 @@ enum Wins {
             // Named like a project's environment, but it isn't one: Python itself has a folder called venv.
             if let marker = rule.marker, let path = tree.path(id), !FileManager.default.fileExists(atPath: path + "/" + marker) { continue }
 
+            if rule.box == .junk {
+                // What's in the folder goes; the folder itself stays, since apps expect it.
+                let inside = tree.children(id).filter { !nodes[Int($0)].has(NodeFlag.gone) && tree.path($0).map(Safety.canTrash) == true }
+                let sum = inside.reduce(UInt64(0)) { $0 &+ tree.totals[Int($1)] }
+                guard sum >= smallestJunk else { continue }
+                var row = WinRow(id: tree.friendlyPath(id), title: rule.title, subtitle: DiskTree.friendly(parentPath(tree, id)), detail: rule.detail, tier: rule.tier,
+                                 nodes: inside, bytes: 0, paperBytes: sum, action: .trash, command: nil, bundleID: nil)
+                row.isQuick = true
+                row.box = .junk
+                rows.append(row)
+                continue
+            }
             if rule.groups {
                 // Clearing build output costs you a rebuild, so projects you're working on aren't part of the one click.
                 let project = nodes[i].parent
@@ -176,10 +198,11 @@ enum Wins {
                 } else {
                     groupIndex[key] = rows.count
                     var row = WinRow(id: "group:" + rule.title + (noRecipe ? ":no-recipe" : (active ? ":active" : "")), title: rule.title, subtitle: "",
-                                     detail: noRecipe ? "Nothing next to these says what's in them, so you'd have to work out what to install again." : rule.detail,
+                                     detail: noRecipe ? "No manifest next to these, so it's unclear what to reinstall." : rule.detail,
                                      tier: noRecipe ? .yourCall : rule.tier, nodes: [id], bytes: 0, paperBytes: total, action: .trash, command: noRecipe ? nil : rule.command, bundleID: rule.appBundleID)
                     row.isQuick = !active && !noRecipe
-                    row.inUse = active && !noRecipe ? "Changed in the last two weeks" : nil
+                    row.inUse = active && !noRecipe ? "Changed in the last 2 weeks" : nil
+                    row.box = rule.box
                     rows.append(row)
                 }
                 continue
@@ -210,6 +233,7 @@ enum Wins {
             var row = WinRow(id: tree.friendlyPath(id), title: title, subtitle: subtitle, detail: rule.detail, tier: rule.tier,
                              nodes: [id], bytes: 0, paperBytes: total, action: action, command: rule.command, bundleID: bundle)
             row.askFirst = rule.askFirst
+            row.box = rule.box
             if rule.tier == .rebuilds, action == .trash {
                 if rule.namedByBundleID || bundle != nil {
                     // An app's cache is safe to clear unless the app is open right now.
@@ -224,10 +248,10 @@ enum Wins {
                     // Kept where caches go, but nothing says what's in it or how it comes back. It's not for the one click or the slider.
                     row.tier = .redownload
                     row.askFirst = true
-                    row.detail = "This is in the folder where tools keep their caches, but Headroom doesn't know this one. It may be more than a cache: a model, or something that took time to set up."
+                    row.detail = "Unknown tool. It may hold more than a cache, such as a model."
                 } else if tree.statRow(i)[DiskTree.statRecent14] > 0 {
                     // A tool's cache costs a download or a slower build next time, so one you're using isn't part of the one click.
-                    row.inUse = "Used in the last two weeks"
+                    row.inUse = "Used in the last 2 weeks"
                 } else {
                     row.isQuick = true
                 }
@@ -238,9 +262,10 @@ enum Wins {
         if !smallCaches.isEmpty {
             let sum = smallCaches.reduce(UInt64(0)) { $0 &+ tree.totals[Int($1)] }
             if sum >= smallestRow {
-                var row = WinRow(id: smallerCachesID, title: "Smaller app caches", subtitle: "", detail: "Caches from apps that each use less than 100 MB. They rebuild as you use the apps.",
+                var row = WinRow(id: smallerCachesID, title: "Smaller app caches", subtitle: "", detail: "App caches under 100 MB each. Rebuilt as you use the apps.",
                                  tier: .rebuilds, nodes: smallCaches, bytes: 0, paperBytes: sum, action: .trash, command: nil, bundleID: nil)
                 row.isQuick = true
+                row.box = .caches
                 rows.append(row)
             }
         }
@@ -248,8 +273,8 @@ enum Wins {
         // Groups say how many places they span.
         for at in rows.indices where rows[at].id.hasPrefix("group:") {
             let count = rows[at].nodes.count
-            rows[at].subtitle = rows[at].id == smallerCachesID ? "\(count) apps" : (count == 1 ? tree.friendlyPath(rows[at].nodes[0]) : "In \(count) places")
-            if rows[at].id.hasSuffix(":no-recipe") { rows[at].subtitle += ". Nothing says what's in \(count == 1 ? "this folder" : "these folders")." }
+            rows[at].subtitle = rows[at].id == smallerCachesID ? "\(count) apps" : (count == 1 ? tree.friendlyPath(rows[at].nodes[0]) : "\(count) folders")
+            if rows[at].id.hasSuffix(":no-recipe") { rows[at].subtitle += " · No manifest" }
         }
 
         // On any other disk the Trash is a folder at the top of the disk.
@@ -258,7 +283,8 @@ enum Wins {
                 for child in tree.children(top) where tree.name(child) == ".Trashes" { trashNode = child }
             }
         }
-        rows = rows.filter { $0.paperBytes >= smallestRow }
+        // Junk is worth listing however little there is of it.
+        rows = rows.filter { $0.paperBytes >= smallestRow || $0.box == .junk || $0.box == .trash }
         settleReclaim(&rows, tree: tree)
         addYourCalls(&rows, tree: tree, rules: rules)
         addNoLossRows(&rows, tree: tree, rules: rules, restartExtras: restartExtras, trash: trashNode)
@@ -319,48 +345,41 @@ enum Wins {
         }
     }
 
-    private static func addYourCalls(_ rows: inout [WinRow], tree: DiskTree, rules: RuleBook) {
+    /// Downloads that stopped halfway and were left: a browser's part-file that hasn't changed in a week.
+    private static func addYourCalls(_ rows: inout [WinRow], tree: DiskTree, rules: RuleBook, now: Date = Date()) {
         let nodes = tree.nodes
-        let installers: Set<String> = ["dmg", "pkg", "iso", "zip", "tar", "gz", "tgz", "7z", "rar", "xz"]
+        guard tree.home != 0 else { return }
         var downloads: UInt32 = 0
-        if tree.home != 0 {
-            var c = nodes[Int(tree.home)].firstChild
-            while c != 0 {
-                if tree.name(c) == "Downloads" { downloads = c; break }
-                c = nodes[Int(c)].nextSibling
+        var c = nodes[Int(tree.home)].firstChild
+        while c != 0 {
+            if tree.name(c) == "Downloads" { downloads = c; break }
+            c = nodes[Int(c)].nextSibling
+        }
+        guard downloads != 0 else { return }
+        let cutoff = UInt32(seconds: now.timeIntervalSince1970) &- unfinishedAfterDays * 86_400
+        var unfinished: [UInt32] = []
+        // Browsers leave them at the top of Downloads, or one folder down. Safari's is a folder that ends in .download.
+        func look(in folder: UInt32, deeper: Bool) {
+            for child in tree.children(folder) {
+                let n = nodes[Int(child)]
+                guard n.flags & (NodeFlag.synthetic | NodeFlag.alias | NodeFlag.gone) == 0, n.rule == 0 else { continue }
+                let ending = (tree.name(child) as NSString).pathExtension.lowercased()
+                if unfinishedEndings.contains(ending) {
+                    if n.modTime != 0, n.modTime < cutoff, tree.path(child).map(Safety.canTrash) == true { unfinished.append(child) }
+                } else if deeper, n.has(NodeFlag.directory) {
+                    look(in: child, deeper: false)
+                }
             }
         }
-        var inDownloads: [UInt32] = []
-        var old: [(UInt32, UInt64)] = []
-        let cutoff = UInt32(seconds: Date().timeIntervalSince1970) &- 180 * 86_400
-        for i in 1..<max(tree.count, 1) {
-            let n = nodes[i]
-            guard !n.has(NodeFlag.directory), !n.has(NodeFlag.synthetic), !n.has(NodeFlag.alias), !n.has(NodeFlag.gone), n.rule == 0,
-                  nodes[Int(n.parent)].has(NodeFlag.projects) else { continue }
-            let id = UInt32(i)
-            let total = tree.totals[i]
-            if downloads != 0, total >= 30_000_000, tree.isInside(id, downloads) {
-                let ext = (tree.name(id) as NSString).pathExtension.lowercased()
-                if installers.contains(ext) { inDownloads.append(id) }
-            }
-            if total >= 500_000_000, n.modTime != 0, n.modTime < cutoff { old.append((id, total)) }
-        }
-        if !inDownloads.isEmpty {
-            let sum = inDownloads.reduce(UInt64(0)) { $0 &+ tree.totals[Int($1)] }
-            if sum >= smallestRow {
-                rows.append(WinRow(id: "group:installers", title: "Installers and archives in Downloads", subtitle: "\(inDownloads.count) files",
-                                   detail: "Disk images and archives you've downloaded. Once something is installed or unpacked, you rarely need these.",
-                                   tier: .yourCall, nodes: inDownloads, bytes: sum, paperBytes: sum, action: .trash, command: nil, bundleID: nil))
-            }
-        }
-        let formatter = DateFormatter()
-        formatter.dateFormat = "MMM yyyy"
-        for (id, total) in old.sorted(by: { $0.1 > $1.1 }).prefix(12) where downloads == 0 || !inDownloads.contains(id) {
-            let date = Date(timeIntervalSince1970: TimeInterval(nodes[Int(id)].modTime))
-            rows.append(WinRow(id: tree.friendlyPath(id), title: tree.name(id), subtitle: "Untouched since \(formatter.string(from: date))",
-                               detail: "A big file nobody has changed in a long time. It's at \(tree.friendlyPath(id)).",
-                               tier: .yourCall, nodes: [id], bytes: total, paperBytes: total, action: .trash, command: nil, bundleID: nil))
-        }
+        look(in: downloads, deeper: true)
+        let sum = unfinished.reduce(UInt64(0)) { $0 &+ tree.totals[Int($1)] }
+        guard sum >= smallestJunk else { return }
+        var row = WinRow(id: "junk:unfinished", title: "Unfinished downloads", subtitle: unfinished.count == 1 ? tree.name(unfinished[0]) : "\(unfinished.count) files",
+                         detail: "Downloads that stopped and were left for over a week.", tier: .noLoss, nodes: unfinished, bytes: sum, paperBytes: sum,
+                         action: .trash, command: nil, bundleID: nil)
+        row.isQuick = true
+        row.box = .junk
+        rows.append(row)
     }
 
     /// macOS lists a downloaded update here. Being big isn't enough on its own to say one is waiting.
@@ -373,9 +392,11 @@ enum Wins {
     private static func addNoLossRows(_ rows: inout [WinRow], tree: DiskTree, rules: RuleBook, restartExtras: [UInt32], trash: UInt32?) {
         let nodes = tree.nodes
         if let trash, tree.totals[Int(trash)] > 1_000_000 {
-            var row = WinRow(id: "trash", title: "Already in the Trash", subtitle: "Thrown away, but still using space", detail: "This space only comes back once the Trash is emptied, and emptying it is always your last step.",
+            let items = Int(tree.totalFiles[Int(trash)])
+            var row = WinRow(id: "trash", title: "Trash", subtitle: items == 1 ? "1 item" : "\(items.formatted()) items", detail: "Freed when the Trash is emptied, always the last step.",
                              tier: .noLoss, nodes: [trash], bytes: Accounting.reclaimable([trash], in: tree), paperBytes: 0, action: .emptyTrash, command: nil, bundleID: nil)
             row.isQuick = true
+            row.box = .trash
             rows.append(row)
         }
         var swap: UInt32 = 0, updates: UInt32 = 0
@@ -388,11 +409,11 @@ enum Wins {
         let restartBytes = restartNodes.reduce(UInt64(0)) { $0 &+ tree.totals[Int($1)] }
         if restartBytes >= 1_000_000_000 {
             var parts: [String] = []
-            if swap != 0, tree.totals[Int(swap)] >= 500_000_000 { parts.append("\(formatBytes(tree.totals[Int(swap)])) of swap") }
+            if swap != 0, tree.totals[Int(swap)] >= 500_000_000 { parts.append("\(formatBytes(tree.totals[Int(swap)])) swap") }
             let others = restartExtras.reduce(UInt64(0)) { $0 &+ tree.totals[Int($1)] }
-            if others >= 500_000_000 { parts.append("\(formatBytes(others)) of temporary files") }
-            rows.append(WinRow(id: "restart", title: "Restart your Mac", subtitle: parts.joined(separator: " and "),
-                               detail: "Swap and temporary files reset when your Mac restarts. Swap slowly fills up again as you work.",
+            if others >= 500_000_000 { parts.append("\(formatBytes(others)) temporary files") }
+            rows.append(WinRow(id: "restart", title: "Restart your Mac", subtitle: parts.joined(separator: " · "),
+                               detail: "A restart clears swap and temporary files. Swap grows again as you work.",
                                tier: .noLoss, nodes: restartNodes, bytes: restartBytes, paperBytes: 0, action: .restart, command: nil, bundleID: nil))
         }
         // A startup area well beyond its usual size means an update is sitting there, downloaded and waiting.
@@ -400,8 +421,8 @@ enum Wins {
             let usual: UInt64 = 13_000_000_000
             let total = tree.totals[Int(updates)]
             if total > usual + 2_000_000_000, updateIsWaiting() {
-                rows.append(WinRow(id: "update", title: "Install the waiting macOS update", subtitle: "Downloaded, and using extra space until installed",
-                                   detail: "macOS keeps a downloaded update in its startup area. Installing it should free most of this. That figure is an estimate, because macOS doesn't report the exact size.",
+                rows.append(WinRow(id: "update", title: "Install macOS update", subtitle: "Downloaded, waiting to install",
+                                   detail: "A downloaded update waits on the startup volumes. Installing it frees most of this. The size is an estimate.",
                                    tier: .noLoss, nodes: [updates], bytes: total - usual, paperBytes: 0, action: .softwareUpdate, command: nil, bundleID: nil))
             }
         }

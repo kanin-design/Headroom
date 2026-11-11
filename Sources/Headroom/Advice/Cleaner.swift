@@ -123,29 +123,29 @@ enum CheckProblem: Equatable {
 
     var text: String {
         switch self {
-        case .gone: "Already gone."
-        case .someGone(let n): "\(n) of these \(n == 1 ? "is" : "are") already gone."
-        case .protected: "macOS protects this, so it can't be moved."
+        case .gone: "Not found."
+        case .someGone(let n): "\(n) not found."
+        case .protected: "Protected by macOS."
         case .appOpen(let name, _): "\(name) is open."
         case .inUse(let process, _, let others, let runFromHere): Self.inUseText(process, others: others, runFromHere: runFromHere)
-        case .someInUse(let n, let process): "\(n) \(n == 1 ? "is" : "are") in use by \(process) and will stay for now."
-        case .changed(let date): "Changed \(Self.ago(date)), after you selected this."
-        case .noGain(let other): "You'd get nothing back: \(other) holds the same files."
-        case .linkedOutOfSight(let bytes): "\(formatBytes(bytes)) of this also exists somewhere Headroom isn't allowed to look, so you may get less back."
-        case .diskMissing(let name): "\(name) isn't plugged in, so this stays selected."
-        case .differentDisk(let name): "This \(name) isn't the disk you selected this on, so nothing on it will be touched."
-        case .alreadyThere: "Already in that folder, so there's nothing to move."
-        case .noRoom(let needed, let free): "This needs \(formatBytes(needed)), and that disk has \(formatBytes(free)) free."
+        case .someInUse(let n, let process): "\(n) in use by \(process), skipped for now."
+        case .changed(let date): "Changed \(Self.ago(date)), after it was selected."
+        case .noGain(let other): "Frees nothing: hardlinked or cloned with \(other)."
+        case .linkedOutOfSight(let bytes): "\(formatBytes(bytes)) is hardlinked where Headroom can't read, so less may be freed."
+        case .diskMissing(let name): "\(name) isn't connected."
+        case .differentDisk(let name): "A different disk named \(name) is connected. Nothing on it will be touched."
+        case .alreadyThere: "Already in that folder."
+        case .noRoom(let needed, let free): "Needs \(formatBytes(needed)). That disk has \(formatBytes(free)) free."
         case .tooBigForDisk(let name): "\(name) can't hold files over 4 GB."
-        case .needsPassword: "macOS will ask for your password for this one."
+        case .needsPassword: "Requires your password."
         case .couldntGo(let why, _): why
         }
     }
 
     private static func inUseText(_ process: String, others: Int, runFromHere: Bool) -> String {
         let who = others == 0 ? process : "\(process) and \(others) more"
-        let doing = runFromHere ? (others == 0 ? "is running from here" : "are running from here") : (others == 0 ? "has a file open in here" : "have files open in here")
-        return "\(who) \(doing), and may stop working if this goes."
+        let doing = runFromHere ? (others == 0 ? "is running from here" : "are running from here") : (others == 0 ? "has a file open here" : "have files open here")
+        return "\(who) \(doing)."
     }
 
     private static func ago(_ date: Date) -> String {
@@ -458,21 +458,21 @@ enum Cleaner {
     static func whyItFailed(_ error: Error) -> CheckProblem {
         switch error {
         case FinderAsk.Failure.notAllowed:
-            return .couldntGo("macOS stopped Headroom from asking the Finder to move this. You can allow that in System Settings.", askSettings: true)
+            return .couldntGo("Headroom isn't allowed to control the Finder.", askSettings: true)
         case FinderAsk.Failure.cancelled:
-            return .couldntGo("You cancelled, so this stayed.", askSettings: false)
+            return .couldntGo("Cancelled.", askSettings: false)
         case FinderAsk.Failure.failed(let text):
             return .couldntGo("The Finder couldn't move this: \(text)", askSettings: false)
         case Failure.notAllowed:
-            return .couldntGo("macOS protects this, so it can't be moved.", askSettings: false)
+            return .couldntGo("Protected by macOS.", askSettings: false)
         case Failure.wouldOverwrite:
-            return .couldntGo("Something with that name is already there, so this stayed.", askSettings: false)
+            return .couldntGo("An item with that name already exists there.", askSettings: false)
         case Failure.copyDidNotMatch:
-            return .couldntGo("The copy didn't match the original, so the original stayed.", askSettings: false)
+            return .couldntGo("The copy didn't match the original, so the original was kept.", askSettings: false)
         case Failure.sameFile:
-            return .couldntGo("Already there, so there's nothing to move.", askSettings: false)
+            return .couldntGo("Already there.", askSettings: false)
         case Failure.stopped:
-            return .couldntGo("You stopped the clean before this was done.", askSettings: false)
+            return .couldntGo("Stopped before this item.", askSettings: false)
         default:
             return .couldntGo((error as NSError).localizedDescription, askSettings: false)
         }
@@ -491,10 +491,12 @@ enum Cleaner {
         return identity(of: thing.inTrash) == wanted
     }
 
-    /// Puts something back where it was. It never replaces what's there now.
+    /// Puts something back where it was. It never replaces what's there now, except the link that took a linked copy's place,
+    /// and only while that is still a link to the copy that stayed.
     static func putBack(_ thing: CleanedThing) throws {
         if let root = onlyInside, !PathMath.isInside(thing.original, root) { throw Failure.notAllowed }
         let fm = FileManager.default
+        if let kept = thing.linkedTo, isLink(thing.original, to: kept), isStillThat(thing) { unlink(thing.original) }
         if fm.fileExists(atPath: thing.original) { throw Failure.wouldOverwrite(thing.original) }
         guard isStillThat(thing) else { throw Failure.notAllowed }
         let folder = (thing.original as NSString).deletingLastPathComponent
@@ -512,6 +514,95 @@ enum Cleaner {
         }
     }
 
+    // MARK: Taking out copies
+
+    /// What takes a copy's place once it's gone: nothing, a hard link to the copy kept, or a symlink to it.
+    enum Replacement { case nothing, hardlink, symlink }
+
+    /// Takes out a copy of the file at `kept`. Every byte of both is read and compared first, since a file that changed after
+    /// it was compared isn't a copy any more. The copy goes to the Trash on record, as anything cleaned does, so Undo can put
+    /// it back, and a hard link or a symlink to the kept file takes its place if asked; if that can't be made, the copy comes
+    /// straight back. `trashing` is for the tests, which mustn't fill your Trash.
+    static func replaceCopy(_ copy: String, of kept: String, with replacement: Replacement, stop: LockedFlag? = nil,
+                            trashing: (String) throws -> (place: String, identity: String?) = { try trash($0) }) throws -> (place: String, identity: String?) {
+        guard mayTouch(copy) else { throw Failure.notAllowed }
+        if let root = onlyInside, !PathMath.isInside(kept, root) { throw Failure.notAllowed }
+        var a = stat(), b = stat()
+        guard lstat(copy, &a) == 0, lstat(kept, &b) == 0, a.st_mode & S_IFMT == S_IFREG, b.st_mode & S_IFMT == S_IFREG else { throw Failure.notAllowed }
+        // A hard link can't cross disks.
+        if replacement == .hardlink, a.st_dev != b.st_dev { throw Failure.notAllowed }
+        guard a.st_dev != b.st_dev || a.st_ino != b.st_ino else { throw Failure.sameFile }
+        guard a.st_size == b.st_size, try sameBytes(copy, kept, stop: stop) else { throw Failure.copyDidNotMatch(copy) }
+        let moved = try trashing(copy)
+        let made: Int32
+        switch replacement {
+        case .nothing: return moved
+        case .hardlink: made = Darwin.link(kept, copy)
+        case .symlink: made = Darwin.symlink(kept, copy)
+        }
+        guard made == 0 else {
+            try? FileManager.default.moveItem(atPath: moved.place, toPath: copy)
+            throw Failure.notAllowed
+        }
+        return moved
+    }
+
+    /// A copy replaced by a hard link to the copy kept.
+    static func link(_ copy: String, to kept: String, stop: LockedFlag? = nil,
+                     trashing: (String) throws -> (place: String, identity: String?) = { try trash($0) }) throws -> (place: String, identity: String?) {
+        try replaceCopy(copy, of: kept, with: .hardlink, stop: stop, trashing: trashing)
+    }
+
+    /// Whether two paths are the same file: one file with two names.
+    static func isSameFile(_ a: String, _ b: String) -> Bool {
+        var x = stat(), y = stat()
+        return lstat(a, &x) == 0 && lstat(b, &y) == 0 && x.st_dev == y.st_dev && x.st_ino == y.st_ino
+    }
+
+    /// Whether a path is the file at another under a second name, or a symlink to it: what took a copy's place.
+    static func isLink(_ path: String, to kept: String) -> Bool {
+        if isSameFile(path, kept) { return true }
+        var s = stat()
+        guard lstat(path, &s) == 0, s.st_mode & S_IFMT == S_IFLNK else { return false }
+        return (try? FileManager.default.destinationOfSymbolicLink(atPath: path)) == kept
+    }
+
+    /// Every byte of two files, read side by side past the file cache, so what you have open stays fast.
+    static func sameBytes(_ a: String, _ b: String, stop: LockedFlag? = nil) throws -> Bool {
+        let fa = open(a, O_RDONLY | O_NOFOLLOW | O_CLOEXEC), fb = open(b, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        defer {
+            if fa >= 0 { close(fa) }
+            if fb >= 0 { close(fb) }
+        }
+        guard fa >= 0, fb >= 0 else { return false }
+        _ = fcntl(fa, F_NOCACHE, 1)
+        _ = fcntl(fb, F_NOCACHE, 1)
+        let size = 4 << 20
+        let x = UnsafeMutableRawPointer.allocate(byteCount: size, alignment: 16384)
+        let y = UnsafeMutableRawPointer.allocate(byteCount: size, alignment: 16384)
+        defer {
+            x.deallocate()
+            y.deallocate()
+        }
+        func fill(_ fd: Int32, _ buffer: UnsafeMutableRawPointer) -> Int {
+            var got = 0
+            while got < size {
+                let n = read(fd, buffer + got, size - got)
+                if n < 0, errno == EINTR { continue }
+                if n <= 0 { return n < 0 ? -1 : got }
+                got += n
+            }
+            return got
+        }
+        while true {
+            if stop?.value == true { throw Failure.stopped }
+            let n = fill(fa, x), m = fill(fb, y)
+            if n < 0 || n != m { return false }
+            if n == 0 { return true }
+            if memcmp(x, y, n) != 0 { return false }
+        }
+    }
+
     /// Only for something this app moved to the Trash. Anything else in there is left alone. Says whether it was deleted.
     @discardableResult
     static func deleteForGood(_ thing: CleanedThing) throws -> Bool {
@@ -522,9 +613,35 @@ enum Cleaner {
         return true
     }
 
+    /// Whether something is in a Trash: inside your own, or inside a disk's folder for one person. Never a Trash folder
+    /// itself, and never a folder that's only called `.Trash` somewhere deeper: this is the last check before a file is
+    /// deleted for good.
     static func isInTrash(_ path: String) -> Bool {
-        let parts = path.split(separator: "/").map(String.init)
-        return parts.contains(".Trash") || parts.contains(".Trashes")
+        guard let folder = trashFolder(holding: path) else { return false }
+        return PathMath.visible(path).count > folder.count + 1
+    }
+
+    /// Whether this is a Trash folder itself.
+    static func isTrashFolder(_ path: String) -> Bool {
+        trashFolder(holding: path) == PathMath.visible(path)
+    }
+
+    /// The Trash folder a path is in, or is: `~/.Trash`, or `.Trashes/<person>` at the top of a disk. The folder the
+    /// checks are held to has the same two at its top.
+    private static func trashFolder(holding path: String) -> String? {
+        let path = PathMath.visible(path)
+        var own = [NSHomeDirectory()], shared = [""]
+        if let root = onlyInside {
+            own.append(root)
+            shared.append(root)
+        }
+        let parts = path.split(separator: "/")
+        if parts.count >= 2, parts[0] == "Volumes" { shared.append("/Volumes/" + parts[1]) }
+        for top in own where PathMath.isInside(path, top + "/.Trash") { return top + "/.Trash" }
+        for top in shared where path.hasPrefix(top + "/.Trashes/") {
+            if let person = path.dropFirst(top.count + "/.Trashes/".count).split(separator: "/").first { return top + "/.Trashes/" + person }
+        }
+        return nil
     }
 
     /// Where your own things are, in the Trash folder that was planned. On other disks that's a folder per person.
@@ -535,7 +652,7 @@ enum Cleaner {
     /// What's in this Trash right now.
     static func trashContents(_ planned: String) -> [String] {
         let folder = yourTrash(in: planned)
-        guard isInTrash(folder), let names = try? FileManager.default.contentsOfDirectory(atPath: folder) else { return [] }
+        guard isTrashFolder(folder), let names = try? FileManager.default.contentsOfDirectory(atPath: folder) else { return [] }
         return names.filter { $0 != ".DS_Store" }.map { folder + "/" + $0 }
     }
 

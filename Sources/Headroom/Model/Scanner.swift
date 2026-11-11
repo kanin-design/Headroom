@@ -23,6 +23,7 @@ private let mountStatusMounts: UInt32 = 0x0000_0003
 private let extMaySharedBlocks: UInt64 = 0x1
 let objTypeRegular: UInt32 = 1
 let objTypeDirectory: UInt32 = 2
+let objTypeSymlink: UInt32 = 5
 let optionNoFollow: UInt64 = 0x1
 private let optionExtended: UInt64 = 0x20
 
@@ -50,6 +51,8 @@ final class Scanner: @unchecked Sendable {
     let rules: RuleBook
     /// Below this, a file is only counted in its folder.
     let promoteBytes: UInt64 = 1 << 20
+    /// 1, except when recording a demo on made-up disks (`Demo`).
+    private let demoScale = Demo.scale
     /// When false, folders macOS guards are left alone, so the scan brings up no permission prompts.
     let touchGuarded: Bool
 
@@ -696,6 +699,7 @@ final class Scanner: @unchecked Sendable {
         var found: UInt64 = 0
         var aliasBytes: UInt64 = 0
         var fileCount: UInt32 = 0
+        var symlinks: UInt32 = 0
         var newest: UInt32 = 0
         var firstChild = parent.firstChild
         var kindBytes = (UInt64(0), UInt64(0), UInt64(0), UInt64(0), UInt64(0), UInt64(0), UInt64(0), UInt64(0), UInt64(0), UInt64(0), UInt64(0))
@@ -827,7 +831,7 @@ final class Scanner: @unchecked Sendable {
                 var links32: UInt32 = 1
                 var alloc: UInt64 = 0
                 if fileAttrs & attrFileLinkCount != 0 { links32 = p.loadUnaligned(as: UInt32.self); p += 4 }
-                if fileAttrs & attrFileAllocSize != 0 { alloc = p.loadUnaligned(as: UInt64.self); p += 8 }
+                if fileAttrs & attrFileAllocSize != 0 { alloc = Demo.scaled(p.loadUnaligned(as: UInt64.self), by: demoScale); p += 8 }
                 var cloneID: UInt64 = 0
                 var ext: UInt64 = 0
                 if extAttrs & attrExtCloneID != 0 { cloneID = p.loadUnaligned(as: UInt64.self); p += 8 }
@@ -835,6 +839,8 @@ final class Scanner: @unchecked Sendable {
 
                 fileCount &+= 1
                 if mod > newest { newest = mod }
+                // A link takes no room, so it's only counted: Copies reads what it points to when it's asked.
+                if type == objTypeSymlink { symlinks &+= 1 }
                 if alloc == 0 { continue }
 
                 var kind = forcedKind ?? extensions.kind(name: name, length: nameLength)
@@ -923,6 +929,7 @@ final class Scanner: @unchecked Sendable {
         s[DiskTree.statRecent14] = Self.units(recent14)
         s[DiskTree.statRecent91] = Self.units(recent91)
         s[DiskTree.statRecent365] = Self.units(recent365)
+        s[DiskTree.statSymlinks] = symlinks
 
         nodes[Int(id)].fileCount = fileCount
         if newest > nodes[Int(id)].modTime || nodes[Int(id)].modTime == 0 { nodes[Int(id)].modTime = newest }

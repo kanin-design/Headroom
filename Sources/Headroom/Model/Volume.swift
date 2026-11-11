@@ -47,8 +47,8 @@ struct VolumeFacts {
         var facts = VolumeFacts(
             name: values?.volumeLocalizedName ?? url.lastPathComponent,
             mountPath: path,
-            capacity: bytes(UInt64(info.f_blocks)),
-            free: bytes(UInt64(info.f_bavail)),
+            capacity: Demo.scaled(bytes(UInt64(info.f_blocks))),
+            free: Demo.scaled(bytes(UInt64(info.f_bavail))),
             isBoot: path == "/"
         )
         if facts.isBoot {
@@ -63,6 +63,7 @@ struct VolumeFacts {
 
     /// Disks you can pick from: the boot disk, then anything else mounted that's a real disk.
     static func available() -> [VolumeFacts] {
+        if let disks = Demo.disks { return disks.compactMap { read(path: $0) } }
         var out: [VolumeFacts] = []
         if let boot = read(path: "/") { out.append(boot) }
         let urls = FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: nil, options: [.skipHiddenVolumes]) ?? []
@@ -417,7 +418,7 @@ final class DiskScan: @unchecked Sendable {
         tree.count = scanner.nodesSoFar
         let copy = tree.picture()
         reconcile(copy)
-        copy.displayNames[copy.hidden] = "Still reading"
+        copy.displayNames[copy.hidden] = "Not scanned yet"
         copy.finish(totalsReady: true)
         return copy
     }
@@ -567,9 +568,9 @@ enum Accounting {
         guard let place = story.sharedPlace else { return nil }
         let isClones = story.clonesWithPlace > story.sharedWithPlace / 2
         let isFile = !tree.nodes[Int(node)].has(NodeFlag.directory)
-        let name = isClones ? (isFile ? "Clone of" : "Clones of") : (isFile ? "Hard link to" : "Hard links to")
+        let name = isClones ? (isFile ? "Clone of" : "Clones of") : (isFile ? "Hardlink to" : "Hardlinks to")
         if Double(story.sharedWithPlace) >= Double(bytes) * 0.99 { return "\(name) \(place)" }
-        return "\(formatBytes(story.sharedWithPlace)) is \(name.lowercased()) \(place)"
+        return "\(formatBytes(story.sharedWithPlace)) in \(name.lowercased()) \(place)"
     }
 
     /// Hard links and clones were counted by whichever worker saw them first, unless they were somewhere shy. This settles

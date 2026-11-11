@@ -15,7 +15,12 @@ import SwiftUI
 ///
 ///     wait 1.5                 pause, in seconds
 ///     scanned                  wait until the running scan has finished
-///     lens map|changes|freeUp
+///     lens map|changes|freeUp|copies
+///     copies                   wait until Copies has looked for duplicates, then say what it found and how long it took
+///     copyrow 2, copytick 0    point at a row in Copies, or tick a row of duplicates
+///     copyopen Aliases         open or close one of Copies' folded lists
+///     copyopenrow 0, copykeep 0  open a row of duplicates, or keep its first extra copy instead
+///     copylink 0               link a row of duplicates' extra copies to the one that stays: only on the throwaway test disk
 ///     focus ~/some/folder      zoom straight to a folder
 ///     up
 ///     bench                    what everything costs on this disk, in milliseconds
@@ -90,6 +95,12 @@ import SwiftUI
 ///     keydown 49 [cmd opt ...] a key as the app gets it, by key code. 49 is space, and keydown 123 cmd is ⌘←
 ///     volume /Volumes/Name     switch to another disk
 ///     shot file.png
+///     clock, at 3.25           start a director's clock; wait until 3.25 s after it (late steps run at once, so nothing drifts)
+///     titlemenu Travel SSD     the window title's menu, opened as a click opens it, and that item chosen from it
+///     piece ~/some/folder      where its piece is on the ring now, in points from the window's top left
+///     pointer x y              the pointer is here now, quietly, for one moved sixty times a second
+///     mark name                print the moment, on the clock every process shares, for something outside to line up with
+///     windowid                 the window's number and frame, for a recorder outside the app
 ///     film 3 0.1 name          keep photographing in the background without holding anything up: 3 s, every 0.1 s
 ///     memory label             say how much memory is in use, and the most so far
 ///     checkupdates             Check for Updates, as from the menu. `--update-feed releases.json` reads GitHub's list of
@@ -202,18 +213,138 @@ enum ScriptRunner {
         return tree.find(path: p) ?? (p.hasPrefix("/System/Volumes/Data/") ? nil : tree.find(path: "/System/Volumes/Data" + p))
     }
 
+    /// When the director's clock started, for `at`.
+    @MainActor private static var clockStart = 0.0
+
     @MainActor
     private static func run(_ command: String, _ argument: String, _ model: AppModel) async {
         switch command {
         case "wait":
             try? await Task.sleep(for: .seconds(Double(argument) ?? 1))
+        case "clock":
+            // A director's clock starts here: `at` counts from this moment, on the clock every process shares.
+            clockStart = ProcessInfo.processInfo.systemUptime
+            print(String(format: "clock at %.4f", clockStart))
+        case "at":
+            // at 3.25: wait until 3.25 s after `clock`. A step that's late runs at once, so lateness never adds up.
+            let wait = clockStart + (Double(argument) ?? 0) - ProcessInfo.processInfo.systemUptime
+            if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
+        case "titlemenu":
+            // titlemenu Travel SSD: the window title's menu, opened as a click on the title opens it; after a moment the item
+            // with that name is chosen from inside it while it's open, and it closes. Nothing touches your real pointer.
+            guard let w = mainWindow else { return }
+            let wanted = argument
+            var watcher: NSObjectProtocol?
+            watcher = NotificationCenter.default.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: nil) { note in
+                guard let menu = note.object as? NSMenu else { return }
+                if let watcher { NotificationCenter.default.removeObserver(watcher) }
+                print("titlemenu: \(menu.items.map { $0.isSeparatorItem ? "—" : $0.title })")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    let index = menu.items.firstIndex { $0.title.contains(wanted) }
+                    print("titlemenu: choosing \(index.map { menu.items[$0].title } ?? "nothing")")
+                    if let index { menu.performActionForItem(at: index) }
+                    menu.cancelTracking()
+                }
+            }
+            let title = NSPoint(x: 226, y: w.frame.height - 19)
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                if let event = NSEvent.mouseEvent(with: type, location: title, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                  windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) { NSApp.sendEvent(event) }
+            }
+            if let watcher { NotificationCenter.default.removeObserver(watcher) }
+        case "piece":
+            // piece /some/folder: where its piece is on the ring now, in points from the window's top left.
+            guard let node = resolve(argument, model), let i = model.engine.layout.pieces.firstIndex(where: { $0.node == node }) else {
+                print("piece \(argument): not on the ring"); return
+            }
+            let p = model.engine.layout.pieces[i]
+            let angle = Double(p.a0 + p.a1) / 2, radius = Double(p.r0 + p.r1) / 2 * model.ring.radius
+            print(String(format: "piece %@ at %.1f %.1f (ring %.1f %.1f radius %.1f)", argument, model.ring.center.x + sin(angle) * radius,
+                         model.ring.center.y - cos(angle) * radius, model.ring.center.x, model.ring.center.y, model.ring.radius))
+        case "pointer":
+            // pointer x y: the pointer is here now, in points from the window's top left. Quiet and quick, for a pointer
+            // moved sixty times a second. Your real pointer doesn't move.
+            guard let w = mainWindow else { return }
+            let parts = argument.split(separator: " ").compactMap { Double($0) }
+            guard parts.count == 2 else { return }
+            let at = NSPoint(x: parts[0], y: w.frame.height - parts[1])
+            guard let event = NSEvent.mouseEvent(with: .mouseMoved, location: at, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                 windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0) else { return }
+            let view = w.contentView?.superview?.hitTest(at)
+            view?.mouseMoved(with: event)
+            if view !== w.contentView { w.contentView?.mouseMoved(with: event) }
         case "scanned":
             while model.isScanning || model.tree == nil || model.mapsOnTheirWay > 0 { try? await Task.sleep(for: .milliseconds(100)) }
             try? await Task.sleep(for: .milliseconds(400))
         case "lens":
             // As a click on the switcher does it.
-            let lens: Lens = argument == "changes" ? .changes : argument == "freeUp" ? .freeUp : .map
+            let lens: Lens = argument == "changes" ? .changes : argument == "freeUp" ? .freeUp : argument == "copies" ? .copies : .map
             Motion.animate(.spring(response: 0.34, dampingFraction: 0.82)) { model.setLens(lens) }
+        case "copies":
+            // Copies looks only when it's open, so this waits for it to finish, then says what it found and what it cost.
+            let started = CFAbsoluteTimeGetCurrent()
+            while (model.copies == nil || model.copiesReading), CFAbsoluteTimeGetCurrent() - started < 40 { try? await Task.sleep(for: .milliseconds(100)) }
+            guard let copies = model.copies, !model.copiesReading else {
+                print("copies: not done after \(Int(CFAbsoluteTimeGetCurrent() - started)) s: map \(model.copies == nil ? "none" : "there"), reading \(model.copiesReading), \(model.copiesGroupsDone) of \(model.copiesGroupsTotal), partial \(model.tree?.isPartial == true)")
+                break
+            }
+            for kind in CopyGroup.Kind.allCases {
+                let groups = copies.groups.filter { $0.kind == kind }
+                let bytes = groups.reduce(UInt64(0)) { $0 &+ (kind == .duplicate ? $1.back : $1.size) }
+                print("copies \(kind.title): \(groups.count), \(formatBytes(bytes))")
+            }
+            print("copies back \(formatBytes(copies.back)), stored once \(formatBytes(copies.storedOnce)); read \(formatBytes(model.copiesBytesRead)) of \(model.copiesGroupsTotal) same-size sets in \(String(format: "%.2f", model.copiesSeconds ?? 0)) s, \(model.copiesRemembered) remembered")
+            for g in copies.groups.prefix(14) {
+                print("  \(g.kind.title): \(g.title) · \(formatBytes(g.kind == .duplicate ? g.back : g.size)) · \(g.others.count + (g.home != 0 ? 1 : 0)) places")
+            }
+        case "copyrow":
+            // copyrow 2: point at the nth row in Copies, as the pointer would. Nothing after it: the pointer leaves.
+            if let at = Int(argument), at < model.copyGroupsHere.count { model.pointAtCopyGroup(model.copyGroupsHere[at]) }
+            else { model.pointAtCopyGroup(nil) }
+        case "copyopen":
+            // copyopen Stored once: open one of Copies' folded lists, or close it if it's open.
+            if model.copiesOpen.contains(argument) { model.copiesOpen.remove(argument) } else { model.copiesOpen.insert(argument) }
+        case "copyopenrow":
+            // copyopenrow 0: open the nth row of duplicates in Copies, or close it.
+            let dups = model.copyGroupsHere.filter { $0.kind == .duplicate }
+            if let at = Int(argument), at < dups.count {
+                if model.copiesOpen.contains(dups[at].id) { model.copiesOpen.remove(dups[at].id) } else { model.copiesOpen.insert(dups[at].id) }
+            }
+        case "copyline":
+            // copyline 0 1: point at the second copy listed in the first row of duplicates, as the pointer would on its line.
+            let dups = model.copyGroupsHere.filter { $0.kind == .duplicate }
+            let parts = argument.split(separator: " ").compactMap { Int($0) }
+            if parts.count == 2, parts[0] < dups.count {
+                let g = dups[parts[0]]
+                let lines = g.files > 1 ? [g.home] + g.others : g.keepers + g.extras
+                if parts[1] < lines.count { model.pointAtCopy(lines[parts[1]], of: g) }
+            }
+        case "copykeep":
+            // copykeep 0: keep the first extra copy of the nth row of duplicates instead of the one that stays now.
+            let dups = model.copyGroupsHere.filter { $0.kind == .duplicate }
+            if let at = Int(argument), at < dups.count, let first = dups[at].files > 1 ? dups[at].others.first : dups[at].extras.first {
+                model.keepCopy(first, of: dups[at])
+            }
+        case "copylink", "copyact":
+            // copylink 0: hardlink the nth row of duplicates; copyact 0 symlink (or delete, hardlink): what its buttons do. Like
+            // clean, only ever inside the throwaway test disk.
+            let dups = model.copyGroupsHere.filter { $0.kind == .duplicate }
+            let parts = argument.split(separator: " ")
+            let action = command == "copyact" ? parts.dropFirst().first.flatMap { AppModel.CopyAction(rawValue: String($0)) } : .hardlink
+            if let first = parts.first, let at = Int(first), at < dups.count, let action { model.takeCopies(dups[at], action) }
+            while model.cleanProgress != nil { try? await Task.sleep(for: .milliseconds(100)) }
+        case "filekind":
+            // filekind /a/path: what's there now, a file, a symlink and where it points, or nothing, for checking an action.
+            if let target = try? FileManager.default.destinationOfSymbolicLink(atPath: argument) { print("filekind symlink -> \(target)") }
+            else if FileManager.default.fileExists(atPath: argument) { print("filekind file") }
+            else { print("filekind missing") }
+        case "copyhelp":
+            // copyhelp: open or close the ? at the top of Copies.
+            model.copiesHelpShown.toggle()
+        case "copytick":
+            // copytick 2: tick the nth row of duplicates in Copies, so its extra copies go with the next clean.
+            let dups = model.copyGroupsHere.filter { $0.kind == .duplicate }
+            if let at = Int(argument), at < dups.count { model.toggleDuplicate(dups[at]) }
         case "focus":
             if let node = resolve(argument, model), let tree = model.tree { model.zoom(into: RingLayout.chainTail(tree: tree, node)) }
             else { print("no such folder: \(argument)") }
@@ -429,6 +560,14 @@ enum ScriptRunner {
             }
         case "plan":
             if let node = resolve(argument, model) { model.togglePiece(node) } else { print("no such path: \(argument)") }
+        case "recommended":
+            // recommended: presses Select recommended. recommended point / recommended leave: the pointer on it, and off it.
+            if argument == "point" { model.pointAtRecommended(true) } else if argument == "leave" { model.pointAtRecommended(false) } else { model.selectRecommended() }
+        case "boxes":
+            // boxes: every box in Free Up as it's listed, with what's in it.
+            for box in model.boxes {
+                print("box \(box.title) · \(box.isShortlist ? "shortlist" : formatBytes(box.bytes)) · \(box.detail) · \(box.rows.count) rows, \(box.recommended.count) recommended")
+            }
         case "box":
             // box quick, box models: ticks a box in the inspector, by its id or its title.
             if let box = model.boxes.first(where: { $0.id == argument || $0.title == argument }) { model.toggle(box) } else { print("no such box: \(argument)") }
@@ -461,8 +600,8 @@ enum ScriptRunner {
         case "undo":
             model.undoClean()
             if argument != "nowait" { while model.isPuttingBack { try? await Task.sleep(for: .milliseconds(50)) } }
-        case "copies":
-            // What's known about the other copies of a suggestion.
+        case "othercopies":
+            // othercopies Title: what's known about the other copies of a suggestion in Free Up.
             guard let tree = model.tree, let row = model.flatRows.first(where: { $0.title == argument }) else { print("no such row: \(argument)"); return }
             let video = tree.links.filter { $0.kind == Kind.video.rawValue }
             let found = Accounting.otherCopies(of: row.nodes, in: tree)
@@ -709,13 +848,17 @@ enum ScriptRunner {
                 print("voiceover after pressing \(first.accessibilityLabel() ?? "?"): \(view.accessibilityLabel() ?? "?"): \(heard())")
             }
         case "size":
+            // size w h [x y [fixed]]: with fixed (1) the window can't be resized from then on, so it keeps a size larger than
+            // the screen (a recording at a size this screen can't show: macOS fits a resizable window between the menu bar
+            // and the Dock, and still draws the part of a window past the screen's edges).
             let numbers = argument.split(separator: " ").compactMap { Double($0) }
-            if numbers.count == 2 || numbers.count == 4, let w = mainWindow {
+            if numbers.count == 2 || numbers.count == 4 || numbers.count == 5, let w = mainWindow {
+                if numbers.count == 5, numbers[4] != 0 { w.styleMask.remove(.resizable) }
                 // At once, even in the same instant as the step before's animated change: `Motion.animate` makes that safe.
                 var frame = w.frame
                 frame.origin.y += frame.height - numbers[1]
                 frame.size = CGSize(width: numbers[0], height: numbers[1])
-                if numbers.count == 4, let screen = w.screen ?? NSScreen.main {
+                if numbers.count >= 4, let screen = w.screen ?? NSScreen.main {
                     frame.origin = CGPoint(x: screen.frame.minX + numbers[2], y: screen.frame.maxY - numbers[3] - numbers[1])
                 }
                 w.setFrame(frame, display: true)
@@ -1035,6 +1178,14 @@ enum ScriptRunner {
             MapHostView.drawsWhenHidden = false
         case "frames":
             print("frames drawn \(argument): \(model.mapView?.framesDrawn ?? -1), ring at \(model.engine.placeNow)")
+        case "mark":
+            // mark name: a moment another program can wait for and line up with, on the clock every process shares.
+            print(String(format: "mark %@ at %.4f", argument, ProcessInfo.processInfo.systemUptime))
+        case "windowid":
+            // The window's number and frame, for a recorder outside the app.
+            if let w = mainWindow {
+                print("window \(w.windowNumber) at \(Int(w.frame.minX)),\(Int(w.frame.minY)) \(Int(w.frame.width))x\(Int(w.frame.height)), backing \(w.backingScaleFactor)")
+            }
         case "frame":
             // Where the window is, whether it fills the screen, and whether it has been told to move.
             if let w = mainWindow {
@@ -1296,7 +1447,10 @@ enum ScriptRunner {
 
     @MainActor
     private static func report(_ model: AppModel) {
-        guard let tree = model.tree else { print("no tree"); return }
+        guard let tree = model.tree else {
+            print("no tree: disk \(model.volume?.mountPath ?? "none") of \(model.volumes.count), full access \(model.hasFullAccess), scanning \(model.isScanning)")
+            return
+        }
         print(String(format: "scan %.2fs, %d files, %d nodes, %d link records", tree.scanSeconds, tree.totalFiles[0], tree.count, tree.links.count))
         if tree.isPartial { print("still reading \(formatBytes(tree.totals[Int(tree.hidden)])), \(model.scanFiles) files so far") }
         print(String(format: "pieces %d, labels %d, last scan loaded in %.1f ms", model.engine.layout.pieces.count, model.labels.count, model.cacheLoadMilliseconds))

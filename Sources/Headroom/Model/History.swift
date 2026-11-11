@@ -180,7 +180,7 @@ enum TreeCache {
     }
 
     /// Changes whenever the layout of a saved scan does, so an old file is simply ignored.
-    private static let magic: UInt64 = 0x4852_4F4F_4D30_3037
+    private static let magic: UInt64 = 0x4852_4F4F_4D30_3038
     /// The file starts with this, and everything after it is compressed.
     private static let fileMagic: UInt64 = 0x4852_4F4F_4D5A_3032
     static var build: String { Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "" }

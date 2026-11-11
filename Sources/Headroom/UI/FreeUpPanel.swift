@@ -13,18 +13,20 @@ struct FreeUpPanel: View {
 
     var body: some View {
         let boxes = model.boxes
-        let scale = max(boxes.map(\.bytes).max() ?? 1, 1)
+        // The shortlist's total isn't a suggestion, so it doesn't set the scale of the bars.
+        let scale = max(boxes.filter { !$0.isShortlist }.map(\.bytes).max() ?? 1, 1)
         let others = model.shownRows.filter { !$0.isPlannable }
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 1) {
                     NeedsALook(model: model)
+                    RecommendedButton(model: model)
                     ForEach(boxes) { box in
                         BoxView(model: model, box: box, scale: scale)
                             .id(box.id)
                     }
                     if boxes.isEmpty { emptyState }
-                    if !others.isEmpty { TuckedAway(model: model, title: "Done another way", promise: "These aren't files you can select.", rows: others).padding(.top, 8) }
+                    if !others.isEmpty { TuckedAway(model: model, title: "Other actions", promise: "Done outside Headroom", rows: others).padding(.top, 8) }
                     keptLink
                 }
                 .padding(.horizontal, 9)
@@ -41,12 +43,12 @@ struct FreeUpPanel: View {
     private var emptyState: some View {
         VStack(alignment: .leading, spacing: 4) {
             // With nothing read, there's no knowing what could go.
-            Text(!model.hasFullAccess ? "What could go shows once Headroom has Full Disk Access." : model.focus == 0 ? "Nothing here needs doing." : "Nothing in here stands out.")
+            Text(!model.hasFullAccess ? "Needs Full Disk Access" : model.focus == 0 ? "No suggestions" : "No suggestions here")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.white.opacity(0.85))
                 .fixedSize(horizontal: false, vertical: true)
             if model.hasFullAccess {
-                Text("If you know better, click any piece on the ring to pick it yourself.")
+                Text("Click a piece of the ring to select it.")
                     .font(.system(size: 11.5))
                     .foregroundStyle(.white.opacity(0.5))
             }
@@ -76,7 +78,7 @@ struct FreeUpPanel: View {
                 }
                 .padding(.top, 4)
             } label: {
-                Text("\(model.plan.kept.count) you're keeping")
+                Text("\(model.plan.kept.count) kept")
                     .font(.system(size: 11.5, weight: .medium))
                     .foregroundStyle(.white.opacity(0.5))
             }
@@ -87,6 +89,45 @@ struct FreeUpPanel: View {
 }
 
 /// What the last look found, right where you'd see it before pressing Clean, with what you can do about it.
+/// One click for what's safe without a second thought: caches not in use, and junk. Nothing is ticked until it's pressed, and
+/// pointing at it shows what it would take, in the list and on the ring.
+private struct RecommendedButton: View {
+    let model: AppModel
+    @State private var isHovered = false
+    private let green = Color(red: 0.5, green: 0.98, blue: 0.7)
+
+    var body: some View {
+        let rows = model.recommendedLeft
+        if !rows.isEmpty, !model.isCleaning {
+            Button {
+                Motion.animate(.snappy(duration: 0.2)) { model.selectRecommended() }
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text("Select recommended")
+                        .font(.system(size: 12.5, weight: .semibold))
+                    Spacer(minLength: 4)
+                    Text(formatBytes(rows.reduce(UInt64(0)) { $0 &+ $1.aTickFrees }))
+                        .font(.system(size: 12.5, weight: .semibold).monospacedDigit())
+                }
+                .foregroundStyle(green)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 8)
+                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(green.opacity(isHovered ? 0.18 : 0.1)))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .onHover { inside in
+                isHovered = inside
+                model.pointAtRecommended(inside)
+            }
+            .help("Caches not in use, and junk")
+            .padding(.bottom, 6)
+        }
+    }
+}
+
 private struct NeedsALook: View {
     let model: AppModel
 
@@ -95,7 +136,7 @@ private struct NeedsALook: View {
             .sorted { (model.checks[$0.id]?.canGo ?? true ? 1 : 0) < (model.checks[$1.id]?.canGo ?? true ? 1 : 0) }
         if !items.isEmpty {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Needs a look")
+                Text("Needs attention")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(amber)
                     .padding(.horizontal, 10)
@@ -133,7 +174,7 @@ private struct TuckedAway: View {
                     Text(title)
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.7))
-                    Text(rows.count == 1 ? "1 thing" : "\(rows.count) things")
+                    Text(rows.count == 1 ? "1 item" : "\(rows.count) items")
                         .font(.system(size: 11))
                         .foregroundStyle(.white.opacity(0.45))
                     Spacer()
@@ -145,11 +186,8 @@ private struct TuckedAway: View {
             }
             .buttonStyle(.plain)
             .padding(.horizontal, 10)
+            .help(promise)
             if isOpen {
-                Text(promise)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.45))
-                    .padding(.leading, 26)
                 VStack(spacing: 0) {
                     ForEach(rows) { row in
                         ThingRow(model: model, row: row, color: Palette.Box.other)
@@ -184,7 +222,7 @@ private struct BoxView: View {
 
     private var isOpen: Bool { model.openBoxes.contains(box.id) }
     private var color: Color { box.color.swiftUI }
-    private var isLit: Bool { isHovered || model.hotBox == box.id || model.cursorRow == box.id }
+    private var isLit: Bool { isHovered || model.hotBox == box.id || model.cursorRow == box.id || (model.recommendedHot && !box.recommended.isEmpty) }
 
     private var thing: NamedThing {
         let model = model, box = box
@@ -194,7 +232,12 @@ private struct BoxView: View {
     private var head: some View {
         let state = model.rowStates[box.id] ?? .none
         return HStack(alignment: .top, spacing: nested ? 8 : 10) {
-            TickMark(state: state, color: color, size: nested ? 16 : 20, isLit: isLit)
+            // A category is a heading that opens, in its own colour. What's ticked is the things inside it.
+            Image(systemName: "chevron.right")
+                .font(.system(size: nested ? 9.5 : 11, weight: .bold))
+                .rotationEffect(.degrees(isOpen ? 90 : 0))
+                .foregroundStyle(color.opacity(isLit || isOpen ? 1 : 0.8))
+                .frame(width: nested ? 16 : 20, height: nested ? 16 : 20)
                 .padding(.top, 1)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -203,6 +246,12 @@ private struct BoxView: View {
                         .foregroundStyle(.white.opacity(0.94))
                         .lineLimit(1)
                     Spacer(minLength: 2)
+                    if state != .none {
+                        // Something in here is selected: all of it, or part.
+                        Image(systemName: state == .all ? "checkmark.circle.fill" : "minus.circle.fill")
+                            .font(.system(size: nested ? 10 : 11))
+                            .foregroundStyle(color)
+                    }
                     size(state)
                 }
                 HStack(spacing: 8) {
@@ -221,17 +270,18 @@ private struct BoxView: View {
                         }
                         .buttonStyle(.plain)
                         .fixedSize()
-                        .help("The other copies go too, so the space really comes back. A torrent you do this to stops sharing.")
+                        .help("Also select the hardlinks and clones elsewhere, so the space is freed. Torrents stop seeding.")
                     }
-                    if box.rows.count > 1 || !box.kids.isEmpty { chevron }
                 }
                 .frame(minHeight: 15)
-                BoxBar(model: model, box: box, scale: scale, height: nested ? 3 : 5, isLit: isLit, hovered: { row in
-                    guard hoveredRow?.id != row?.id else { return }
-                    hoveredRow = row
-                    if isHovered { model.point(at: box, row: row) }
-                })
-                .padding(.top, 1)
+                if !box.isShortlist {
+                    BoxBar(model: model, box: box, scale: scale, height: nested ? 3 : 5, isLit: isLit, hovered: { row in
+                        guard hoveredRow?.id != row?.id else { return }
+                        hoveredRow = row
+                        if isHovered { model.point(at: box, row: row) }
+                    })
+                    .padding(.top, 1)
+                }
             }
         }
         .padding(.leading, nested ? 8 : 11)
@@ -244,11 +294,12 @@ private struct BoxView: View {
             if inside { model.point(at: box) } else { model.point(at: nil) }
         }
         .onTapGesture {
-            Motion.animate(.snappy(duration: 0.18)) { model.toggle(box) }
+            Motion.animate(.snappy(duration: 0.2)) {
+                if isOpen { model.openBoxes.remove(box.id) } else { model.openBoxes.insert(box.id) }
+            }
         }
         .named(thing, in: model)
         .animation(.easeOut(duration: 0.14), value: isLit)
-        .help(box.rowsATickTakes.count < box.rows.count ? "A tick leaves out what you set up by hand. Open this to tick those too." : "")
     }
 
     private func background(_ state: TickState) -> Color {
@@ -285,10 +336,10 @@ private struct BoxView: View {
                 case .none: sum
                 }
             }
-            Text("\(formatBytes(part)) of \(formatBytes(box.bytes))")
+            Text(box.isShortlist ? formatBytes(part) : "\(formatBytes(part)) of \(formatBytes(box.bytes))")
                 .font(.system(size: nested ? 12 : 13, weight: nested ? .medium : .semibold).monospacedDigit())
                 .foregroundStyle(.white.opacity(nested ? 0.82 : 0.92))
-        } else {
+        } else if !box.isShortlist {
             Text(formatBytes(box.bytes))
                 .font(.system(size: nested ? 12 : 13.5, weight: nested ? .medium : .semibold).monospacedDigit())
                 .foregroundStyle(.white.opacity(nested ? 0.82 : 0.92))
@@ -304,7 +355,7 @@ private struct BoxView: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
         } else if state != .none, shortfall() != nil {
-            Text("Other copies stay, so less comes back")
+            Text("Other copies remain")
                 .font(font.weight(.medium))
                 .foregroundStyle(amber)
                 .lineLimit(1)
@@ -321,21 +372,22 @@ private struct BoxView: View {
         }
     }
 
-    private var chevron: some View {
-        Button {
-            Motion.animate(.snappy(duration: 0.2)) {
-                if isOpen { model.openBoxes.remove(box.id) } else { model.openBoxes.insert(box.id) }
+    /// Everything in the category at once, said in so many words, for when that's what you mean. It skips what's in use.
+    private var selectAll: some View {
+        let all = (model.rowStates[box.id] ?? .none) == .all
+        return HStack {
+            Spacer(minLength: 0)
+            Button(all ? "Deselect all" : "Select all") {
+                Motion.animate(.snappy(duration: 0.18)) { model.toggle(box) }
             }
-        } label: {
-            Image(systemName: "chevron.right")
-                .font(.system(size: 9.5, weight: .bold))
-                .rotationEffect(.degrees(isOpen ? 90 : 0))
-                .foregroundStyle(.white.opacity(isHovered || isOpen ? 0.6 : 0.16))
-                .frame(width: 18, height: 15)
-                .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(.white.opacity(0.6))
+            .help(box.rowsATickTakes.count < box.rows.count ? "Skips items in use or set up by hand" : "")
         }
-        .buttonStyle(.plain)
-        .help("See what's in this")
+        .padding(.trailing, 10)
+        .padding(.top, 1)
+        .padding(.bottom, 2)
     }
 
     @ViewBuilder
@@ -347,13 +399,14 @@ private struct BoxView: View {
                     BoxView(model: model, box: kid, scale: most, nested: true)
                 }
             } else {
+                if box.rows.count > 1, !box.isShortlist { selectAll }
                 let limit = showAll ? box.rows.count : 10
                 ForEach(box.rows.prefix(limit)) { row in
                     ThingRow(model: model, row: row, color: box.color, box: box)
                 }
                 if box.rows.count > limit {
                     let rest = box.rows.dropFirst(limit)
-                    Button("and \(rest.count) smaller, \(formatBytes(rest.reduce(UInt64(0)) { $0 &+ $1.gain }))") {
+                    Button("\(rest.count) more, \(formatBytes(rest.reduce(UInt64(0)) { $0 &+ $1.gain }))") {
                         Motion.animate(.snappy(duration: 0.2)) { showAll = true }
                     }
                     .buttonStyle(.plain)
@@ -551,6 +604,7 @@ struct ThingRow: View {
                         line
                         Spacer(minLength: 0)
                         if isHovered || isOpen { actions(state) }
+                        if hasContents { chevron }
                     }
                     .frame(minHeight: 15)
                     if let scale, let box {
@@ -609,7 +663,7 @@ struct ThingRow: View {
                 .foregroundStyle(bright.opacity(0.9))
                 .lineLimit(1)
                 .truncationMode(.middle)
-        } else if let note = row.inUse ?? row.otherCopiesCaution.map({ _ in "May still be sharing" }) {
+        } else if let note = row.inUse ?? row.otherCopiesCaution.map({ _ in "May still be seeding" }) {
             Text(note)
                 .font(font.weight(.medium))
                 .foregroundStyle(amber.opacity(0.95))
@@ -633,11 +687,11 @@ struct ThingRow: View {
                 small("Trash instead") { model.setStep(.trash, for: row.id) }
             } else if disks.count == 1, let disk = disks.first {
                 small("Move to \(disk.name)") { model.planMove(row, to: disk) }
-                    .help(disk.isPluggedIn ? "Copy this to \(disk.name) and check the copy. Only then does this one go to the Trash." : "\(disk.name) isn't plugged in. Plug it in before you clean.")
+                    .help(disk.isPluggedIn ? "Copy to \(disk.name), verify, then move the original to the Trash" : "Connect \(disk.name) before cleaning")
             } else if disks.count > 1 {
                 Menu {
                     ForEach(disks, id: \.self) { disk in
-                        Button(disk.isPluggedIn ? "Move to \(disk.name)" : "Move to \(disk.name) (not plugged in)") { model.planMove(row, to: disk) }
+                        Button(disk.isPluggedIn ? "Move to \(disk.name)" : "Move to \(disk.name) (not connected)") { model.planMove(row, to: disk) }
                     }
                 } label: {
                     label("Move")
@@ -647,22 +701,27 @@ struct ThingRow: View {
                 .menuIndicator(.hidden)
                 .fixedSize()
             }
-            if row.isPlannable { small("Keep") { model.keep(row) }.help("Take this out, and don't suggest this again") }
-            if !row.nodes.isEmpty {
-                Button {
-                    Motion.animate(.snappy(duration: 0.22)) { model.toggleExpanded(row) }
-                } label: {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 9.5, weight: .bold))
-                        .rotationEffect(.degrees(isOpen ? 90 : 0))
-                        .foregroundStyle(.white.opacity(0.7))
-                        .frame(width: 16, height: 14)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help("See what's in this")
-            }
+            if row.isPlannable { small("Keep") { model.keep(row) }.help("Don't suggest this again") }
         }
+    }
+
+    /// Whether there's anything to open: what it holds, or where it is.
+    private var hasContents: Bool { !row.nodes.isEmpty || !row.extraPaths.isEmpty }
+
+    /// Always there on a row that opens, so you can see that it does. The tick is the row; this is what's inside it.
+    private var chevron: some View {
+        Button {
+            Motion.animate(.snappy(duration: 0.22)) { model.toggleExpanded(row) }
+        } label: {
+            Image(systemName: "chevron.right")
+                .font(.system(size: 9.5, weight: .bold))
+                .rotationEffect(.degrees(isOpen ? 90 : 0))
+                .foregroundStyle(.white.opacity(isHovered || isOpen ? 0.7 : 0.28))
+                .frame(width: 16, height: 14)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(isOpen ? "Hide contents" : "Show contents")
     }
 
     private func label(_ text: String) -> some View {
@@ -696,7 +755,7 @@ struct ThingRow: View {
                     .font(font)
                     .foregroundStyle(.white.opacity(isLarge ? 0.92 : 0.82))
                 if row.otherCopies.isEmpty, row.paperBytes > row.bytes, Double(row.bytes) < Double(row.paperBytes) * 0.9 {
-                    Text("looks like \(formatBytes(row.paperBytes))")
+                    Text("of \(formatBytes(row.paperBytes))")
                         .font(.system(size: 9.5).monospacedDigit())
                         .foregroundStyle(amber.opacity(0.85))
                 }
@@ -805,6 +864,7 @@ struct ThingRow: View {
                 .controlSize(.small)
             }
             InnerList(model: model, nodes: model.innerNodes(of: row), tint: tint)
+            if !row.extraPaths.isEmpty { LooseList(model: model, row: row, tint: tint) }
         }
         .padding(.leading, isLarge ? 30 : 24)
         .padding(.top, 2)
@@ -831,7 +891,7 @@ private struct CommandChip: View {
             .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(.white.opacity(0.07)))
         }
         .buttonStyle(.plain)
-        .help("Copy this command")
+        .help("Copy command")
     }
 }
 
@@ -845,10 +905,10 @@ private struct InnerList: View {
         if let tree = model.tree {
             VStack(spacing: 0) {
                 ForEach(nodes.prefix(40), id: \.self) { node in
-                    InnerRow(model: model, node: node, name: tree.name(node), path: tree.path(node), bytes: tree.totals[Int(node)], tint: tint)
+                    InnerRow(model: model, node: node, name: tree.name(node), path: tree.path(node).map(PathMath.visible), bytes: tree.totals[Int(node)], tint: tint)
                 }
                 if nodes.count > 40 {
-                    Text("and \(nodes.count - 40) smaller")
+                    Text("\(nodes.count - 40) more, smaller")
                         .font(.system(size: 10.5))
                         .foregroundStyle(.white.opacity(0.45))
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -859,6 +919,7 @@ private struct InnerList: View {
     }
 }
 
+/// One file or folder inside something, with its own tick. A folder opens to what's in it, and so on down.
 private struct InnerRow: View {
     let model: AppModel
     let node: UInt32
@@ -867,34 +928,129 @@ private struct InnerRow: View {
     let bytes: UInt64
     let tint: Color
     @State private var isHovered = false
+    @State private var isOpen = false
+
+    private var children: [UInt32] {
+        guard let tree = model.tree else { return [] }
+        return tree.children(node).filter { tree.totals[Int($0)] > 0 }.sorted { tree.totals[Int($0)] > tree.totals[Int($1)] }
+    }
 
     var body: some View {
         // Asked of the list itself, so the tick follows it whichever way it changed.
         let on = path.map(model.plan.covers) ?? false
+        let isFolder = model.tree.map { $0.nodes[Int(node)].has(NodeFlag.directory) && $0.nodes[Int(node)].firstChild != 0 } ?? false
+        VStack(spacing: 0) {
+            HStack(spacing: 7) {
+                TickMark(state: on ? .all : .none, color: tint, size: 14)
+                if isFolder {
+                    Image(systemName: "folder.fill")
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(.white.opacity(0.45))
+                }
+                Text(name)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.white.opacity(0.82))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 4)
+                Text(formatBytes(bytes))
+                    .font(.system(size: 11).monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.6))
+                if isFolder {
+                    Button {
+                        Motion.animate(.snappy(duration: 0.2)) { isOpen.toggle() }
+                    } label: {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 8.5, weight: .bold))
+                            .rotationEffect(.degrees(isOpen ? 90 : 0))
+                            .foregroundStyle(.white.opacity(isHovered || isOpen ? 0.7 : 0.28))
+                            .frame(width: 14, height: 14)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(isOpen ? "Hide contents" : "Show contents")
+                }
+            }
+            .padding(.vertical, 1.5)
+            .padding(.horizontal, 3)
+            .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(.white.opacity(isHovered ? 0.07 : 0)))
+            .contentShape(Rectangle())
+            .onHover { inside in
+                isHovered = inside
+                model.highlight(nodes: inside ? [node] : [])
+            }
+            .onTapGesture {
+                Motion.animate(.snappy(duration: 0.18)) { model.togglePiece(node) }
+            }
+            .named(NamedThing(node), in: model)
+            if isOpen {
+                InnerList(model: model, nodes: children, tint: tint)
+                    .padding(.leading, 16)
+            }
+        }
+    }
+}
+
+/// The files in a row that are too small to be on the map, such as screenshots, each with its own tick.
+private struct LooseList: View {
+    let model: AppModel
+    let row: WinRow
+    let tint: Color
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(row.extraPaths.prefix(40), id: \.self) { path in
+                LooseRow(model: model, row: row, path: path, tint: tint)
+            }
+            if row.extraPaths.count > 40 {
+                Text("\(row.extraPaths.count - 40) more")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.white.opacity(0.45))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 3)
+            }
+        }
+    }
+}
+
+private struct LooseRow: View {
+    let model: AppModel
+    let row: WinRow
+    let path: String
+    let tint: Color
+    @State private var isHovered = false
+    @State private var bytes: UInt64?
+
+    var body: some View {
+        let on = model.plan.covers(PathMath.visible(path))
         HStack(spacing: 7) {
             TickMark(state: on ? .all : .none, color: tint, size: 14)
-            Text(name)
+            Text((path as NSString).lastPathComponent)
                 .font(.system(size: 11.5))
                 .foregroundStyle(.white.opacity(0.82))
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer(minLength: 4)
-            Text(formatBytes(bytes))
-                .font(.system(size: 11).monospacedDigit())
-                .foregroundStyle(.white.opacity(0.6))
+            if let bytes {
+                Text(formatBytes(bytes))
+                    .font(.system(size: 11).monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.6))
+            }
         }
         .padding(.vertical, 1.5)
         .padding(.horizontal, 3)
         .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(.white.opacity(isHovered ? 0.07 : 0)))
         .contentShape(Rectangle())
-        .onHover { inside in
-            isHovered = inside
-            model.highlight(nodes: inside ? [node] : [])
-        }
+        .onHover { isHovered = $0 }
         .onTapGesture {
-            Motion.animate(.snappy(duration: 0.18)) { model.togglePiece(node) }
+            Motion.animate(.snappy(duration: 0.18)) { model.togglePath(path, of: row) }
         }
-        .named(NamedThing(node), in: model)
+        .task(id: path) {
+            let path = path
+            bytes = await Task.detached(priority: .utility) {
+                (try? URL(fileURLWithPath: path).resourceValues(forKeys: [.totalFileAllocatedSizeKey]).totalFileAllocatedSize).map(UInt64.init)
+            }.value
+        }
     }
 }
 
@@ -919,7 +1075,7 @@ private struct LookRow: View {
                 Spacer(minLength: 4)
                 ForEach(Array(problems.enumerated()), id: \.offset) { _, problem in fix(problem) }
                 action("Keep") { model.keep(item: item) }
-                    .help("Take this out, and don't suggest this again")
+                    .help("Don't suggest this again")
             }
             ForEach(Array(problems.enumerated()), id: \.offset) { _, problem in
                 Text(problem.text)
@@ -970,7 +1126,7 @@ private struct LookRow: View {
             action("Clean anyway") { model.acceptChange(for: item.id) }
         case .noGain:
             if model.otherCopies[item.id] != nil {
-                action("Select that copy too") { model.alsoPlanOtherCopy(for: item) }
+                action("Include other copy") { model.alsoPlanOtherCopy(for: item) }
             }
         case .couldntGo(_, let askSettings):
             action("Try again") { model.tryAgain(item) }
@@ -991,12 +1147,12 @@ private struct LookRow: View {
                     .textSelection(.enabled)
             }
             if item.paths.count > 30 {
-                Text("and \(item.paths.count - 30) more")
+                Text("\(item.paths.count - 30) more")
                     .font(.system(size: 10.5))
                     .foregroundStyle(.white.opacity(0.45))
             }
             if !item.excluded.isEmpty {
-                Text("Staying: \(item.excluded.map { ($0 as NSString).lastPathComponent }.joined(separator: ", "))")
+                Text("Excluded: \(item.excluded.map { ($0 as NSString).lastPathComponent }.joined(separator: ", "))")
                     .font(.system(size: 10.5))
                     .foregroundStyle(.white.opacity(0.55))
                     .fixedSize(horizontal: false, vertical: true)
@@ -1080,7 +1236,7 @@ struct NextStepBar: View {
                 .disabled(true)
                 .buttonStyle(GoButton())
             if !model.clearedItems.isEmpty {
-                Button("Bring back what you unticked") { Motion.animate(.snappy(duration: 0.2)) { model.restoreCleared() } }
+                Button("Restore selection") { Motion.animate(.snappy(duration: 0.2)) { model.restoreCleared() } }
                     .buttonStyle(.plain)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.white.opacity(0.65))
@@ -1095,9 +1251,9 @@ struct NextStepBar: View {
         let ready = model.readyItems
         let partial = model.tree?.isPartial == true
         let onlyTrash = model.plan.items.allSatisfy(\.isEmptyTrash)
-        let label = partial ? "Finishing the scan first"
-            : ready.isEmpty ? "Needs a look first"
-            : onlyTrash ? "Empty the Trash: \(formatBytes(cleanBytes(ready)))"
+        let label = partial ? "Waiting for the scan"
+            : ready.isEmpty ? "Needs attention"
+            : onlyTrash ? "Empty Trash: \(formatBytes(cleanBytes(ready)))"
             : ready.count == count ? "Clean \(formatBytes(model.planBytes))"
             : "Clean \(ready.count) of \(count): \(formatBytes(cleanBytes(ready)))"
         return bar {
@@ -1110,17 +1266,11 @@ struct NextStepBar: View {
                 }
                 .disabled(partial || ready.isEmpty || model.isCleaning)
                 .buttonStyle(GoButton())
+                .help(onlyTrash ? "" : "Moves everything to the Trash. Undo puts it back.")
                 .animation(.snappy(duration: 0.25), value: model.planBytes)
                 HStack(spacing: 6) {
-                    if !onlyTrash {
-                        Text("Everything goes to the Trash first, so you can undo this.")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.white.opacity(0.45))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.85)
-                    }
                     Spacer(minLength: 0)
-                    Button("Untick all") { Motion.animate(.snappy(duration: 0.2)) { model.clearPlan() } }
+                    Button("Deselect all") { Motion.animate(.snappy(duration: 0.2)) { model.clearPlan() } }
                         .buttonStyle(.plain)
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.white.opacity(0.55))
@@ -1205,7 +1355,7 @@ struct NextStepBar: View {
                     Button {
                         model.emptyNow()
                     } label: {
-                        Text(after.includesOldTrash ? "Empty the Trash" : "Delete \(after.things.count == 1 ? "this" : "these") for good")
+                        Text(after.includesOldTrash ? "Empty Trash" : "Delete permanently")
                     }
                     .buttonStyle(GoButton())
                     Button(after.things.isEmpty ? "Cancel" : "Undo") { model.undoClean() }
@@ -1214,7 +1364,7 @@ struct NextStepBar: View {
                 }
                 HStack(spacing: 6) {
                     if !model.plan.isEmpty {
-                        Text(model.plan.count == 1 ? "1 thing is still selected." : "\(model.plan.count) things are still selected.")
+                        Text("\(model.plan.count) still selected")
                             .font(.system(size: 11))
                             .foregroundStyle(.white.opacity(0.55))
                     }
@@ -1223,7 +1373,7 @@ struct NextStepBar: View {
                         .buttonStyle(.plain)
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.white.opacity(0.65))
-                        .help("Leave everything in the Trash for now. You can still put things back from there yourself, or empty the Trash later.")
+                        .help("Leave it in the Trash")
                 }
             }
         case .emptying:
@@ -1238,7 +1388,7 @@ struct NextStepBar: View {
         case .done(let got):
             bar {
                 HStack(alignment: .firstTextBaseline) {
-                    Text("You got back")
+                    Text("Freed")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.white.opacity(0.65))
                     Spacer()
@@ -1248,7 +1398,7 @@ struct NextStepBar: View {
                 }
                 if after.notDeleted > 0 {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(after.notDeleted == 1 ? "1 thing is still in the Trash, because macOS only lets the Finder delete it. Empty the Trash there to finish." : "\(after.notDeleted) things are still in the Trash, because macOS only lets the Finder delete them. Empty the Trash there to finish.")
+                        Text("\(after.notDeleted) left in the Trash. Only Finder can delete \(after.notDeleted == 1 ? "it" : "them").")
                             .font(.system(size: 11.5))
                             .foregroundStyle(amber)
                             .fixedSize(horizontal: false, vertical: true)
@@ -1261,7 +1411,7 @@ struct NextStepBar: View {
                     }
                 }
                 if Double(got) < Double(after.bytes) * 0.93 {
-                    Text("\(formatBytes(after.bytes &- min(after.bytes, got))) is still held by a macOS snapshot or another copy. A snapshot goes by itself in time.")
+                    Text("\(formatBytes(after.bytes &- min(after.bytes, got))) still held by a snapshot or another link. Snapshots expire on their own.")
                         .font(.system(size: 11.5))
                         .foregroundStyle(.white.opacity(0.6))
                         .fixedSize(horizontal: false, vertical: true)
@@ -1271,10 +1421,10 @@ struct NextStepBar: View {
     }
 
     private func waitingText(_ after: AfterClean) -> String {
-        var text = "Free space stays the same until the Trash is emptied. You can still undo this."
-        if after.includesOldTrash, after.oldTrashBytes > 0 { text = "Emptying also removes the \(formatBytes(after.oldTrashBytes)) that was already there. Until then, you can still undo this." }
+        var text = "Not freed until the Trash is emptied."
+        if after.includesOldTrash, after.oldTrashBytes > 0 { text = "Includes \(formatBytes(after.oldTrashBytes)) that was already in the Trash." }
         if after.failed > 0 { text += " \(after.failed) couldn't be moved." }
-        if after.heldBack > 0 { text += " \(after.heldBack) stayed, and are still selected." }
+        if after.heldBack > 0 { text += " \(after.heldBack) skipped." }
         return text
     }
 }
@@ -1297,7 +1447,7 @@ struct WorthDoing: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if !rows.isEmpty, model.focus != 0 {
-                    SectionHeading(text: "Worth a look")
+                    SectionHeading(text: "Suggestions")
                         .padding(.horizontal, 8)
                         .padding(.top, 2)
                     VStack(spacing: 0) {
@@ -1311,7 +1461,7 @@ struct WorthDoing: View {
                     } label: {
                         HStack(spacing: 5) {
                             Image(systemName: "sparkles")
-                            Text("See everything in Free Up")
+                            Text("Show all in Free Up")
                         }
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(bright)

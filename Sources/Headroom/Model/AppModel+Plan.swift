@@ -99,7 +99,7 @@ extension AppModel {
     }
 
     /// A node's path as the plan keeps it.
-    private func planPath(_ node: UInt32, in tree: DiskTree) -> String? {
+    func planPath(_ node: UInt32, in tree: DiskTree) -> String? {
         guard let path = tree.path(node).map(PathMath.visible) else { return nil }
         nodeOfPath[path] = node
         return path
@@ -110,9 +110,9 @@ extension AppModel {
     var isCleaning: Bool { cleanProgress != nil || afterClean?.isEmptying == true || isPuttingBack }
 
     /// Nothing changes while things are on their way out, and suggestions only mean something for the map they came from.
-    private var canEditPlan: Bool {
+    var canEditPlan: Bool {
         guard !isCleaning else {
-            showTip("Just a moment, cleaning is under way.")
+            showTip("Still cleaning.")
             return false
         }
         return true
@@ -124,14 +124,21 @@ extension AppModel {
         var nodes: [String: [UInt32]] = [:]
         var all: [UInt32] = []
         var excluded: [UInt32] = []
+        var loose: [String: [String]] = [:]
         for item in plan.items {
             let found = item.paths.compactMap { node(for: $0, in: tree) }
             nodes[item.id] = found
             all += found
             excluded += item.excluded.compactMap { node(for: $0, in: tree) }
+            // A file in a folder that's on this map, though the file itself is too small to be.
+            let small = item.paths.filter { path in
+                node(for: path, in: tree) == nil && !item.excluded.contains(path) && node(for: (path as NSString).deletingLastPathComponent, in: tree) != nil
+            }
+            if !small.isEmpty { loose[item.id] = small }
         }
         planNodes = nodes
         planExcluded = excluded
+        planLoose = loose
         planSet = all.isEmpty ? nil : NodeSet(all, in: tree)
         planBack = excluded.isEmpty ? nil : NodeSet(excluded, in: tree)
     }
@@ -151,7 +158,11 @@ extension AppModel {
         }
     }
 
-    func isPlanned(_ node: UInt32) -> Bool { plannedTest()(node) }
+    func isPlanned(_ node: UInt32) -> Bool {
+        // Read so a view that asks is drawn again when the plan changes: the sets behind this aren't observed.
+        _ = planVersion
+        return plannedTest()(node)
+    }
 
     /// Whether it can be ticked for Free Up: anything with a place on the disk. What's part of macOS can't.
     func canPlan(_ node: UInt32) -> Bool { node != 0 && tree?.path(node) != nil }
@@ -172,9 +183,15 @@ extension AppModel {
             return
         }
         let kept = Set(plan.kept.map(\.id))
+        // Opening a row sends the ring into its folder so its files can be seen. The list you opened it in stays put.
+        var focus = focus
+        if expandedRow != nil, let opened = expandedFocus, tree.isInside(focus, opened) { focus = focusBeforeExpanding ?? focus }
         var page = Sections.boxes(from: suggestions.sections, tree: tree, focus: focus, kept: kept)
         // While a clean is waiting to be emptied, the Trash is that step, not one more suggestion.
-        if afterClean != nil { page.removeAll { $0.id == "trash" } }
+        if afterClean != nil {
+            for at in page.indices { page[at].rows.removeAll { $0.action == .emptyTrash } }
+            page.removeAll { $0.rows.isEmpty }
+        }
         if let hand = pickedByHand(in: tree, besides: page.flatMap(\.rows)) { page.insert(hand, at: 0) }
         boxes = page
         let others = suggestions.others.compactMap { kept.contains($0.id) ? nil : Sections.scoped($0, tree: tree, focus: focus) }
@@ -202,13 +219,13 @@ extension AppModel {
             let nodes = (planNodes[item.id] ?? []).filter { focus == 0 || tree.isInside($0, focus) }
             guard !nodes.isEmpty, !nodes.allSatisfy({ inSuggestions.contains($0) }) else { return nil }
             let bytes = nodes.reduce(UInt64(0)) { $0 &+ tree.totals[Int($1)] }
-            var row = WinRow(id: item.id, title: item.title, subtitle: item.note, detail: "You picked this on the ring.", tier: item.tier, nodes: nodes, bytes: bytes, paperBytes: bytes,
+            var row = WinRow(id: item.id, title: item.title, subtitle: item.note, detail: "Selected on the ring.", tier: item.tier, nodes: nodes, bytes: bytes, paperBytes: bytes,
                              action: .trash, command: nil, bundleID: nil)
             row.stepAfterPlanning = item.step
             return row
         }
         guard !rows.isEmpty else { return nil }
-        return Box(id: "hand", title: "Picked by hand", detail: rows.count == 1 ? "You clicked this on the ring" : "You clicked these on the ring", color: Palette.Box.hand, rows: rows)
+        return Box(id: "hand", title: "Selected manually", detail: rows.count == 1 ? "1 item" : "\(rows.count) items", color: Palette.Box.hand, rows: rows)
     }
 
     func refreshRowStates() {
@@ -234,9 +251,19 @@ extension AppModel {
             return covered > 0 || partly ? .some : .none
         }
         _ = tree
+        // A row can also hold files too small for the map, which are ticked by path.
+        func whole(_ row: WinRow) -> TickState {
+            let onMap = state(row.nodes)
+            guard !row.extraPaths.isEmpty, row.action == .trash else { return onMap }
+            let planned = Set(planLoose[row.id] ?? [])
+            let count = row.extraPaths.filter { planned.contains(PathMath.visible($0)) }.count
+            let small: TickState = count == 0 ? .none : (count == row.extraPaths.count ? .all : .some)
+            if row.nodes.isEmpty || onMap == small { return small }
+            return .some
+        }
         for row in shownRows {
-            states[row.id] = state(row.nodes)
-            for part in row.parts { states[part.id] = state(part.nodes) }
+            states[row.id] = whole(row)
+            for part in row.parts { states[part.id] = whole(part) }
         }
         func stateOf(_ box: Box) {
             let all = box.rows.map { states[$0.id] ?? .none }
@@ -250,7 +277,7 @@ extension AppModel {
     /// The Trash is what you've already decided about, so it starts ticked. Emptying it is still its own click, at the very end.
     func tickTheTrash() {
         guard let tree, afterClean == nil, cleanProgress == nil, winsScanID == tree.scanID,
-              let row = suggestions.sections.first(where: { $0.id == "trash" })?.rows.first,
+              let row = suggestions.rows.first(where: { $0.action == .emptyTrash }),
               plan.item(row.id) == nil, !refusedRows.contains(row.id) else { return }
         plan.add(item(for: row, in: tree))
         planChanged()
@@ -266,15 +293,15 @@ extension AppModel {
         guard let top = kids.first else { return nil }
         let share = Double(tree.totals[Int(top)]) / Double(total)
         if share >= 0.5, kids.count >= 2 {
-            return "\(displayName(top)) is \(share >= 0.75 ? "most" : "over half") of this."
+            return "\(displayName(top)): \(Int(share * 100))% of this folder"
         }
         if kids.count >= 5 {
             let three = kids.prefix(3).reduce(UInt64(0)) { $0 &+ tree.totals[Int($1)] }
             let part = Double(three) / Double(total)
-            if part >= 0.6 { return "Three things are \(Int(part * 100))% of this." }
+            if part >= 0.6 { return "Top 3 items: \(Int(part * 100))% of this folder" }
         }
         if tree.statRow(folder)[DiskTree.statRecent30] == 0 {
-            return "Nothing in here has changed for over a month."
+            return "Unchanged for over a month"
         }
         return nil
     }
@@ -297,6 +324,7 @@ extension AppModel {
 
     /// Everything that follows a change to the list: the ring, the numbers, and the checks if you're looking at them.
     func planChanged() {
+        planVersion &+= 1
         guard let tree else { return }
         // What's no longer planned has nothing left to say about the last clean.
         cleanFailures = cleanFailures.filter { plan.item($0.key) != nil }
@@ -319,7 +347,8 @@ extension AppModel {
         let byItem = planNodes
         let tops = byItem.values.flatMap { $0 }
         let excluded = planExcluded
-        guard !tops.isEmpty else {
+        let loose = planLoose
+        guard !tops.isEmpty || !loose.isEmpty else {
             planBytes = 0
             planBytesByItem = [:]
             cachedAfterPlan = nil
@@ -335,11 +364,22 @@ extension AppModel {
             for (id, nodes) in byItem where !nodes.isEmpty {
                 perItem[id] = nodes.reduce(UInt64(0)) { $0 &+ (effect.perTop[$1] ?? 0) }
             }
+            // What's too small for the map is measured where it is.
+            var looseTotal: UInt64 = 0
+            for (id, paths) in loose {
+                let bytes = paths.reduce(UInt64(0)) { sum, path in
+                    let size = try? URL(fileURLWithPath: path).resourceValues(forKeys: [.totalFileAllocatedSizeKey]).totalFileAllocatedSize
+                    return sum &+ UInt64(size ?? 0)
+                }
+                perItem[id, default: 0] &+= bytes
+                looseTotal &+= bytes
+            }
+            let total = effect.total &+ looseTotal
             let byItemNow = perItem
             await MainActor.run {
                 guard self.effectGeneration == generation, self.tree === tree else { return }
                 // A few leftover kilobytes in a folder aren't space anyone gets back.
-                self.planBytes = effect.total < 1_000_000 ? 0 : effect.total
+                self.planBytes = total < 1_000_000 ? 0 : total
                 self.planBytesByItem = byItemNow.mapValues { $0 < 1_000_000 ? 0 : $0 }
                 self.cachedAfterPlan = after
                 self.refreshGhost()
@@ -397,13 +437,44 @@ extension AppModel {
 
     /// One tick for a whole box. A second click takes everything out of it, whatever you'd ticked inside.
     func toggle(_ box: Box) {
-        guard let tree, isCurrent(tree), canEditPlan else { return }
+        // A shortlist is for picking from: nothing takes all of it at once.
+        guard let tree, isCurrent(tree), canEditPlan, !box.isShortlist else { return }
         let wanted = box.rowsATickTakes.filter(\.isPlannable)
         let on = wanted.contains { rowStates[$0.id] != .all }
         for row in on ? wanted : box.rows.filter(\.isPlannable) where (rowStates[row.id] != .all) == on || !on {
             setPlanned(row, on, in: tree)
         }
         planChanged()
+    }
+
+    // MARK: Recommended
+
+    /// What Select recommended would still tick in the picture on screen: caches not in use, and junk.
+    var recommendedLeft: [WinRow] { boxes.flatMap(\.recommended).filter { rowStates[$0.id] != .all } }
+
+    func selectRecommended() {
+        guard let tree, isCurrent(tree), canEditPlan else { return }
+        let rows = recommendedLeft
+        pointAtRecommended(false)
+        for row in rows { setPlanned(row, true, in: tree) }
+        planChanged()
+    }
+
+    /// Pointing at the button shows what it would take before you press it: its boxes light in the list, its files on the
+    /// ring, and the free space grows by that much.
+    func pointAtRecommended(_ on: Bool) {
+        guard let tree else { return }
+        recommendedHot = on
+        guard on else {
+            point(at: nil)
+            return
+        }
+        pointingTask?.cancel()
+        let rows = recommendedLeft
+        let bytes = rows.reduce(UInt64(0)) { $0 &+ $1.aTickFrees }
+        pointing = Pointing(id: "recommended", title: "Recommended", bytes: bytes, color: Palette.Box.quick)
+        highlight(nodes: rows.flatMap(\.nodes))
+        engine.setPreview(Float(bytes) / Float(max(tree.capacityBytes, 1)), color: Palette.Box.quick.linearP3)
     }
 
     private func setPlanned(_ row: WinRow, _ on: Bool, in tree: DiskTree) {
@@ -441,7 +512,7 @@ extension AppModel {
         let paths = row.otherCopies.compactMap { planPath($0, in: tree) }
         guard !paths.isEmpty else { return nil }
         let places = paths.map(DiskTree.friendly).joined(separator: ", ")
-        return PlanItem(id: row.id + ":other-copy", title: "The other copy of \(row.title)", note: row.otherCopiesCaution.map { $0 + " " + places } ?? places, tierRaw: Tier.yourCall.rawValue, paths: paths,
+        return PlanItem(id: row.id + ":other-copy", title: "Other copy of \(row.title)", note: row.otherCopiesCaution.map { $0 + " " + places } ?? places, tierRaw: Tier.yourCall.rawValue, paths: paths,
                         lastKnownBytes: row.paperBytes, diskID: paths.first.flatMap(Cleaner.diskID))
     }
 
@@ -503,7 +574,7 @@ extension AppModel {
         guard let tree, canEditPlan else { return }
         guard let path = planPath(node, in: tree) else {
             let cantLook = tree.nodes[Int(node)].has(NodeFlag.hidden) || tree.nodes[Int(node)].has(NodeFlag.locked)
-            showTip(cantLook ? "Headroom can't look inside this, so it can't go." : "\(displayName(node)) is part of macOS, so it can't go.")
+            showTip(cantLook ? "Headroom can't read this." : "\(displayName(node)) is part of macOS.")
             return
         }
         let row = isCurrent(tree) ? rowOfNode[node].flatMap { $0 < flatRows.count ? flatRows[$0] : nil } : nil
@@ -525,7 +596,7 @@ extension AppModel {
         }
         if let row {
             guard row.isPlannable else {
-                showTip(row.subtitle.isEmpty ? "\(row.title) can't go from here." : row.subtitle)
+                showTip(row.subtitle.isEmpty ? "\(row.title) can't be selected here." : row.subtitle)
                 return
             }
             if row.action == .emptyTrash || row.action == .uninstall || row.nodes.count == 1 {
@@ -540,11 +611,28 @@ extension AppModel {
         }
         guard Safety.canTrash(path) else {
             let isFolder = tree.nodes[Int(node)].firstChild != 0
-            showTip(isFolder ? "\(displayName(node)) can't go as a whole. Double-click to look inside." : "\(displayName(node)) is protected, so it can't go.")
+            showTip(isFolder ? "\(displayName(node)) is protected. Double-click to open it." : "\(displayName(node)) is protected.")
             return
         }
         plan.add(PlanItem(id: "path:" + path, title: displayName(node), note: tree.friendlyPath(node), tierRaw: Tier.yourCall.rawValue, paths: [path], byHand: true,
                           lastKnownBytes: tree.totals[Int(node)], diskID: Cleaner.diskID(of: path)))
+        planChanged()
+    }
+
+    /// A tick on one file in a row that's too small to be on the map, such as one screenshot of many.
+    func togglePath(_ path: String, of row: WinRow) {
+        guard let tree, canEditPlan else { return }
+        let path = PathMath.visible(path)
+        if plan.covers(path) {
+            plan.takeBack(path)
+        } else if plan.items.contains(where: { $0.excluded.contains(path) }) {
+            for at in plan.items.indices { plan.items[at].excluded.removeAll { $0 == path } }
+        } else {
+            guard Safety.canTrash(path) else { return }
+            var part = item(for: row, in: tree)
+            part.paths = [path]
+            plan.add(part)
+        }
         planChanged()
     }
 
@@ -646,7 +734,7 @@ extension AppModel {
 
     func alsoPlanOtherCopy(for item: PlanItem) {
         guard let other = otherCopies[item.id], canEditPlan else { return }
-        plan.add(PlanItem(id: item.id + ":other-copy", title: "The other copy of \(item.title)", note: other.title, tierRaw: Tier.yourCall.rawValue, paths: other.paths, lastKnownBytes: other.bytes,
+        plan.add(PlanItem(id: item.id + ":other-copy", title: "Other copy of \(item.title)", note: other.title, tierRaw: Tier.yourCall.rawValue, paths: other.paths, lastKnownBytes: other.bytes,
                           diskID: other.paths.first.flatMap(Cleaner.diskID)))
         planChanged()
     }
@@ -742,6 +830,7 @@ extension AppModel {
         guard let tree else { return }
         if expandedRow == row.id {
             expandedRow = nil
+            expandedFocus = nil
             if let back = focusBeforeExpanding {
                 focusBeforeExpanding = nil
                 go(to: back)
@@ -755,6 +844,7 @@ extension AppModel {
             let target = isFolder ? node : tree.nodes[Int(node)].parent
             if target != focus, target != 0 {
                 focusBeforeExpanding = focusBeforeExpanding ?? focus
+                expandedFocus = target
                 zoom(into: target)
             }
         }
@@ -765,7 +855,7 @@ extension AppModel {
         if row.nodes.count > 1 { return row.nodes.sorted { tree.totals[Int($0)] > tree.totals[Int($1)] } }
         guard let node = row.nodes.first else { return [] }
         let tail = RingLayout.chainTail(tree: tree, node)
-        return tree.children(tail).filter { tree.totals[Int($0)] > 0 }
+        return tree.children(tail).filter { tree.totals[Int($0)] > 0 }.sorted { tree.totals[Int($0)] > tree.totals[Int($1)] }
     }
 
     // MARK: Checks
@@ -865,7 +955,7 @@ extension AppModel {
             stopScan()
         }
         stopChecks()
-        cleanProgress = CleanProgress(done: 0, total: 0, title: "Checking")
+        cleanProgress = CleanProgress(done: 0, total: 0, title: "Checking…")
         // A clean that's waiting to be emptied stays on record: this one joins it.
         if afterClean == nil {
             takenOut = []
@@ -905,7 +995,7 @@ extension AppModel {
             let gone = goneIDs
             await MainActor.run {
                 self.checks = result
-                self.cleanProgress = CleanProgress(done: 0, total: total, title: "Starting")
+                self.cleanProgress = CleanProgress(done: 0, total: total, title: "Starting…")
             }
             var failedPaths: [String: [String]] = [:]
             var reasons: [String: CheckProblem] = [:]
@@ -921,7 +1011,7 @@ extension AppModel {
                             let name = (path as NSString).lastPathComponent
                             let soFar = done
                             try Cleaner.copyAndVerify(path, into: PlanList.moveDestination(of: path, item: item, folder: folder), stop: stop) { progress in
-                                let update = CleanProgress(done: soFar, total: total, title: "Copying \(name)", bytesDone: progress.bytesDone, bytesTotal: progress.bytesTotal)
+                                let update = CleanProgress(done: soFar, total: total, title: "Copying \(name)…", bytesDone: progress.bytesDone, bytesTotal: progress.bytesTotal)
                                 Task { @MainActor in if self.cleanProgress != nil { self.cleanProgress = update } }
                             }
                         }
@@ -970,12 +1060,12 @@ extension AppModel {
     func sendToTrash(_ thing: NamedThing, anyway: Bool = false) {
         guard let node = thing.single, node != 0, let tree, canEditPlan else { return }
         guard !tree.isPartial else {
-            showTip("Just a moment, the disk is still being read.")
+            showTip("Still scanning.")
             return
         }
         let title = displayName(node)
         guard let path = planPath(node, in: tree), let raw = tree.path(node), Safety.canTrash(raw) else {
-            showTip("\(title) is protected, so this can't go.")
+            showTip("\(title) is protected.")
             return
         }
         factsOfSavedMap = false
@@ -1020,10 +1110,152 @@ extension AppModel {
         }
     }
 
+    // MARK: Taking out copies
+
+    /// What becomes of the copies of a set that aren't kept.
+    enum CopyAction: String, CaseIterable {
+        case delete, hardlink, symlink
+
+        var title: String {
+            switch self {
+            case .delete: "Delete"
+            case .hardlink: "Hardlink"
+            case .symlink: "Symlink"
+            }
+        }
+
+        fileprivate var replacement: Cleaner.Replacement {
+            switch self {
+            case .delete: .nothing
+            case .hardlink: .hardlink
+            case .symlink: .symlink
+            }
+        }
+    }
+
+    /// Deletes the copies of a set that aren't kept, or replaces them with hard links or symlinks to the ones that are. Each
+    /// copy is checked as anything cleaned is, read through against the copy kept, and goes to the Trash on record, so Undo
+    /// puts it back as it was.
+    func takeCopies(_ group: CopyGroup, _ action: CopyAction) {
+        guard group.kind == .duplicate, let tree, canEditPlan, !isCleaning else { return }
+        guard !tree.isPartial else {
+            showTip("Still scanning.")
+            return
+        }
+        var pairs: [(node: UInt32, path: String, kept: String, item: PlanItem)] = []
+        // Each copy to the kept copy of its own file.
+        for (keeper, extra) in group.sets.flatMap({ set in set.extras.map { (set.keeper, $0) } }) {
+            guard let path = planPath(extra, in: tree), let raw = tree.path(extra), Safety.canTrash(raw), let kept = tree.path(keeper) else { continue }
+            let note = action == .delete ? "Duplicate of \(tree.friendlyPath(keeper))" : "\(action.title) to \(tree.friendlyPath(keeper))"
+            pairs.append((extra, path, kept, PlanItem(id: action.rawValue + ":" + path, title: tree.name(extra), note: note,
+                                                      tierRaw: (action == .delete ? Tier.yourCall : Tier.noLoss).rawValue, paths: [path],
+                                                      lastKnownBytes: tree.totals[Int(extra)], diskID: Cleaner.diskID(of: path))))
+        }
+        guard !pairs.isEmpty else {
+            showTip("These files are protected.")
+            return
+        }
+        factsOfSavedMap = false
+        message = nil
+        let apps = NSWorkspace.shared.runningApplications.compactMap { app -> PlanChecks.RunningApp? in
+            guard let id = app.bundleIdentifier else { return nil }
+            return PlanChecks.RunningApp(bundleID: id, name: app.localizedName ?? id)
+        }
+        let fullAccess = hasFullAccess
+        if isScanning {
+            scanOnceCleaned(hurry: scanIsHurrying)
+            stopScan()
+        }
+        stopChecks()
+        cleanProgress = CleanProgress(done: 0, total: pairs.count, title: group.title)
+        let stop = LockedFlag()
+        cleanStop = stop
+        if afterClean == nil {
+            takenOut = []
+            lastPlanItems = []
+        }
+        pendingCleaned = []
+        let title = group.title
+        Task.detached(priority: .userInitiated) {
+            var linked: [(node: UInt32, path: String, kept: String, item: PlanItem, place: String, identity: String?)] = []
+            var why: CheckProblem?
+            for (at, pair) in pairs.enumerated() {
+                if stop.value { break }
+                let check = PlanChecks.run(items: [pair.item], trueBytes: [:], otherCopy: [:], runningApps: apps, fullAccess: fullAccess)[pair.item.id] ?? ItemCheck()
+                if !check.canGo, let problem = check.problems.first(where: { $0.holdsBack || $0 == .gone }) {
+                    why = problem
+                    continue
+                }
+                do {
+                    let moved = try Cleaner.replaceCopy(pair.path, of: pair.kept, with: action.replacement, stop: stop)
+                    linked.append((pair.node, pair.path, pair.kept, pair.item, moved.place, moved.identity))
+                } catch {
+                    why = Cleaner.whyItFailed(error)
+                }
+                let done = at + 1
+                await MainActor.run { self.cleanProgress?.done = done }
+            }
+            let share = Accounting.effect(of: linked.map(\.node), except: [], in: tree).perTop
+            let finished = linked, problem = why
+            await MainActor.run { self.finishTaking(finished, action, why: problem, share: share, tree: tree, title: title) }
+        }
+    }
+
+    private func finishTaking(_ linked: [(node: UInt32, path: String, kept: String, item: PlanItem, place: String, identity: String?)], _ action: CopyAction,
+                              why: CheckProblem?, share: [UInt32: UInt64], tree: DiskTree, title: String) {
+        cleanProgress = nil
+        if linked.isEmpty {
+            showTip("Nothing changed. \(why?.text ?? "")", for: 6)
+        } else {
+            for l in linked {
+                didMove(l.path, to: l.place, identity: l.identity, item: l.item, trueBytes: share, tree: tree, linkedTo: action == .delete ? nil : l.kept)
+            }
+            let things = pendingCleaned
+            pendingCleaned = []
+            var all = things
+            var old: [String] = []
+            var oldBytes: UInt64 = 0
+            var bytes = things.reduce(UInt64(0)) { $0 &+ $1.bytes }
+            if let waiting = afterClean, waiting.state == .waiting {
+                all = waiting.things + things
+                old = waiting.oldTrashItems
+                oldBytes = waiting.oldTrashBytes
+                bytes &+= waiting.bytes
+            }
+            afterClean = AfterClean(things: all, bytes: bytes, includesOldTrash: !old.isEmpty, oldTrashBytes: oldBytes, oldTrashItems: old)
+            for l in linked where plan.covers(l.path) { plan.takeBack(l.path) }
+            rescanWhenBack = true
+            refreshShownRows()
+            if self.tree === tree {
+                treeVersion += 1
+                resolvePlanSynchronously(in: tree)
+                rebuildInsights()
+                relayout(.settle)
+                if isSearching { runSearch() }
+            }
+            let copies = linked.count == 1 ? "1 copy" : "\(linked.count) copies"
+            let left = why.map { " Skipped some: \($0.text)" } ?? ""
+            let done = switch action {
+            case .delete: "Moved \(copies) of \(title) to the Trash."
+            case .hardlink: "Hardlinked \(copies) of \(title)."
+            case .symlink: "Symlinked \(copies) of \(title)."
+            }
+            showTip(done + left, for: 8, offeringUndo: true)
+        }
+        if !plan.isEmpty { runChecks() }
+        savePlan()
+        if quitAfterClean {
+            cleanStoppedForQuit = true
+            quitWhenNothingIsLeft()
+            return
+        }
+        runScanAfterClean()
+    }
+
     /// You were told what's using it, and it goes anyway. The map may have been read again while you were deciding.
     func sendAnyway(_ busy: BusyThing) {
         guard let tree, let node = tree.find(path: busy.path) else {
-            showTip("\(busy.title) isn't on the map any more.")
+            showTip("\(busy.title) is no longer there.")
             return
         }
         sendToTrash(NamedThing(node), anyway: true)
@@ -1061,7 +1293,7 @@ extension AppModel {
                 if isSearching { runSearch() }
             }
             let there = (moved.place as NSString).lastPathComponent
-            showTip("Moved to Trash: \(item.title)" + (there == (path as NSString).lastPathComponent ? "" : ", shown there as \(there)"), for: 8, offeringUndo: true)
+            showTip("Moved to Trash: \(item.title)" + (there == (path as NSString).lastPathComponent ? "" : " (shown as \(there))"), for: 8, offeringUndo: true)
             if let looking {
                 if let next {
                     if look == nil { openLook(next, onLeft: looking.onLeft) } else { showInLook(next, steppingIn: false) }
@@ -1070,7 +1302,7 @@ extension AppModel {
                 }
             }
         } else if busyToSend == nil {
-            showTip("\(item.title) stayed where it is. \(why?.text ?? "")", for: 6)
+            showTip("\(item.title) wasn't moved. \(why?.text ?? "")", for: 6)
         }
         if !plan.isEmpty { runChecks() }
         savePlan()
@@ -1090,12 +1322,14 @@ extension AppModel {
         }
         guard let after = afterClean, after.state == .waiting, !after.things.isEmpty, canEditPlan else { return }
         undoClean()
-        showTip(after.things.count == 1 ? "Put back: \(after.things[0].title)" : "Put back \(after.things.count) things")
+        showTip(after.things.count == 1 ? "Put back: \(after.things[0].title)" : "Put back \(after.things.count) items")
     }
 
-    private func didMove(_ path: String, to inTrash: String, identity: String?, item: PlanItem, trueBytes: [UInt32: UInt64], tree cleaned: DiskTree) {
+    private func didMove(_ path: String, to inTrash: String, identity: String?, item: PlanItem, trueBytes: [UInt32: UInt64], tree cleaned: DiskTree,
+                         linkedTo: String? = nil) {
         // On record first, whatever else is going on: this is what makes it possible to bring it back.
         var thing = CleanedThing(itemID: item.id, title: item.title, original: path, inTrash: inTrash, bytes: 0, identity: identity)
+        thing.linkedTo = linkedTo
         if self.tree === cleaned, let node = nodeOfPath[path] ?? tree?.find(path: "/System/Volumes/Data" + path) ?? tree?.find(path: path) {
             thing.bytes = takeOut(node, from: cleaned, trueBytes: trueBytes[node])
         } else {
@@ -1166,7 +1400,7 @@ extension AppModel {
             }
             afterClean = AfterClean(things: allThings, bytes: bytes, includesOldTrash: !allOld.isEmpty, oldTrashBytes: allOldBytes, oldTrashItems: allOld, failed: failures, heldBack: heldBack)
         } else if failures > 0 {
-            message = failures == 1 ? "That couldn't be moved to the Trash. The list says why." : "\(failures) things couldn't be moved to the Trash. The list says why."
+            message = failures == 1 ? "1 item couldn't be moved to the Trash. Details in Free Up." : "\(failures) items couldn't be moved to the Trash. Details in Free Up."
         }
         rescanWhenBack = true
         refreshShownRows()
@@ -1217,9 +1451,9 @@ extension AppModel {
                     return
                 }
                 if failures > 0 {
-                    self.message = failures == 1 ? "One thing couldn't go back. It's still in the Trash, so you can put it back from there." : "\(failures) things couldn't go back. They're still in the Trash, so you can put them back from there."
+                    self.message = failures == 1 ? "1 item couldn't be put back. It's still in the Trash." : "\(failures) items couldn't be put back. They're still in the Trash."
                 } else if hadMoves {
-                    self.message = "Everything is back. The copies on the other disk are still there."
+                    self.message = "Everything is back. The copies on the other disk remain."
                 }
                 self.refreshShownRows()
                 if let tree = self.tree, !taken.isEmpty, taken.allSatisfy({ $0.tree === tree }), failures == 0 {
@@ -1499,7 +1733,7 @@ extension AppModel {
         if let first = paths.first, plan.covers(first) {
             plan.items.removeAll { $0.id == row.id + ":also" }
         } else {
-            plan.add(PlanItem(id: row.id + ":also", title: "The data of \(row.title)", note: paths.map(DiskTree.friendly).joined(separator: ", "), tierRaw: Tier.yourCall.rawValue, paths: paths,
+            plan.add(PlanItem(id: row.id + ":also", title: "\(row.title) data", note: paths.map(DiskTree.friendly).joined(separator: ", "), tierRaw: Tier.yourCall.rawValue, paths: paths,
                               step: row.step == .uninstall ? .uninstall : .trash, bundleID: row.bundleID, lastKnownBytes: row.alsoNodes.reduce(0) { $0 &+ tree.totals[Int($1)] },
                               diskID: paths.first.flatMap(Cleaner.diskID)))
         }

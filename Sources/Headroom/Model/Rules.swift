@@ -16,9 +16,9 @@ enum Tier: UInt8, Comparable {
         case .none: ""
         case .noLoss: "No loss"
         case .rebuilds: "Rebuilds itself"
-        case .redownload: "Download again"
-        case .yourCall: "Your call"
-        case .handsOff: "Leave alone"
+        case .redownload: "Re-downloadable"
+        case .yourCall: "Review first"
+        case .handsOff: "Managed by macOS"
         }
     }
 
@@ -32,6 +32,17 @@ enum Tier: UInt8, Comparable {
         case .handsOff: "macOS looks after this."
         }
     }
+}
+
+/// The box something is listed under in Free Up: what a person would call that kind of thing. One list, so a new kind of
+/// thing is a new rule or a new finder that names its box, and nothing else has to know.
+enum BoxKind: String, CaseIterable {
+    /// The Trash has nothing to open, so it's one row with a tick of its own.
+    case trash
+    case caches, junk, developer, models, games, apps, removedApps, backups, installers, screenshots, leftovers, largest
+    /// Found, and used elsewhere, but not listed in Free Up: films and series are yours to keep.
+    case media
+    case other
 }
 
 struct Rule {
@@ -65,6 +76,8 @@ struct Rule {
     var thingByThing = false
     /// Can come back, but nothing proves it, so the slider leaves it to you.
     var askFirst = false
+    /// Where it's listed in Free Up.
+    var box: BoxKind = .other
 }
 
 /// A fixed set of names the scanner can ask about from any thread, with no String and no reference counting.
@@ -98,13 +111,13 @@ struct NameTable {
 final class RuleBook: @unchecked Sendable {
     static let swap = Rule(title: "Memory swap", detail: "Memory that macOS moved to disk. It fills up when many apps are open and resets on restart.",
                            tier: .noLoss, kind: .system, restartClears: true, notTrashable: true)
-    static let updates = Rule(title: "Startup and updates", detail: "The files your Mac starts from, plus any macOS update that's downloaded and waiting. Installing a waiting update frees most of what's extra.",
+    static let updates = Rule(title: "Startup and updates", detail: "The startup volumes, plus any downloaded macOS update. Installing a waiting update frees most of the extra space.",
                               tier: .noLoss, kind: .system, notTrashable: true)
     static let macOS = Rule(title: "macOS", detail: "The operating system, on its own sealed volume. It can't be changed or removed.",
                             tier: .handsOff, kind: .system, notTrashable: true)
-    static let recovery = Rule(title: "Recovery", detail: "The tools your Mac starts into when something has gone wrong.",
+    static let recovery = Rule(title: "Recovery", detail: "macOS Recovery, for repairing or reinstalling macOS.",
                                tier: .handsOff, kind: .system, notTrashable: true)
-    static let hiddenData = Rule(title: "Hidden", detail: "Space that's in use but that Headroom can't look inside: folders macOS keeps private, root-only data, and files held by APFS snapshots.",
+    static let hiddenData = Rule(title: "Hidden", detail: "In use, but Headroom can't read it: private macOS folders, root-only data and APFS snapshots.",
                                  tier: .handsOff, kind: .system, notTrashable: true)
 
     private(set) var rules: [Rule] = [Rule(title: "", detail: "", tier: .none)]
@@ -223,7 +236,8 @@ final class RuleBook: @unchecked Sendable {
     }
 
     private func add(_ rule: Rule) -> UInt16 {
-        let key = rule.title + "\u{1}" + rule.detail
+        // The same words can name two rules: Xcode's own build folder, and one in a project, which is grouped with the others.
+        let key = rule.title + "\u{1}" + rule.detail + "\u{1}\(rule.groups)\u{1}\(rule.box.rawValue)"
         if let id = ruleIDs[key] { return id }
         rules.append(rule)
         let id = UInt16(rules.count - 1)
@@ -339,10 +353,10 @@ final class RuleBook: @unchecked Sendable {
     // MARK: What Headroom knows
 
     private static func cache(_ title: String, _ detail: String, command: String? = nil) -> Rule {
-        Rule(title: title, detail: detail, tier: .rebuilds, kind: .cache, command: command)
+        Rule(title: title, detail: detail, tier: .rebuilds, kind: .cache, command: command, box: .developer)
     }
     private static func build(_ title: String, _ detail: String, command: String? = nil) -> Rule {
-        Rule(title: title, detail: detail, tier: .rebuilds, kind: .cache, command: command, groups: true)
+        Rule(title: title, detail: detail, tier: .rebuilds, kind: .cache, command: command, groups: true, box: .developer)
     }
     private static func only(_ rule: Rule) -> Rule {
         var copy = rule
@@ -356,7 +370,7 @@ final class RuleBook: @unchecked Sendable {
     }
     /// A model cache also holds your login, so it's only ever suggested model by model.
     private static var huggingFace: Rule {
-        var rule = model("Hugging Face models", "AI model weights. Each one downloads again the next time it's used.")
+        var rule = model("Hugging Face models", "AI model weights. Each is re-downloaded on next use.")
         rule.thingByThing = true
         return rule
     }
@@ -373,11 +387,13 @@ final class RuleBook: @unchecked Sendable {
         "matplotlib", "fontconfig", "thumbnails", "mesa_shader_cache", "Homebrew", "gstreamer-1.0", "typescript", "starship", "gh", "yt-dlp", "cycles",
     ]
     private static func model(_ title: String, _ detail: String) -> Rule {
-        Rule(title: title, detail: detail, tier: .redownload, kind: .model)
+        Rule(title: title, detail: detail, tier: .redownload, kind: .model, box: .models)
     }
     private static func owned(_ rule: Rule, _ bundleID: String) -> Rule {
         var copy = rule
         copy.appBundleID = bundleID
+        // An app's own cache, not a developer tool's.
+        copy.box = .caches
         return copy
     }
     private static func named(_ rule: Rule) -> Rule {
@@ -388,7 +404,7 @@ final class RuleBook: @unchecked Sendable {
 
     /// Whole areas with one colour. They say nothing about removing anything.
     static let neutralRules: [(String, Rule)] = [
-        ("Applications", Rule(title: "Apps", detail: "Your apps. Removing an app you no longer use is a clean win, and its settings stay behind.", tier: .none, kind: .app)),
+        ("Applications", Rule(title: "Apps", detail: "Installed apps. Deleting one leaves its settings behind.", tier: .none, kind: .app)),
         ("Library", Rule(title: "System Library", detail: "Files shared by every user and by the system.", tier: .none, kind: .system)),
         ("System", Rule(title: "System", detail: "The parts of macOS that live on your data volume.", tier: .none, kind: .system)),
         ("private", Rule(title: "System data", detail: "Logs, temporary files and the working data of macOS.", tier: .none, kind: .system)),
@@ -398,20 +414,21 @@ final class RuleBook: @unchecked Sendable {
 
     /// `~` is your home folder, and `*` is any one folder. The most specific match wins, because it's reached later.
     static let pathRules: [(String, Rule)] = [
-        ("~/.Trash", Rule(title: "Trash", detail: "Already thrown away, but still taking up space until you empty the Trash.", tier: .noLoss, notTrashable: true)),
+        ("~/.Trash", Rule(title: "Trash", detail: "Deleted items. They use space until the Trash is emptied.", tier: .noLoss, notTrashable: true, box: .trash)),
 
         ("private/tmp", Rule(title: "Temporary files", detail: "Scratch files from running apps and sessions. A restart clears them.", tier: .noLoss, kind: .cache, restartClears: true, notTrashable: true)),
-        ("private/var/folders/*/*/X/com.google.Chrome.code_sign_clone", Rule(title: "Chrome signing copies", detail: "Copies Chrome makes of itself to check its signature. They look huge but mostly share blocks with Chrome, and a restart clears them.", tier: .noLoss, kind: .cache, restartClears: true, notTrashable: true)),
+        ("private/var/folders/*/*/X/com.google.Chrome.code_sign_clone", Rule(title: "Chrome signing copies", detail: "Copies Chrome makes of itself to check its signature. Mostly clones of Chrome. A restart clears them.", tier: .noLoss, kind: .cache, restartClears: true, notTrashable: true)),
         ("System/Library/AssetsV2", Rule(title: "System downloads", detail: "Siri voices, Apple Intelligence models and other things macOS fetches for itself. macOS manages them.", tier: .handsOff, kind: .system, notTrashable: true)),
-        ("Library/Caches/*", Rule(title: "System cache", detail: "Cached files shared by every user. They rebuild themselves.", tier: .rebuilds, kind: .cache)),
+        ("Library/Caches/*", Rule(title: "System cache", detail: "Cached files shared by every user. They rebuild themselves.", tier: .rebuilds, kind: .cache, box: .caches)),
 
-        ("~/Library/Caches/*", Rule(title: "App cache", detail: "An app's cache. It rebuilds as you use the app, so the app may be a little slower at first.", tier: .rebuilds, kind: .cache, namedByBundleID: true)),
+        ("~/Library/Caches/*", Rule(title: "App cache", detail: "An app's cache. Rebuilt as you use the app, which may be slower at first.", tier: .rebuilds, kind: .cache, namedByBundleID: true, box: .caches)),
+        ("~/Library/Logs", Rule(title: "Logs", detail: "Log files and crash reports. Apps write new ones.", tier: .rebuilds, kind: .cache, box: .junk)),
         ("~/Library/Caches/Homebrew", cache("Homebrew downloads", "Installers Homebrew kept after installing.", command: "brew cleanup -s")),
         ("~/Library/Caches/pip", cache("pip downloads", "Python packages pip kept after installing.", command: "pip cache purge")),
-        ("~/Library/Caches/Google", Rule(title: "Chrome's browser cache", detail: "Copies of web pages. Sites load a little slower at first. Your logins aren't stored here.", tier: .rebuilds, kind: .cache, appBundleID: "com.google.Chrome")),
+        ("~/Library/Caches/Google", Rule(title: "Chrome cache", detail: "Copies of web pages. Sites load a little slower at first. Your logins aren't stored here.", tier: .rebuilds, kind: .cache, appBundleID: "com.google.Chrome", box: .caches)),
         ("~/Library/Caches/ms-playwright", cache("Playwright browsers", "Browsers Playwright downloads for testing.", command: "npx playwright uninstall --all")),
         ("~/.cache/*", { var rule = named(cache("Tool cache", "A command-line tool's cache. It rebuilds the next time the tool runs.")); rule.knownNames = knownToolCaches; return rule }()),
-        ("~/.cache/uv", only(cache("uv cache", "Python packages kept by uv. Quit anything using them first, so no package gets pulled out from under a running tool.", command: "uv cache prune"))),
+        ("~/.cache/uv", only(cache("uv cache", "Python packages cached by uv. Quit tools using them first.", command: "uv cache prune"))),
         ("~/.cache/huggingface", huggingFace),
         ("~/.npm/_cacache", cache("npm cache", "Packages npm has downloaded before.", command: "npm cache clean --force")),
         ("~/.npm/_npx", cache("npx cache", "Tools npx has downloaded before.")),
@@ -429,22 +446,22 @@ final class RuleBook: @unchecked Sendable {
         ("~/Library/Application Support/Code/Cache", owned(cache("VS Code cache", "Web content cached by VS Code."), "com.microsoft.VSCode")),
         ("~/Library/Application Support/Code/CachedData", owned(cache("VS Code compiled cache", "Compiled code cached by VS Code."), "com.microsoft.VSCode")),
 
-        ("~/Library/Developer/Xcode/iOS DeviceSupport", Rule(title: "iPhone debug symbols", detail: "Xcode copies these from each iPhone or iOS version you've debugged. It copies them again when needed.", tier: .redownload, kind: .cache)),
-        ("~/Library/Developer/CoreSimulator/Devices", Rule(title: "Simulator devices", detail: "Simulated iPhones and their data. Apps and files inside them are lost.", tier: .redownload, kind: .app, command: "xcrun simctl delete unavailable", commandOnly: true)),
-        ("~/Library/Application Support/Steam/steamapps/common/*", named(Rule(title: "Steam game", detail: "Steam can download this game again. Check first that your saves are in Steam Cloud.", tier: .redownload, kind: .app))),
+        ("~/Library/Developer/Xcode/iOS DeviceSupport", Rule(title: "iPhone debug symbols", detail: "Xcode copies these from each iPhone or iOS version you've debugged. It copies them again when needed.", tier: .redownload, kind: .cache, box: .developer)),
+        ("~/Library/Developer/CoreSimulator/Devices", Rule(title: "Simulator devices", detail: "Simulated iPhones and their data. Apps and files inside them are lost.", tier: .redownload, kind: .app, command: "xcrun simctl delete unavailable", commandOnly: true, box: .developer)),
+        ("~/Library/Application Support/Steam/steamapps/common/*", named(Rule(title: "Steam game", detail: "Steam can download this game again. Check first that your saves are in Steam Cloud.", tier: .redownload, kind: .app, box: .games))),
         ("~/.ollama/models", model("Ollama models", "AI model weights. Pull them again with Ollama.")),
         ("~/.lmstudio/models", model("LM Studio models", "AI model weights. Download them again from LM Studio.")),
-        ("~/LLM/*", { var rule = named(model("Local AI models", "AI model weights. They can be downloaded again from where they came from, if you know where that was.")); rule.askFirst = true; return rule }()),
+        ("~/LLM/*", { var rule = named(model("Local AI models", "AI model weights. Re-downloadable if you know where they came from.")); rule.askFirst = true; return rule }()),
         ("~/LLM/huggingface", huggingFace),
-        ("~/Library/Android/sdk/system-images", Rule(title: "Android system images", detail: "Android versions for the emulator. Android Studio downloads them again, but emulators using them won't start until it does.", tier: .redownload, kind: .app)),
-        ("~/Library/Android/sdk/ndk/*", named(Rule(title: "Android NDK", detail: "A version of the native build tools. A project that asks for it downloads it again.", tier: .redownload, kind: .app))),
-        ("~/.rustup/toolchains", Rule(title: "Rust toolchains", detail: "Versions of the Rust compiler. rustup installs them again.", tier: .redownload, kind: .app)),
+        ("~/Library/Android/sdk/system-images", Rule(title: "Android system images", detail: "Emulator system images. Android Studio re-downloads them when needed.", tier: .redownload, kind: .app, box: .developer)),
+        ("~/Library/Android/sdk/ndk/*", named(Rule(title: "Android NDK", detail: "A version of the native build tools. A project that asks for it downloads it again.", tier: .redownload, kind: .app, box: .developer))),
+        ("~/.rustup/toolchains", Rule(title: "Rust toolchains", detail: "Versions of the Rust compiler. rustup installs them again.", tier: .redownload, kind: .app, box: .developer)),
         ("~/Library/Application Support/com.apple.wallpaper", Rule(title: "Aerial wallpapers", detail: "Video wallpapers. macOS downloads them again when you pick one.", tier: .redownload, kind: .video, notTrashable: true)),
 
-        ("~/.android/avd/*", named(Rule(title: "Android emulator", detail: "A virtual Android device and everything on it. Removing it loses that data.", tier: .yourCall, kind: .app))),
-        ("~/Library/Developer/Xcode/Archives", Rule(title: "Xcode archives", detail: "Past app builds. You only need them to look into crashes from those versions.", tier: .yourCall, kind: .app)),
-        ("~/Library/Application Support/MobileSync/Backup", Rule(title: "iPhone backups", detail: "Local backups of your iPhone or iPad. They can't be recreated if the device is gone.", tier: .yourCall, kind: .archive)),
-        ("~/Library/Containers/com.docker.docker", Rule(title: "Docker", detail: "Docker's images and volumes. Prune inside Docker: moving this folder removes everything at once.", tier: .yourCall, kind: .app, command: "docker system prune", commandOnly: true, notTrashable: true)),
+        ("~/.android/avd/*", named(Rule(title: "Android emulator", detail: "A virtual Android device and everything on it. Removing it loses that data.", tier: .yourCall, kind: .app, box: .developer))),
+        ("~/Library/Developer/Xcode/Archives", Rule(title: "Xcode archives", detail: "Past app builds, only needed to debug crashes in those versions.", tier: .yourCall, kind: .app, box: .developer)),
+        ("~/Library/Application Support/MobileSync/Backup", Rule(title: "iPhone backups", detail: "Local backups of your iPhone or iPad. They can't be recreated if the device is gone.", tier: .yourCall, kind: .archive, box: .backups)),
+        ("~/Library/Containers/com.docker.docker", Rule(title: "Docker", detail: "Docker's images and volumes. Prune inside Docker: moving this folder removes everything at once.", tier: .yourCall, kind: .app, command: "docker system prune", commandOnly: true, notTrashable: true, box: .developer)),
     ]
 
     static let nameRuleList: [(String, Rule)] = [

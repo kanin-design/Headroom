@@ -50,7 +50,7 @@ struct LookCard: View {
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
-                .help("Back to what you were looking at")
+                .help("Back")
             }
             if !HiddenNames.isOn, let real = model.realPath(of: node) {
                 Image(nsImage: NSWorkspace.shared.icon(forFile: real))
@@ -92,7 +92,7 @@ struct LookCard: View {
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
-                .help("Close. Space does the same")
+                .help("Close (Space)")
                 Text(tree.sizeText(node))
                     .font(.system(size: 20, weight: .semibold, design: .rounded).monospacedDigit())
                     .foregroundStyle(.white.opacity(0.95))
@@ -110,7 +110,7 @@ struct LookCard: View {
 
     /// What sending it to the Trash and emptying it would give back, with other copies counted.
     private static func frees(_ bytes: UInt64) -> String {
-        bytes == 0 ? "Deleting it frees nothing" : "Deleting it frees \(formatBytes(bytes))"
+        bytes == 0 ? "Frees nothing" : "Frees \(formatBytes(bytes))"
     }
 
     @ViewBuilder
@@ -140,7 +140,7 @@ struct LookCard: View {
                 Button {
                     model.reveal(node)
                 } label: {
-                    Label("Reveal in Finder", systemImage: "folder")
+                    Label("Show in Finder", systemImage: "folder")
                 }
                 .buttonStyle(.glass)
             }
@@ -276,7 +276,7 @@ private struct FreeUpTick: View {
             }
         }
         .buttonStyle(.glass)
-        .help(planned ? "Take it out of what Free Up will clean" : "Select it in Free Up. Nothing goes until you clean")
+        .help(planned ? "Deselect in Free Up" : "Select in Free Up")
     }
 }
 
