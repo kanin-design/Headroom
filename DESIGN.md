@@ -29,7 +29,7 @@ They also get the numbers wrong in ways that matter:
 | "Wait, I want to keep that" | To change my mind | Nothing happens until you press Clean. One click deselects anything, and Keep stops suggesting it. After that it's in the Trash, and Undo puts it back |
 | "What is this folder? Can I delete it?" | A plain answer | Hover: name, size, what it is, what deleting it really frees |
 | "Why doesn't it add up?" | The whole disk | The ring always sums to the real disk: macOS, swap, updates, hidden data, free |
-| "What's inside here?" | To go deeper | Click to zoom, click the middle to go back. Show in Finder, or Space for a card, a window of its own, that shows what's inside at once and plays a film where it is |
+| "What's inside here?" | To go deeper | Click to zoom, click the middle to go back. Show in Finder, or Shift-Space for a card, a window of its own, that shows what's inside at once and plays a film where it is |
 
 ## Principles
 
@@ -250,36 +250,53 @@ duplicates instead of the suggestions.
 - **Two lists, one at a time.** Each mode has its own list, kept between launches. A file is on one of them at a time:
   selecting it for one takes it off the other, and says so. Each button does one thing and says it: **Clean** (green, to
   the Trash) and **Move … to <drive>** (blue).
-- **Big files only.** Backup offers and takes files of 100 MB and up; smaller ones cost more to move than they free.
+- **Big files only.** Backup offers and takes files of 10 MB and up. On an exFAT drive every file takes at least a
+  cluster, 128 KB on a large one, so a smaller file costs too much next to what it frees.
 - **Where it goes.** In `Backup from <Mac>` on the drive, named as Sharing names the Mac, at the file's full path on the
   Mac: `/Users/you/Downloads/F.mkv` goes to `Backup from Studio/Users/you/Downloads/F.mkv`. Nothing mixes with what the
   drive holds already, and each path says which Mac and folder it came from. Choose Folder… puts that folder elsewhere
   on the drive. Compare with *drive* looks in the same place.
 - **A move proves itself first.** The file is hashed as it's read, written under a hidden name, read back from the drive
   past every cache and hashed again; only a copy that matches gets its name, and it never replaces anything. Then
-  `name.sha256` goes beside it and `name.hrmoved` where the file was, and only then does the original go to the Trash, on
+  `name.hrmoved` goes where the file was, and only then does the original go to the Trash, on
   record like a clean, so Undo puts it back and emptying the Trash frees the space. A file an app has open stays.
 - **The note is the record.** It's plain text: name, size, hash, the drive by name and ID, the path on the drive, when.
   It moves with its folder, and Time Machine keeps it. Headroom remembers the notes it wrote and finds others through
   Spotlight.
-- **Ghosts.** Show moved files draws each note as its file, at its size, faint and hatched, in Backup only. It's a
+- **Ghosts.** In Backup each note is drawn as its file, at its size, as a faint outline: diagonal lines are for what's
+  selected. View › Show Moved Files hides them. It's a
   picture: nothing is selected, counted or cleaned from it, and anything that changes the disk puts the real map back
   first.
-- **Compare.** Compare with *drive* splits the ring: the drive's half on the right, under its capsule, the
-  Mac's on the left, under the disk's. The halves are equal whatever they hold, so an empty or missing
-  folder on the drive is still half the ring, and each half is named with its size. Files are matched by their path from
+- **Both disks.** Backup's own picture is both disks: a ring around the middle in two halves, the drive's on the right,
+  under its capsule, the Mac's on the left, under the disk's, and below each half what's on that side. The Mac's half is
+  the folder you're in, the map as it is but for free space; the drive's is the same folder in the backup folder, and at
+  the top of the disk, the whole backup folder. Clicking a half shows that side alone: the Mac's map, or the drive's backup
+  folder; the middle goes back to both. At the top of both disks, opening a folder opens it as both disks again; a
+  folder only on the drive opens on its half. It's on in Map and Backed Up whenever a drive is chosen. The halves are equal whatever they hold, so an empty or missing folder on the drive is still half the
+  ring, and each half is named with its size. Pointing at anything lights its copy on the other half.
+- **Map and Backed Up.** In Map both halves wear the map's colours: the Mac's as the map has them, and each thing on the
+  drive the colour of its copy on the Mac, or of its folder when the Mac doesn't have it. In Backup the third view, Copies,
+  is Backed Up: no duplicates are read, and colour says where each file is. What Backup doesn't move, files under 10 MB
+  and what's part of macOS or an app, is grey, "Not for Backup", so amber only means "could go, isn't there". Files are matched by their path from
   the folder and their size: green on both, amber only on the Mac, blue only on the drive, violet moved, red different or
   missing. Inside a folder what's on both comes first, then what's on one side only, then what was moved, then what
   doesn't match, and a folder with more than one of them is cut into one stretch for each, over what it's made of. The
-  middle says what the folder holds on the Mac, and on the drive under it. Both halves and moved files are drawn on the Map
-  only.
-- **The drive unplugged.** Every time a drive's folder is read, what's in it is kept, by the drive's ID. Unplugged, its
+  middle says what the folder holds on the Mac, and on the drive under it. Changes stays the one disk: there's no history
+  of the drive.
+- **The drive unplugged.** Whenever the drive is plugged in, this Mac's whole backup folder is read once in the
+  background, and every folder read since is kept too, by the drive's ID. Unplugged, its
   half is drawn from that, dimmed, with when it was last read; selecting works, and what needs the drive says so.
-- **One selection, the actions that fit.** Files can be picked on either half. The panel lists what can be done with
+- **One selection, the actions that fit.** Files can be picked on either half, and both are kept between launches, as
+  Free Up's list is; with anything picked, the middle of both disks says how much. The panel lists what can be done with
   them, with how many and how much: for files on this Mac Move, Copy and Keep on Mac; for files on the drive Copy to Mac
-  (checked against the `.sha256` beside each, or its note), Verify and Delete. Select beside "Only on this Mac" picks
-  everything the drive lacks, as far as Backup takes it (100 MB and up). Delete reads both disks again first: a file the
-  Mac also has goes only when the Mac's copy matches, by the `.sha256` or by reading both; anything else is asked about.
+  (checked against the hash kept on the Mac), Verify and Delete. Select beside "Only on this Mac" picks
+  everything the drive lacks, as far as Backup takes it (10 MB and up). Delete reads both disks again first: a file the
+  Mac also has goes only when the Mac's copy matches, by the hash kept on the Mac or by reading both; anything else is
+  asked about.
+- **Nothing on the drive but the files.** Each file, however small, takes a cluster on exFAT, 128 KB on a large drive, so
+  Backup puts nothing beside its copies. The hash of a moved file is in its note on the Mac, and of a copied one in
+  Backup's own record. macOS gives what an app makes an attribute the app can't take off, and on exFAT keeps it in a `._`
+  file beside it; for the copies and the folders Backup makes, that file goes. A `name.sha256` from before is still read.
 - **The drive row.** At the bottom, the disk you're looking at on the left, and in Backup, where files go on the right,
   each a glass capsule with a list of drives and their file systems. The right one can't be the left one, or read-only;
   FAT32 says it can't hold files over 4 GB.

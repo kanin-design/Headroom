@@ -131,7 +131,7 @@ final class AppModel {
 
     // Where you are
     var focus: UInt32 = 0 { didSet { if oldValue != focus { pointedThing = nil; closeLook(); refreshShownRows(); refreshChangeRows(); visitChanged() } } }
-    /// What the card Space opens is showing, when it's open.
+    /// What the card Shift-Space opens is showing, when it's open.
     var look: Look? { didSet { if look?.node != oldValue?.node { lookMoved() } } }
     var lookCursor: Int?
     @ObservationIgnored var lookWatch: Any?
@@ -362,23 +362,33 @@ final class AppModel {
     /// A move, copy, bring back or check that's running, or the last one, until it's put away.
     var driveJob: DriveJob?
     /// Moved files drawn back where they were, in Backup.
-    var showGhosts = false
+    var showGhosts = true
+    /// The drives whose backup folder has been read since they were plugged in.
+    @ObservationIgnored var backupFoldersRead: Set<String> = []
     /// Only files at least this old, in Backup's list of big files: days, 0 for any age.
     var backupAge = 0
     /// The map without ghosts, while a picture with them, or both sides, is on screen.
     @ObservationIgnored var bareTree: DiskTree?
     /// Backup's folder on the Mac and the same folder on its drive, as two halves of the ring, while that's on screen.
     var pair: PairPicture?
-    /// Files picked on the drive's half, to copy back, check or delete.
-    var driveSelection: [DriveFile] = []
+    /// Files picked on the drive's half, to copy back, check or delete. Kept with Backup's list, between launches.
+    var driveSelection: [DriveFile] {
+        get { backup.drivePicks ?? [] }
+        set {
+            guard newValue != (backup.drivePicks ?? []) else { return }
+            backup.drivePicks = newValue.isEmpty ? nil : newValue
+            saveBackup()
+        }
+    }
     /// Whether Backup shows both sides when its drive is connected.
-    var showDriveSide = false
+    var showDriveSide = true
     @ObservationIgnored var pairTask: Task<Void, Never>?
     /// Where you were on the real map before both sides were shown, to go back to.
     @ObservationIgnored var focusBeforePair: UInt32?
     @ObservationIgnored var backupCandidatesMemo: (version: Int, focus: UInt32, age: Int, rows: [UInt32])?
     /// What each selected file's warning said, for the map it was worked out on: it reads every link on the disk.
     @ObservationIgnored var backupWarningMemo: (version: Int, said: [String: String?])?
+    @ObservationIgnored var backupSummaryMemo: (key: Int, summary: BackupSummary)?
 
     @ObservationIgnored let engine = MapEngine()
     @ObservationIgnored let rules = RuleBook(homePath: NSHomeDirectory())
@@ -1038,8 +1048,10 @@ final class AppModel {
     var showsPair: Bool { pair != nil && pair?.tree === tree }
 
     private func colorer(_ tree: DiskTree) -> RingLayout.Colorer {
-        if let pair, pair.tree === tree { return { pair.colour($0) } }
-        switch view {
+        // Both disks: in Backed Up, where each thing is; in Map, the map's own colours on both halves.
+        if let pair, pair.tree === tree { return view == .copies ? { pair.colour($0) } : mirroredColorer(pair) }
+        // Backed Up with no drive to compare with is the map.
+        switch view == .copies && mode == .backup ? Lens.map : view {
         case .map, .freeUp, .backup:
             let colours = RingColours(tree: tree, focus: focus, memory: colourMemory)
             ringColours = colours
@@ -1050,6 +1062,31 @@ final class AppModel {
         case .copies:
             guard let copies, copies.scanID == tree.scanID else { let quiet = Palette.quiet.linearP3; return { _ in quiet } }
             return Lenses.copiesColorer(map: copies, tree: tree)
+        }
+    }
+
+    /// The same thing on the other half of both disks, to light with what's under the pointer.
+    private func pairLight(for p: Piece, in tree: DiskTree) -> (full: [Range<Int>], holding: [Int]) {
+        guard let pair, pair.tree === tree, !p.isSmaller, let other = pair.counterpart(p.node) else { return ([], []) }
+        return engine.layout.lit(by: [other], tree: tree)
+    }
+
+    /// Each thing on both halves in the colour its copy in the map has, so the Mac's half looks as the map does and the same
+    /// thing on the drive looks the same. What the Mac doesn't have takes its folder's colour.
+    private func mirroredColorer(_ pair: PairPicture) -> RingLayout.Colorer {
+        guard let real = bareTree, Int(pair.realFolder) < real.count else { return { pair.colour($0) } }
+        let colours = RingColours(tree: real, focus: pair.realFolder, memory: colourMemory)
+        let nodes = pair.tree.nodes
+        return { node in
+            if node == pair.macSide || node == pair.driveSide || node == 0 { return pair.colour(node) }
+            var at = node
+            var colour = SIMD3<Float>(0.24, 0.25, 0.29)
+            while at != 0, at != pair.macSide, at != pair.driveSide {
+                if let r = pair.realOf[at] { colour = colours.lab(r).linearP3; break }
+                if let other = pair.counterpart(at), let r = pair.realOf[other] { colour = colours.lab(r).linearP3; break }
+                at = nodes[Int(at)].parent
+            }
+            return pair.dimmed(colour, node)
         }
     }
 
@@ -1076,7 +1113,7 @@ final class AppModel {
 
     func makeLabels() -> [MapLabel] {
         guard let tree else { return [] }
-        return LabelPlacer.place(layout: engine.layout, ring: ring, lens: showsPair ? .map : view, tree: tree, model: self)
+        return LabelPlacer.place(layout: engine.layout, ring: ring, lens: showsPair || (view == .copies && mode == .backup) ? .map : view, tree: tree, model: self)
     }
 
     /// Works out the link story for what the panel is showing. It takes a moment, so it never holds up the zoom.
@@ -1198,7 +1235,10 @@ final class AppModel {
         }
         // In Copies, every copy of what's under the pointer lights up with it, in its set's colour.
         let copiesLit = copyLight(for: index)
-        engine.setEmphasis(primary: index, related: [index..<Int(p.end)] + copiesLit.full, ancestors: chain + copiesLit.holding, tint: copiesLit.tint)
+        // On both disks, the same thing on the other half lights up with it.
+        let otherLit = pairLight(for: p, in: tree)
+        engine.setEmphasis(primary: index, related: [index..<Int(p.end)] + copiesLit.full + otherLit.full,
+                           ancestors: chain + copiesLit.holding + otherLit.holding, tint: copiesLit.tint)
         var info = describe(p, index: index, tree: tree)
         hover = info
         // Whether its files also have another path, and when it was last used, are worked out off the main thread from
@@ -1239,7 +1279,7 @@ final class AppModel {
                              note: "Moved " + LastUse.ago(ghost.moved, now: Date()), links: nil)
         }
         // In Copies the line under the size says what it is there: an extra copy, the copy that stays, how much is extra.
-        if view == .copies, !p.isSmaller, let copies, copies.scanID == tree.scanID, let text = copies.note(for: p.node, total: p.bytes, in: tree) {
+        if view == .copies, mode == .freeUp, !p.isSmaller, let copies, copies.scanID == tree.scanID, let text = copies.note(for: p.node, total: p.bytes, in: tree) {
             return HoverInfo(pieceIndex: index, node: p.node, title: displayName(piece: p), bytes: p.bytes, share: "", note: text, links: nil)
         }
         let n = tree.nodes[Int(p.node)]
@@ -1428,7 +1468,28 @@ final class AppModel {
             showPanel(true)
             return
         }
+        if let pair, pair.tree === tree, focus == 0 {
+            // A half is that side alone: the Mac's map, or the drive's backup folder. The middle goes back to both.
+            if p.node == pair.macSide || p.node == pair.driveSide {
+                if tree.totals[Int(p.node)] == 0 { showTip(p.node == pair.driveSide ? "Nothing here on \(pair.driveName)" : "Nothing here on this Mac") }
+                else { zoom(into: p.tail, from: p) }
+                return
+            }
+            // A folder opens as both disks again: that folder on the Mac beside its backup. A folder only on the drive opens on
+            // its half.
+            if let mine = pair.isOnDrive(p.tail) ? pair.counterpart(p.tail) : p.tail, let real = pair.realOf[mine] {
+                showBothDisks(of: real)
+                return
+            }
+        }
         zoom(into: p.tail, from: p)
+    }
+
+    /// Both disks again, for this folder in the map.
+    func showBothDisks(of real: UInt32) {
+        guard let pair, pair.tree === tree, real != focusBeforePair else { return }
+        focusBeforePair = real
+        applyGhosts()
     }
 
     func zoom(into node: UInt32, from piece: Piece? = nil) {
@@ -1446,6 +1507,13 @@ final class AppModel {
     func goUp() {
         if selected != nil {
             selected = nil
+            return
+        }
+        // At the top of both disks, up is the folder the Mac's half is in, as both disks again.
+        if let pair, pair.tree === tree, focus == 0, let real = bareTree, let here = focusBeforePair, here != 0 {
+            var up = real.nodes[Int(here)].parent
+            while up != 0, RingLayout.chainTail(tree: real, up) == RingLayout.chainTail(tree: real, here) { up = real.nodes[Int(up)].parent }
+            showBothDisks(of: up)
             return
         }
         guard let tree, focus != 0 else { return }
@@ -1513,7 +1581,7 @@ final class AppModel {
         view = new
         rememberWindow()
         hotCopyGroup = nil
-        engine.setCalm(new == .map ? 1 : (new == .copies ? 0.55 : 0))
+        applyCalm()
         engine.setGlow(new == .changes ? 0.35 : 1)
         // Moved files and both sides are drawn on the Map only.
         if showGhosts || showDriveSide || bareTree != nil { applyGhosts() }
@@ -1521,6 +1589,11 @@ final class AppModel {
         if new == .copies { refreshCopies() }
         // Changes and Copies want the whole picture, so now you're waiting on the scan.
         if tree?.isPartial == true, !scanIsHurrying { activeScan?.scanner.setHurry(new != .map) }
+    }
+
+    /// How far the ring steps back in each view. Backed Up, Copies' place in Backup, is as bright as the map.
+    private func applyCalm() {
+        engine.setCalm(view == .map || (view == .copies && mode == .backup) ? 1 : (view == .copies ? 0.55 : 0))
     }
 
     /// What you're doing. Each mode keeps its own selection.
@@ -1538,6 +1611,8 @@ final class AppModel {
         engine.setPreview(0, color: .zero)
         refreshGhost()
         if new == .freeUp, !plan.isEmpty { runChecks() }
+        applyCalm()
+        if new == .freeUp, view == .copies { refreshCopies() }
         if new == .backup { refreshDrives() }
         if showGhosts || showDriveSide || bareTree != nil { applyGhosts() }
         relayout(.recolor, labelDelay: 0.2)
@@ -1740,7 +1815,8 @@ extension AppModel {
     /// with them is for looking at: a clean, a move, a scan or another view puts the real map back first.
     func applyGhosts() {
         guard let real = workTree else { return }
-        let inBackup = mode == .backup && view == .map && !isCleaning && !real.isPartial
+        // Both disks are Backup's own picture, in Map and Backed Up.
+        let inBackup = mode == .backup && (view == .map || view == .copies) && !isCleaning && !real.isPartial
         if inBackup, showDriveSide, let destination = backup.destination {
             // Unplugged, the drive's half is what was read there last.
             let drive = connected(destination.drive)
@@ -1750,7 +1826,6 @@ extension AppModel {
         pairTask?.cancel()
         let wasPair = pair != nil
         pair = nil
-        driveSelection = []
         // Whatever was on screen, the real map or a picture made from it, what follows reads the one that's there now.
         var changed = false
         if wasPair, tree !== real {
@@ -1782,11 +1857,14 @@ extension AppModel {
     /// picture goes on screen when it's ready, if it's still wanted.
     private func showPair(of real: DiskTree, on destination: BackupDestination, online: Bool) {
         let realFocus = focusBeforePair ?? focus
-        var folder = RingLayout.chainTail(tree: real, realFocus)
-        if folder == 0 || real.nodes[Int(folder)].has(NodeFlag.synthetic) { folder = real.home }
-        guard folder != 0, let raw = real.path(folder) else { return }
+        var folder = realFocus == 0 ? 0 : RingLayout.chainTail(tree: real, realFocus)
+        // A group of macOS's own parts isn't a folder on the disk: its top stands for it.
+        if folder != 0, real.nodes[Int(folder)].has(NodeFlag.synthetic), !real.nodes[Int(folder)].has(NodeFlag.anchor) { folder = 0 }
+        // At the top, the whole disk beside the whole of this Mac's backup folder.
+        guard let raw = folder == 0 ? (real.rootPath.isEmpty ? "/" : real.rootPath) : real.path(folder) else { return }
         let visible = PathMath.visible(raw)
-        let drivePath = BackupPaths.onDrive(visible, under: destination.root)
+        var drivePath = BackupPaths.onDrive(visible, under: destination.root)
+        while drivePath.count > 1, drivePath.hasSuffix("/") { drivePath.removeLast() }
         if let pair, pair.macPath == raw, pair.drivePath == drivePath, pair.online == online, tree === pair.tree { return }
         pairTask?.cancel()
         let notes = movedNotes, ghosts = showGhosts, name = destination.drive.name, listing = destination.drive.id, mount = destination.drive.mountPath
@@ -1797,11 +1875,11 @@ extension AppModel {
                     PairPicture.build(real: real, macFolder: folder, macPath: raw, drivePath: drivePath, driveName: name, notes: notes, ghosts: ghosts,
                                       online: online, listingID: listing, mount: mount, stop: stop)
                 }.value
-                guard let self, let built, !Task.isCancelled, self.workTree === real, self.mode == .backup, self.view == .map, self.showDriveSide, !self.isCleaning else { return }
+                guard let self, let built, !Task.isCancelled, self.workTree === real, self.mode == .backup, self.view == .map || self.view == .copies, self.showDriveSide, !self.isCleaning else { return }
                 if self.focusBeforePair == nil { self.focusBeforePair = self.focus }
-                // What's picked on the drive stays picked while it's still in this folder there, with where it is now.
+                // What's picked on the drive stays picked: in this folder as it is now, or dropped if it's gone; elsewhere as it was.
                 self.driveSelection = self.driveSelection.compactMap { file in
-                    guard file.path.hasPrefix(built.drivePath + "/") else { return nil }
+                    guard file.path.hasPrefix(built.drivePath + "/") else { return file }
                     return built.driveNodes[String(file.path.dropFirst(built.drivePath.count + 1))].flatMap { built.driveFile($0) }
                 }
                 self.tree = built.tree

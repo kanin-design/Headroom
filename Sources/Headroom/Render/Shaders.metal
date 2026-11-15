@@ -195,11 +195,9 @@ fragment PieceOut segment_fragment(SegmentOut in [[stage_in]], constant Uniforms
         color += float3(0.20, 0.25, 0.31) * line * line * (0.75 + 0.25 * e);
         color += float3(0.05, 0.20, 0.15) * e * 0.5;
     } else if (in.style == StyleGhost) {
-        // A file that was moved to a drive, drawn from the note it left: its own colour, faint and finely hatched, with a
-        // clear outline, so it reads as the shape of something that isn't here.
-        float across = fract((in.p.x - in.p.y) / (u.scale * 5.0));
-        float hatch = smoothstep(0.0, 0.12, across) * (1.0 - smoothstep(0.40, 0.52, across));
-        color = base * (0.12 + 0.30 * hatch) * (0.85 + 0.3 * e);
+        // A file that was moved to a drive, drawn from the note it left: its own colour, nearly empty inside, with a clear
+        // outline, so it reads as the shape of something that isn't here. Diagonal lines are for what's selected.
+        color = base * 0.13 * (0.85 + 0.3 * e);
         float rim = 1.0 - saturate(-d / (u.scale * 1.6));
         color += (base * 0.8 + float3(0.10)) * rim * rim;
     } else if (in.style == StyleHidden) {

@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// The card Space opens, as a window of its own. It floats over the map, moves wherever it's dragged, takes the size it's
+/// The card Shift-Space opens, as a window of its own. It floats over the map, moves wherever it's dragged, takes the size it's
 /// given and opens there again next time. It never takes the keyboard from the main window, so Space, Esc and the arrows
 /// work as before, and it's out of sight while you're in another app.
 @MainActor

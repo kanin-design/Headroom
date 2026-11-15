@@ -118,7 +118,7 @@ Search ignores case and accents, in any alphabet.
 
 ![A card over the ring about one folder, listing what's inside it, biggest first](docs/card.jpg)
 
-Press Space on anything for a card: a folder's size and contents, with thumbnails when it's mostly photos or video, or a
+Press Shift-Space on anything for a card: a folder's size and contents, with thumbnails when it's mostly photos or video, or a
 file's preview. Click a film to play it in place. The card is a window of its own: move it, resize it, and it reopens
 where you left it. It shows when the item was last opened and how much deleting it frees, and for a film its duration,
 resolution and frame rate. Select it for Free Up or move it to the Trash from there. The card's item is selected in the
@@ -129,17 +129,21 @@ open it in Terminal or move it to the Trash.
 
 ### Backup
 
-Backup moves files of 100 MB and up to another drive and leaves a small note in place of each. Choose the drive at the
+Backup moves files of 10 MB and up to another drive and leaves a small note in place of each. Choose the drive at the
 bottom right, select files in the list or on the ring, and click **Move**. On the drive, each file goes in a folder named
 for the Mac, at its full path: `/Users/you/Downloads/F.mkv` from a Mac named Studio lands at
 `Backup from Studio/Users/you/Downloads/F.mkv`. Each file is copied and verified against its SHA-256 before the original
-goes to the Trash, so Undo puts it back until you empty it. Each copy gets a `name.sha256` that `shasum -a 256 -c` can
-check; the note, `name.hrmoved`, is plain text saying where the file went.
+goes to the Trash, so Undo puts it back until you empty it. The note, `name.hrmoved`, is plain text saying where the file
+went and its SHA-256. Nothing else goes on the drive: on a large exFAT drive every small file takes 128 KB.
 
-**Show moved files** draws moved files where they were, even with the drive unplugged. **Compare with *drive*** splits
-the ring in two equal halves: this folder on the Mac on the left, on the drive on the right, coloured by where each file
-is. A folder with files in more than one place is drawn in one stretch per place. With the drive unplugged, its half is
-what was last read there, dimmed. Select files on either half; the panel lists what fits: Move, Copy, Keep on Mac, Copy to
+With a drive chosen, Backup shows both disks: the ring is split into two equal halves, the folder you're in on the Mac on
+the left and the same folder in the drive's backup folder on the right, free space left out. At the top of the disk it's
+the whole disk beside the whole backup folder. Click a half to see that side alone, a folder to open it as both disks
+again, and the middle to go back up. Pointing at anything lights its copy on the other half. In Map both halves have the
+map's colours; **Backed Up**, which Copies becomes in Backup, colours each file by where it is: on both, only on the Mac,
+only on the drive, moved, or not for Backup (under 10 MB, or part of macOS or an app). A folder with files in more than
+one place is drawn in one stretch per place. Moved files are drawn as outlines where they were. The backup folder is read
+once whenever the drive is plugged in, so with it unplugged its half is what was last read there, dimmed. Select files on either half, and the middle shows how much; the panel lists what fits: Move, Copy, Keep on Mac, Copy to
 Mac, Verify, Delete. **Select** beside "Only on this Mac" picks everything the drive doesn't have. Delete reads both disks
 again first, and keeps the drive's copy if this Mac's isn't the same. From the Moved list you can move a file back,
 verify it or delete it from the drive. A file is on Free Up's list or Backup's, never both.
@@ -185,13 +189,14 @@ click **Clean**.
 
 | | |
 |---|---|
-| ⌘1, ⌘2, ⌘3 | Map, Changes, Copies |
+| ⌘1, ⌘2, ⌘3 | Map, Changes, Copies (Backed Up in Backup) |
 | ⌘4, ⌘5 | Free Up, Backup |
 | ⇧⌘M | Show moved files (in Backup) |
 | ⇧⌘↑ | Back to the whole disk |
 | ⌃⌘I | Show or hide the inspector |
 | ⌘F | Search |
-| Space | Quick Look |
+| Space | Select or deselect what's under the pointer (a folder in Backup: the files in it) |
+| Shift-Space | Quick Look |
 | Esc | Back out, the way you came in |
 | ⌘↑ | Enclosing folder |
 | ⌘←, ⌘→ or ⌘[, ⌘] | Back and forward |

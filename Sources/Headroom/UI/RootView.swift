@@ -97,7 +97,7 @@ struct RootView: View {
 
     /// Where you are, as a Finder window says it: the folder you're in, or the disk itself.
     private var title: String {
-        if model.focus == 0, let pair = model.pair, pair.tree === model.tree { return pair.folderName }
+        if model.focus == 0, let pair = model.pair, pair.tree === model.tree { return pair.realFolder == 0 ? (model.volume?.shownName ?? "Disk") : pair.folderName }
         guard model.focus != 0, model.tree != nil else { return model.volume?.shownName ?? "Headroom" }
         return model.displayName(model.focus)
     }
@@ -168,8 +168,10 @@ struct LensPicker: View {
             Motion.animate(.spring(response: 0.34, dampingFraction: 0.82)) { isMode ? model.setMode(lens) : model.setView(lens) }
         })) {
             ForEach(lenses) { lens in
-                Text(lens.title)
-                    .help(lens.help)
+                // In Backup, Copies is Backed Up: what's on the drive and what isn't.
+                let backedUp = lens == .copies && model.mode == .backup
+                Text(backedUp ? "Backed Up" : lens.title)
+                    .help(backedUp ? "Backed up or not" : lens.help)
                     .tag(lens)
             }
         }

@@ -26,7 +26,7 @@ final class AgentSession {
         Headroom is the app where the user sees their disk and decides what goes. You and the user look at the same \
         selections there. Explore the disk with your own tools (find, du, ls): Headroom is not for browsing. It has two \
         lists. Free Up's list goes to the Trash when the user cleans: select, deselect, select_suggestions, wait_for_clean. \
-        Backup's list is big files (100 MB or more) that the user moves to another drive, leaving a note where each was: \
+        Backup's list is big files (10 MB or more) that the user moves to another drive, leaving a note where each was: \
         get_backup, select_for_backup, set_backup_drive, wait_for_backup. A file is on one list at a time. Call check \
         first to learn what Headroom knows about paths, select with a short reason, call show so the user sees it, then \
         wait. Nothing you can call removes or moves anything: the user clicks. Sizes are in bytes. Names of files and \

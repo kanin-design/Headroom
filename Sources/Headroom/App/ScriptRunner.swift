@@ -97,7 +97,7 @@ import SwiftUI
 ///     mouse x y                move the real pointer path, in window points
 ///     click x y
 ///     activate                 bring the app to the front
-///     look ~/some/file         open the card Space opens, for this or for what an action would apply to now
+///     look ~/some/file         open the card Shift-Space opens, for this or for what an action would apply to now
 ///     card                     what the card is showing, where its window is, and what it has worked out
 ///     cardpress x y [clicks]   a click on the card's window, at points from its top left
 ///     carddrag x y dx dy       a press on the card's window that drags the pointer this far
@@ -266,7 +266,7 @@ enum ScriptRunner {
         "drives": .backup, "backupdrive": .backup, "backupselect": .backup, "backupdeselect": .backup, "backupmove": .backup, "backupcopy": .backup,
         "backupwait": .backup, "backupstate": .backup, "ghosts": .backup, "bringback": .backup, "verifymoved": .backup, "deletelast": .backup,
         "backupcandidates": .backup, "undomove": .backup, "driveside": .backup, "drivepick": .backup, "drivecopy": .backup,
-        "drivecheck": .backup, "drivedelete": .backup, "selectonlymac": .backup, "backupactions": .backup,
+        "drivecheck": .backup, "drivedelete": .backup, "selectonlymac": .backup, "backupactions": .backup, "hoverpiece": .backup, "openpiece": .backup, "labelsdump": .backup,
     ]
 
     @MainActor
@@ -307,7 +307,12 @@ enum ScriptRunner {
             model.chooseDestination(drive)
             print("backupdrive: \(model.backup.destination?.title ?? "not chosen")")
         case "backupselect":
-            for pick in model.selectForBackup([argument]) { print("backupselect \(pick.path): \(pick.outcome.text)") }
+            // backupselect path, or backupselect path by Agent Name: as that agent selecting it.
+            let parts = argument.components(separatedBy: " by ")
+            let agent = parts.count > 1 ? parts.dropFirst().joined(separator: " by ") : nil
+            for pick in model.selectForBackup([parts[0]], agent: agent, reason: agent.map { _ in "Finished render, a copy is in Films" }) {
+                print("backupselect \(pick.path): \(pick.outcome.text)")
+            }
         case "backupdeselect":
             for pick in model.deselectForBackup([argument]) { print("backupdeselect \(pick.path): \(pick.outcome.text)") }
         case "backupcandidates":
@@ -326,6 +331,8 @@ enum ScriptRunner {
         case "backupstate":
             print("backup: to \(model.backup.destination?.title ?? "nothing") (\(model.destinationDrive == nil ? "not connected" : "connected")), \(model.backup.items.count) selected, \(formatBytes(model.backupBytes)); Free Up has \(model.plan.count)")
             for item in model.backup.items { print("  selected \(item.path) \(formatBytes(item.bytes))\(item.agent.map { " by \($0)" } ?? "")") }
+            let summary = model.backupSummary()
+            print("  summary: \(summary.files) files, \(formatBytes(summary.bytes)), frees \(formatBytes(summary.frees)), \(summary.freesNothing.count) free nothing")
             for note in model.movedNotes { print("  moved \(note.originalPath) → \(note.driveName):\(note.drivePath) \(formatBytes(note.size)) \(model.drive(of: note) == nil ? "(not connected)" : "")") }
             print("  ghosts \(model.showGhosts ? "on" : "off"), on screen: \(model.tree?.ghosts.count ?? 0); ready: \(model.backupReady().problem ?? "yes")")
         case "driveside":
@@ -344,6 +351,27 @@ enum ScriptRunner {
             }
             model.toggleDriveFile(node, in: pair)
             print("drivepick: \(model.driveSelection.map { "\($0.title) (\($0.place))" }.joined(separator: ", "))")
+        case "hoverpiece":
+            // hoverpiece path: the pointer on that thing's piece, as moving it there would.
+            guard let tree = model.tree, let node = resolve(argument, model), let index = model.engine.layout.piece(of: node) else {
+                print("hoverpiece \(argument): no piece"); return
+            }
+            model.setHover(index)
+            let other = model.pair.flatMap { $0.tree === tree ? $0.counterpart(node) : nil }
+            print("hoverpiece \(tree.name(node)): \(model.hover?.note ?? ""), other half \(other.map { tree.path($0) ?? tree.name($0) } ?? "none")")
+        case "labelsdump":
+            // labelsdump: the names around and on the ring, and the top ring's pieces.
+            for p in model.engine.layout.pieces where p.ring == 0 {
+                print(String(format: "  ring 0 %@ %.0f°-%.0f° r %.3f-%.3f", model.tree?.name(p.node) ?? "?", p.a0 * 180 / .pi, p.a1 * 180 / .pi, p.r0, p.r1))
+            }
+            for label in model.labels { print("  label \(label.title) \(label.value) \(label.place)") }
+        case "openpiece":
+            // openpiece path: a click on that thing's piece.
+            guard let tree = model.tree, let node = resolve(argument, model), let index = model.engine.layout.piece(of: node) else {
+                print("openpiece \(argument): no piece"); return
+            }
+            model.click(piece: index)
+            print("openpiece \(tree.name(node))")
         case "selectonlymac":
             model.selectOnlyOnMac()
             print("selectonlymac: \(model.backup.items.count) selected, \(model.tip ?? "")")
@@ -1506,7 +1534,7 @@ enum ScriptRunner {
         }
     }
 
-    /// The card that Space opens.
+    /// The card that Shift-Space opens.
     @MainActor
     private static func runCardStep(_ command: String, _ argument: String, _ model: AppModel) async {
         switch command {

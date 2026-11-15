@@ -60,6 +60,33 @@ enum DriveListings {
         return try? JSONDecoder().decode(DriveListing.self, from: data)
     }
 
+    /// Every file under a folder on a drive, by its path from the folder, leaving out what macOS and Headroom keep there for
+    /// themselves. Nil when it was stopped.
+    static func read(_ folder: String, stop: LockedFlag? = nil) -> [String: DriveListing.File]? {
+        let skip: Set<String> = [".DS_Store", ".Trashes", ".fseventsd", ".Spotlight-V100", ".TemporaryItems", ".DocumentRevisions-V100"]
+        var found: [String: DriveListing.File] = [:]
+        func walk(_ path: String, rel: String) {
+            guard let names = try? FileManager.default.contentsOfDirectory(atPath: path) else { return }
+            for name in names {
+                if stop?.value == true { return }
+                if skip.contains(name) || name.hasPrefix("._") || name.hasSuffix(".hrpart") { continue }
+                let full = path + "/" + name
+                let inside = rel.isEmpty ? name : rel + "/" + name
+                var info = stat()
+                guard lstat(full, &info) == 0 else { continue }
+                let kind = info.st_mode & S_IFMT
+                if kind == S_IFDIR {
+                    walk(full, rel: inside)
+                } else if kind == S_IFREG {
+                    found[inside] = DriveListing.File(size: UInt64(max(info.st_size, 0)), allocated: UInt64(max(info.st_blocks, 0)) * 512,
+                                                      modified: UInt32(clamping: Int(info.st_mtimespec.tv_sec)))
+                }
+            }
+        }
+        walk(folder, rel: "")
+        return stop?.value == true ? nil : found
+    }
+
     /// Keeps what was read under a folder of a drive.
     static func record(_ drive: String, folder: String, files: [String: DriveListing.File], at date: Date = Date()) {
         lock.lock()

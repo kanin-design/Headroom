@@ -111,7 +111,9 @@ enum LabelPlacer {
                 let value = tree.sizeText(p.node)
                 let w = max(width(title, titleFont), width(value, valueFont)) + 2
                 let h: CGFloat = 31
-                if let angle = fit(w: w, h: h, piece: p, radius: R) {
+                // Backup's two halves are always named, just either side of six o'clock, where the line between them is.
+                let halfSpot: CGFloat? = tree.twoSides && layout.focus == 0 && p.ring == 0 ? (p.a0 < .pi ? .pi - 0.27 : .pi + 0.27) : nil
+                if let angle = halfSpot ?? fit(w: w, h: h, piece: p, radius: R) {
                     // Free space reads best out in the open part of the wedge, away from the crowded middle.
                     let rm = CGFloat(p.r0 + p.r1) * 0.5 * R * (isFree ? 1.08 : 1)
                     out.append(MapLabel(id: p.key, pieceIndex: i, node: p.node, title: title, value: value, position: point(angle, rm),
@@ -446,7 +448,7 @@ struct CenterReadout: View {
                 folderContent(tree, size: size)
             } else if model.view == .changes, model.changeUsesHistory || model.changeTotal > 0 {
                 changesContent(size: size)
-            } else if model.view == .copies, model.copies != nil {
+            } else if model.view == .copies, model.mode == .freeUp, model.copies != nil {
                 copiesContent(size: size)
             } else {
                 diskContent(size: size)
@@ -545,16 +547,20 @@ struct CenterReadout: View {
 
     /// With the drive beside it, the middle says what the folder holds on the Mac, and on the drive under it.
     private func pairContent(_ pair: PairPicture, size: CGFloat) -> some View {
-        slots(size, number: bigNumber(pair.macBytes, size: size)) {
-            Text(pair.folderName)
+        // With something selected, the middle says how much, as Free Up says what cleaning frees.
+        let picked = model.backup.items.count + model.driveSelection.count
+        let pickedBytes = model.backupBytes &+ model.driveSelection.reduce(UInt64(0)) { $0 &+ $1.bytes }
+        let blue = Color(red: 0.45, green: 0.66, blue: 1)
+        return slots(size, number: bigNumber(picked > 0 ? pickedBytes : pair.macBytes, size: size, color: picked > 0 ? blue : .white)) {
+            Text(pair.realFolder == 0 ? (model.volume?.shownName ?? "") : pair.folderName)
                 .font(.system(size: size * 0.07, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.9))
         } below: {
             VStack(spacing: size * 0.012) {
-                Text("on this Mac")
+                Text(picked > 0 ? "\(picked) selected" : "on this Mac")
                     .font(.system(size: size * 0.058, weight: .medium))
                     .foregroundStyle(.white.opacity(0.55))
-                Text("\(formatBytes(pair.driveBytes)) on \(pair.driveName)")
+                Text(picked > 0 ? "\(formatBytes(pair.macBytes)) on this Mac" : "\(formatBytes(pair.driveBytes)) on \(pair.driveName)")
                     .font(.system(size: size * 0.05, weight: .medium).monospacedDigit())
                     .foregroundStyle(.white.opacity(0.36))
             }
@@ -671,7 +677,7 @@ struct CenterReadout: View {
             .foregroundStyle(.white.opacity(0.92))
         } below: {
             VStack(spacing: size * 0.012) {
-                Text(tree.isStillGrowing(model.focus) ? "so far" : shareOfDisk(tree))
+                Text(tree.isStillGrowing(model.focus) ? "so far" : side(tree) ?? shareOfDisk(tree))
                     .font(.system(size: size * 0.052, weight: .medium))
                     .foregroundStyle(.white.opacity(0.5))
                 if moved > 0 {
@@ -683,6 +689,12 @@ struct CenterReadout: View {
             .lineLimit(1)
             .minimumScaleFactor(0.8)
         }
+    }
+
+    /// On one side of both disks, which side: the picture is of two disks, so it has no share of one.
+    private func side(_ tree: DiskTree) -> String? {
+        guard let pair = model.pair, pair.tree === tree else { return nil }
+        return pair.isOnDrive(model.focus) ? "on \(pair.driveName)" : "on this Mac"
     }
 
     private func shareOfDisk(_ tree: DiskTree) -> String {

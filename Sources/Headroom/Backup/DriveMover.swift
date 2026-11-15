@@ -76,6 +76,17 @@ enum DriveMover {
         guard Darwin.rename(part, target) == 0 else { throw Failure.io(String(cString: strerror(errno))) }
     }
 
+    /// macOS gives everything an app makes a `com.apple.provenance` attribute, which the app can't take off, and on a drive
+    /// that can't hold attributes, as exFAT can't, it keeps them in a `._name` file beside it: a whole cluster, 128 KB on a
+    /// large drive. For what Backup has just made, a copy or a folder for it, that file goes. Nothing else's is touched.
+    static func dropAppleDouble(of path: String) {
+        let double = (path as NSString).deletingLastPathComponent + "/._" + (path as NSString).lastPathComponent
+        var info = stat()
+        // Only a small file, which is what macOS writes there.
+        guard lstat(double, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_size <= 64 << 10, mayWrite(double) else { return }
+        unlink(double)
+    }
+
     /// Reads a whole file past the cache, hashing it, and says its hash and size.
     static func hash(_ path: String, stop: LockedFlag? = nil, progress: ((UInt64) -> Void)? = nil) throws -> (hash: String, size: UInt64) {
         let fd = open(path, O_RDONLY)
@@ -122,7 +133,15 @@ enum DriveMover {
             return Copied(target: target, hash: mine.hash, size: size, wasThere: true)
         }
         let folder = (target as NSString).deletingLastPathComponent
+        // The folders made for it, from the first that wasn't there, so each one's `._` file can go too.
+        var made: [String] = []
+        var up = folder
+        while !fm.fileExists(atPath: up), up.count > 1 {
+            made.insert(up, at: 0)
+            up = (up as NSString).deletingLastPathComponent
+        }
         try fm.createDirectory(atPath: folder, withIntermediateDirectories: true)
+        for path in made { dropAppleDouble(of: path) }
         // Hidden while it's being written, and removed if anything goes wrong: a half copy never has the real name.
         let part = folder + "/." + (target as NSString).lastPathComponent + ".hrpart"
         unlink(part)
@@ -181,6 +200,7 @@ enum DriveMover {
         _ = utimensat(AT_FDCWD, part, &times, 0)
         try name(part, as: target)
         keep = true
+        dropAppleDouble(of: target)
         return Copied(target: target, hash: sourceHash, size: size, wasThere: false)
     }
 
@@ -207,11 +227,7 @@ enum DriveMover {
     static func send(_ source: String, to target: String, drive: DriveInfo, writeNote: Bool, stop: LockedFlag,
                      progress: @escaping (Progress) -> Void) throws -> (copied: Copied, note: MovedNote?) {
         let copied = try copy(source, to: target, stop: stop, progress: progress)
-        let name = (target as NSString).lastPathComponent
-        let sidecar = Sidecar.text(hash: copied.hash, name: name, size: copied.size)
-        // An earlier run may have written it already; one that says something else is a reason to stop.
-        if let there = Sidecar.read(for: target), there.hash != copied.hash { throw Failure.differentFileThere(Sidecar.path(for: target)) }
-        if Sidecar.read(for: target) == nil { try writeNew(sidecar, to: Sidecar.path(for: target)) }
+        // Nothing else goes on the drive: the hash is kept on the Mac.
         guard writeNote else { return (copied, nil) }
         let note = MovedNote(name: (source as NSString).lastPathComponent, size: copied.size, sha256: copied.hash, driveName: drive.name,
                              driveID: drive.uuid, drivePath: BackupPaths.fromDriveTop(target, mount: drive.mountPath),
@@ -253,7 +269,7 @@ enum DriveMover {
         var info = stat()
         guard lstat(path, &info) == 0 else { return .missing }
         guard UInt64(info.st_size) == note.size, let found = try? hash(path, stop: stop, progress: progress) else { return .changed }
-        if let beside = Sidecar.read(for: path), beside.hash != note.sha256 { return .changed }
+        if let beside = Sidecar.hash(for: path), beside != note.sha256 { return .changed }
         return found.hash == note.sha256 ? .fine : .changed
     }
 }

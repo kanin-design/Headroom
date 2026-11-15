@@ -126,6 +126,15 @@ enum BackupPaths {
     }
 }
 
+/// Backup's list as a whole: how many files, what they hold, what moving them frees on the Mac, and the ones that free
+/// nothing, by path.
+struct BackupSummary: Equatable {
+    var files = 0
+    var bytes: UInt64 = 0
+    var frees: UInt64 = 0
+    var freesNothing: Set<String> = []
+}
+
 /// One file waiting to go to the drive.
 struct BackupItem: Codable, Identifiable, Equatable, Sendable {
     var path: String
@@ -138,6 +147,15 @@ struct BackupItem: Codable, Identifiable, Equatable, Sendable {
     var id: String { path }
 }
 
+/// A file Backup copied to a drive and kept on this Mac: where it is on the drive, from its top, and what it hashed to.
+struct CopiedFile: Codable, Equatable, Sendable {
+    var driveID: String
+    var path: String
+    var sha256: String
+    var size: UInt64
+    var copied: Date
+}
+
 /// What Backup remembers between launches: what's selected, where it goes, what's never offered, and the drives used.
 struct BackupState: Codable, Equatable {
     var items: [BackupItem] = []
@@ -148,9 +166,15 @@ struct BackupState: Codable, Equatable {
     var knownDrives: [DriveInfo] = []
     /// The notes this Mac has written, so their ghosts can be shown without looking through the whole disk.
     var notes: [String] = []
+    /// What's picked on the drive's half, kept like what's picked on the Mac's. Optional, so a file from before it was kept
+    /// still reads.
+    var drivePicks: [DriveFile]?
+    /// Files copied to a drive, and kept on the Mac too, so with no note: their hashes are kept here. Optional, as above.
+    var copies: [CopiedFile]?
 
     /// Only files this big are offered, or can be selected.
-    static let smallest: UInt64 = 100_000_000
+    /// Under this, what a file costs on an exFAT drive with large clusters stops being small next to what it frees.
+    static let smallest: UInt64 = 10_000_000
 
     func isKept(_ path: String) -> Bool { keep.contains { PathMath.isInside(path, $0) } }
     func has(_ path: String) -> Bool { items.contains { $0.path == path } }

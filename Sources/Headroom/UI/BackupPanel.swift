@@ -11,10 +11,14 @@ struct BackupPanel: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 header
+                // What's selected turns into the run's card while it's moved, in the same place. Once the run is over, what's
+                // still selected (a file that failed, or something picked since) is back under it, with what can be done.
                 if let job = model.driveJob { DriveJobCard(model: model, job: job) }
-                selected
-                driveSelected
-                actions
+                if model.driveJob?.isRunning != true {
+                    selected
+                    driveSelected
+                    actions
+                }
                 candidates
                 moved
                 kept
@@ -78,18 +82,6 @@ struct BackupPanel: View {
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.white.opacity(0.75))
             }
-            Toggle("Show moved files", isOn: Binding(get: { model.showGhosts }, set: { model.setShowGhosts($0) }))
-                .toggleStyle(.switch)
-                .controlSize(.mini)
-                .font(.system(size: 11.5))
-                .foregroundStyle(.white.opacity(0.7))
-                .disabled(model.movedNotes.isEmpty && !model.showGhosts)
-            Toggle("Compare with \(model.backup.destination?.drive.name ?? "drive")", isOn: Binding(get: { model.showDriveSide }, set: { model.setShowDriveSide($0) }))
-                .toggleStyle(.switch)
-                .controlSize(.mini)
-                .font(.system(size: 11.5))
-                .foregroundStyle(.white.opacity(0.7))
-                .disabled(model.backup.destination == nil && !model.showDriveSide)
             if let pair = model.pair { PairLegend(model: model, pair: pair) }
         }
     }
@@ -98,18 +90,18 @@ struct BackupPanel: View {
 
     @ViewBuilder
     private var selected: some View {
-        if !model.backup.items.isEmpty {
-            PanelSection(title: "Selected", trailing: "\(model.backup.items.count) · \(formatBytes(model.backupBytes))") {
-                ForEach(model.backup.items.sorted { $0.bytes > $1.bytes }) { item in
-                    BackupRow(title: item.title, size: item.bytes, detail: item.reason ?? DiskTree.friendly((item.path as NSString).deletingLastPathComponent),
-                              badge: item.agent, ticked: true, enabled: !model.isCleaning, warning: model.backupWarning(item)) {
-                        model.deselectForBackup([item.path])
-                    }
-                    .contextMenu {
-                        Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.path)]) }
-                        Button("Keep on Mac") { model.keepOnMac(item.path, true) }
-                    }
-                }
+        let items = model.backup.items
+        if !items.isEmpty {
+            let summary = model.backupSummary()
+            SelectionCard(model: model, summary: summary, agent: items.compactMap(\.agent).first.map { agent in (agent, items.filter { $0.agent == agent }.count) }) {
+                PickGroups(picks: items.map { item in
+                    let nothing = summary.freesNothing.contains(item.path)
+                    let tooBig = model.backup.destination?.drive.largestFile.map { item.bytes > $0 } == true
+                    return Pick(path: item.path, title: item.title, bytes: item.bytes,
+                                warning: tooBig ? model.backupWarning(item) : (nothing ? "Frees nothing" : nil),
+                                help: [item.reason, nothing ? model.backupWarning(item) : nil].compactMap { $0 }.joined(separator: "\n"),
+                                deselect: { model.deselectForBackup([item.path]) }, keep: { model.keepOnMac(item.path, true) })
+                }, enabled: !model.isCleaning, deselect: { picks in _ = model.deselectForBackup(picks.map(\.path)) })
             }
         }
     }
@@ -119,18 +111,37 @@ struct BackupPanel: View {
     @ViewBuilder
     private var driveSelected: some View {
         let files = model.driveSelection
-        if !files.isEmpty {
-            PanelSection(title: "Selected on \(files[0].driveName)", trailing: "\(files.count) · \(formatBytes(files.reduce(0) { $0 &+ $1.bytes }))") {
-                ForEach(files.sorted { $0.bytes > $1.bytes }) { file in
-                    BackupRow(title: file.title, size: file.bytes, detail: file.place.title(drive: file.driveName), badge: nil, ticked: true,
-                              enabled: !model.isCleaning) {
-                        model.deselectDriveFile(file)
+        if let first = files.first {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 12) {
+                    Image(systemName: "externaldrive.fill")
+                        .font(.system(size: 16))
+                        .foregroundStyle(Color(red: 0.42, green: 0.70, blue: 1))
+                        .frame(width: 36, height: 36)
+                        .background(Circle().fill(Color(red: 0.42, green: 0.70, blue: 1).opacity(0.14)))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(formatBytes(files.reduce(0) { $0 &+ $1.bytes })) selected on \(first.driveName)")
+                            .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                        Text(files.count == 1 ? "1 file" : "\(files.count) files")
+                            .font(.system(size: 11).monospacedDigit())
+                            .foregroundStyle(.white.opacity(0.55))
                     }
-                    .contextMenu {
-                        Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: file.path)]) }
-                    }
+                    Spacer(minLength: 0)
                 }
+                Divider().overlay(.white.opacity(0.06))
+                PickGroups(picks: files.map { file in
+                    Pick(path: file.path, title: file.title, bytes: file.bytes, warning: nil, help: file.place.title(drive: file.driveName),
+                         deselect: { model.deselectDriveFile(file) }, keep: nil)
+                }, enabled: !model.isCleaning, deselect: { picks in
+                    let gone = Set(picks.map(\.path))
+                    Motion.animate(.snappy(duration: 0.2)) { model.driveSelection.removeAll { gone.contains($0.path) } }
+                    if let tree = model.tree { model.engine.apply(model.drawing(tree), .live) }
+                }, folderName: { model.shownFolder($0) })
+                .padding(.horizontal, -8)
             }
+            .padding(12)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.white.opacity(0.05)))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(.white.opacity(0.07)))
         }
     }
 
@@ -159,7 +170,8 @@ struct BackupPanel: View {
     private var candidates: some View {
         let rows = model.backupCandidates().filter { node in
             guard let tree = model.workTree, let path = tree.path(node) else { return false }
-            return !model.backup.has(PathMath.visible(path))
+            // What's on the drive already isn't waiting to go.
+            return !model.backup.has(PathMath.visible(path)) && !model.isBackedUp(path)
         }
         PanelSection(title: "Large Files", trailing: nil) {
             Picker("Last changed", selection: Binding(get: { model.backupAge }, set: { model.backupAge = $0 })) {
@@ -173,7 +185,9 @@ struct BackupPanel: View {
             .font(.system(size: 11.5))
             .padding(.bottom, 2)
             if rows.isEmpty {
-                Text(model.workTree?.isPartial == true ? "Waiting for the scan" : "No files over \(formatBytes(BackupState.smallest)) here")
+                // Big files that are all selected, or on the drive already, leave nothing else to list.
+                Text(model.workTree?.isPartial == true ? "Waiting for the scan"
+                     : model.backupCandidates().isEmpty ? "No files over \(formatBytes(BackupState.smallest)) here" : "Nothing else here")
                     .font(.system(size: 11.5))
                     .foregroundStyle(.white.opacity(0.5))
                     .padding(.vertical, 4)
@@ -263,6 +277,139 @@ struct BackupPanel: View {
     }
 }
 
+/// What's selected for Backup: a ring of how much of it frees space on the Mac, what it comes to, who picked it, where it
+/// goes and the room left there, then the files by folder. Moving it turns this card into the run's, in the same place.
+private struct SelectionCard<Content: View>: View {
+    let model: AppModel
+    let summary: BackupSummary
+    let agent: (name: String, count: Int)?
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        let share = summary.bytes == 0 ? 1 : min(Double(summary.frees) / Double(summary.bytes), 1)
+        BackupCard(title: "\(formatBytes(summary.bytes)) selected") {
+            CardRing(fraction: share, upTo: 1, accent: BackupColours.blue) {
+                Text("\(summary.files)")
+                    .font(.system(size: 13, weight: .semibold, design: .rounded).monospacedDigit())
+                    .minimumScaleFactor(0.6)
+            }
+            .help(summary.files == 1 ? "1 file" : "\(summary.files) files")
+        } lines: {
+            CardLine(text: summary.frees == 0 ? "Frees nothing on this Mac" : "Frees \(formatBytes(summary.frees)) on this Mac")
+            if let agent { AgentChip(name: agent.count == summary.files ? agent.name : "\(agent.count) by \(agent.name)") }
+        } content: {
+            if let destination = model.backup.destination {
+                let drive = model.connected(destination.drive)
+                DriveRoomBar(place: "\(destination.title) › \(BackupPaths.macFolder)", capacity: drive?.capacity ?? 0, free: drive?.free ?? 0,
+                             adds: summary.bytes,
+                             trailing: drive.map { "\(formatBytes($0.free &- min($0.free, summary.bytes))) free after" } ?? "Not connected",
+                             trailingColour: drive == nil ? Palette.amber : .white.opacity(0.55))
+            }
+            if !summary.freesNothing.isEmpty {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 10))
+                    Text(summary.freesNothing.count == 1 ? "1 frees nothing: its other copy stays"
+                         : "\(summary.freesNothing.count) free nothing: their other copies stay")
+                        .font(.system(size: 11))
+                        .lineLimit(2)
+                    Spacer(minLength: 4)
+                    Button("Deselect") { Motion.animate(.snappy(duration: 0.2)) { _ = model.deselectForBackup(Array(summary.freesNothing)) } }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(BackupColours.blue)
+                        .disabled(model.isCleaning)
+                }
+                .foregroundStyle(Palette.amber)
+            }
+            Divider().overlay(.white.opacity(0.06))
+            content()
+                .padding(.horizontal, -8)
+        }
+    }
+}
+
+/// A file picked for Backup, on either half, as the list shows it.
+private struct Pick: Identifiable {
+    let path: String
+    let title: String
+    let bytes: UInt64
+    let warning: String?
+    let help: String
+    let deselect: () -> Void
+    let keep: (() -> Void)?
+    var id: String { path }
+    var folder: String { (path as NSString).deletingLastPathComponent }
+}
+
+/// What's picked, a group for each folder: where it is said once, with how many and how much, biggest first. Closed when
+/// there's much in it, open when there's little.
+private struct PickGroups: View {
+    let picks: [Pick]
+    let enabled: Bool
+    let deselect: ([Pick]) -> Void
+    /// How a folder is named: as a path you'd say, unless something better is given.
+    var folderName: (String) -> String = { DiskTree.friendly($0) }
+    @State private var toggled: Set<String> = []
+
+    var body: some View {
+        let groups = Dictionary(grouping: picks, by: \.folder)
+            .map { (folder: $0.key, picks: $0.value.sorted { $0.bytes > $1.bytes }, bytes: $0.value.reduce(UInt64(0)) { $0 &+ $1.bytes }) }
+            .sorted { $0.bytes > $1.bytes }
+        let openAtFirst = picks.count <= 10
+        VStack(alignment: .leading, spacing: 1) {
+            ForEach(groups, id: \.folder) { group in
+                let open = openAtFirst != toggled.contains(group.folder)
+                Button {
+                    Motion.animate(.snappy(duration: 0.18)) {
+                        if toggled.contains(group.folder) { toggled.remove(group.folder) } else { toggled.insert(group.folder) }
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 9, weight: .semibold))
+                            .rotationEffect(.degrees(open ? 90 : 0))
+                            .foregroundStyle(.white.opacity(0.5))
+                            .frame(width: 12)
+                        Image(systemName: "folder.fill")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color(red: 0.45, green: 0.66, blue: 1).opacity(0.8))
+                        Text(folderName(group.folder))
+                            .font(.system(size: 12, weight: .medium))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer(minLength: 6)
+                        Text("\(group.picks.count) · \(formatBytes(group.bytes))")
+                            .font(.system(size: 11).monospacedDigit())
+                            .foregroundStyle(.white.opacity(0.6))
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .contextMenu {
+                    Button("Show in Finder") { NSWorkspace.shared.open(URL(fileURLWithPath: group.folder)) }
+                    Button("Deselect") { deselect(group.picks) }.disabled(!enabled)
+                }
+                if open {
+                    ForEach(group.picks) { pick in
+                        BackupRow(title: pick.title, size: pick.bytes, badge: nil, ticked: true, enabled: enabled, warning: pick.warning) {
+                            pick.deselect()
+                        }
+                        .help(pick.help)
+                        .padding(.leading, 14)
+                        .contextMenu {
+                            Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: pick.path)]) }
+                            if let keep = pick.keep { Button("Keep on Mac", action: keep) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// A titled group in Backup's panel.
 private struct PanelSection<Content: View>: View {
     let title: String
@@ -291,7 +438,7 @@ private struct PanelSection<Content: View>: View {
 private struct BackupRow: View {
     let title: String
     let size: UInt64
-    let detail: String
+    var detail: String? = nil
     let badge: String?
     /// On the list, off it, or neither, for what's no longer on this Mac.
     let ticked: Bool?
@@ -327,11 +474,13 @@ private struct BackupRow: View {
                         CapsuleLabel(text: badge)
                     }
                 }
-                Text(detail)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.5))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                if let detail {
+                    Text(detail)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(0.5))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
                 if let warning {
                     Text(warning)
                         .font(.system(size: 11))
@@ -354,47 +503,45 @@ private struct BackupRow: View {
     }
 }
 
-/// A run as it goes: the whole of it as a ring that fills, the file it's on with its copy and its check as one bar of two
-/// halves, how fast and how long, and every file with what became of it. Afterwards, how it ended and what needs a look.
+/// A run as it goes, on the same card as what was selected: the whole of it as a ring that fills, how far and how fast, what's
+/// been freed, the drive filling as files land, the file it's on with its copy and its check as one bar of two halves, and
+/// every file by folder with what became of it. Afterwards, how it ended and what needs a look.
 struct DriveJobCard: View {
     let model: AppModel
     let job: DriveJob
 
     private var accent: Color {
-        if job.isRunning { return Color(red: 0.42, green: 0.70, blue: 1) }
-        return job.failedCount > 0 ? Palette.amber : Color(red: 0.36, green: 0.82, blue: 0.56)
+        if job.isRunning { return BackupColours.blue }
+        return job.failedCount > 0 ? Palette.amber : BackupColours.green
     }
 
+    private var total: UInt64 { job.entries.reduce(0) { $0 &+ $1.bytes } }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 14) {
-                ZStack {
-                    Circle().stroke(.white.opacity(0.08), lineWidth: 6)
-                    Circle()
-                        .trim(from: 0, to: max(job.fraction, 0.004))
-                        .stroke(accent, style: StrokeStyle(lineWidth: 6, lineCap: .round))
-                        .rotationEffect(.degrees(-90))
-                        .animation(.smooth(duration: 0.3), value: job.fraction)
-                    if job.isRunning {
-                        Text("\(Int(job.fraction * 100))%")
-                            .font(.system(size: 13, weight: .semibold, design: .rounded).monospacedDigit())
-                            .contentTransition(.numericText(value: job.fraction))
-                    } else {
-                        Image(systemName: job.failedCount > 0 ? "exclamationmark" : "checkmark")
-                            .font(.system(size: 17, weight: .semibold))
-                            .foregroundStyle(accent)
-                    }
+        BackupCard(title: job.isRunning ? job.title : job.summary) {
+            CardRing(fraction: job.fraction, accent: accent) {
+                if job.isRunning {
+                    Text("\(Int(job.fraction * 100))%")
+                        .font(.system(size: 13, weight: .semibold, design: .rounded).monospacedDigit())
+                        .contentTransition(.numericText(value: job.fraction))
+                } else {
+                    Image(systemName: job.failedCount > 0 ? "exclamationmark" : "checkmark")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(accent)
                 }
-                .frame(width: 54, height: 54)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(job.isRunning ? job.title : job.summary)
-                        .font(.system(size: 13, weight: .semibold))
-                        .lineLimit(2)
-                    Text(statusLine)
-                        .font(.system(size: 11).monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.55))
-                }
-                Spacer(minLength: 0)
+            }
+        } lines: {
+            CardLine(text: statusLine)
+            if job.kind == .move, job.freed > 0 {
+                CardLine(text: "Freed \(formatBytes(job.freed)) on this Mac" + (job.isRunning ? " so far" : ""))
+            }
+            if let agent = job.agent { AgentChip(name: agent) }
+        } content: {
+            if let room = job.room {
+                // Afterwards, the drive's own count of what's free, which knows what its blocks took.
+                let after = job.isRunning ? nil : model.backup.destination.flatMap { model.connected($0.drive) }.map(\.free)
+                DriveRoomBar(place: room.place, capacity: room.capacity, free: room.free, adds: total, landed: job.landed,
+                             trailing: "\(formatBytes(after ?? room.free &- min(room.free, job.landed))) free")
             }
             if job.isRunning, let index = job.current, index < job.entries.count {
                 let entry = job.entries[index]
@@ -405,42 +552,16 @@ struct DriveJobCard: View {
                             .lineLimit(1)
                             .truncationMode(.middle)
                         Spacer()
-                        Text(entry.step == .checking ? "Verifying" : (job.kind == .verify ? "Verifying" : "Copying"))
+                        Text(entry.step == .checking || job.kind == .verify ? "Verifying" : "Copying")
                             .font(.system(size: 11))
                             .foregroundStyle(.white.opacity(0.5))
                     }
                     FileBar(job: job, index: index, accent: accent)
                 }
             }
-            VStack(alignment: .leading, spacing: 2) {
-                ForEach(job.entries) { entry in
-                    VStack(alignment: .leading, spacing: 1) {
-                    HStack(spacing: 6) {
-                        stepIcon(entry.step)
-                            .frame(width: 14)
-                        Text(entry.title)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.white.opacity(entry.step == .waiting ? 0.4 : 0.8))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        Spacer(minLength: 4)
-                        Text(stepText(entry))
-                            .font(.system(size: 10.5))
-                            .foregroundStyle(stepColor(entry.step))
-                            .lineLimit(1)
-                    }
-                    // Why it didn't go, right where it says so.
-                    if case .failed(let why) = entry.step {
-                        Text(why)
-                            .font(.system(size: 10.5))
-                            .foregroundStyle(Palette.amber.opacity(0.85))
-                            .lineLimit(2)
-                            .padding(.leading, 20)
-                            .help(why)
-                    }
-                    }
-                }
-            }
+            Divider().overlay(.white.opacity(0.06))
+            JobGroups(job: job, folderName: { folder in model.shownFolder(folder) })
+                .padding(.horizontal, -8)
             // Stop is the button under the inspector while it runs.
             if !job.isRunning {
                 Button("Done") { model.dismissDriveJob() }
@@ -448,20 +569,22 @@ struct DriveJobCard: View {
                     .controlSize(.small)
             }
         }
-        .padding(12)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.white.opacity(0.05)))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(.white.opacity(0.07)))
     }
 
     private var statusLine: String {
+        // Afterwards the title says how it ended, so this says how long it took.
+        if let finished = job.finished {
+            let seconds = finished.timeIntervalSince(job.started)
+            var parts = ["Took " + Self.duration(seconds)]
+            if job.kind != .deleteFromDrive, seconds >= 1, job.doneBytes > 0 {
+                parts.append("\(formatBytes(UInt64(Double(job.doneBytes) / seconds)))/s")
+            }
+            return parts.joined(separator: " · ")
+        }
         let done = job.entries.filter(\.step.isOver).count
         var parts = ["\(done) of \(job.entries.count)"]
-        if job.isRunning {
-            if job.speed > 0 { parts.append("\(formatBytes(UInt64(job.speed)))/s") }
-            if let left = job.timeLeft { parts.append(Self.duration(left) + " left") }
-        } else if let failed = Optional(job.failedCount), failed > 0 {
-            parts.append(failed == 1 ? "1 failed" : "\(failed) failed")
-        }
+        if job.speed > 0 { parts.append("\(formatBytes(UInt64(job.speed)))/s") }
+        if let left = job.timeLeft { parts.append(Self.duration(left) + " left") }
         return parts.joined(separator: " · ")
     }
 
@@ -471,19 +594,115 @@ struct DriveJobCard: View {
         if s < 3600 { return "\(s / 60) min" }
         return "\(s / 3600) h \((s % 3600) / 60) min"
     }
+}
 
+/// A run's files, a group for each folder, said once with how far it's got. Open when there's little in the run, and where
+/// something failed, with why right under it.
+private struct JobGroups: View {
+    let job: DriveJob
+    let folderName: (String) -> String
+    @State private var toggled: Set<String> = []
+
+    var body: some View {
+        var order: [String] = []
+        var members: [String: [Int]] = [:]
+        for i in job.entries.indices {
+            let folder = (job.entries[i].id as NSString).deletingLastPathComponent
+            if members[folder] == nil { order.append(folder) }
+            members[folder, default: []].append(i)
+        }
+        let openAtFirst = job.entries.count <= 10
+        return VStack(alignment: .leading, spacing: 1) {
+            ForEach(order, id: \.self) { folder in
+                let indices = members[folder] ?? []
+                let failed = indices.contains { if case .failed = job.entries[$0].step { true } else { false } }
+                let done = indices.filter { if case .done = job.entries[$0].step { true } else { false } }.count
+                let open = (openAtFirst || failed) != toggled.contains(folder)
+                Button {
+                    Motion.animate(.snappy(duration: 0.18)) {
+                        if toggled.contains(folder) { toggled.remove(folder) } else { toggled.insert(folder) }
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 9, weight: .semibold))
+                            .rotationEffect(.degrees(open ? 90 : 0))
+                            .foregroundStyle(.white.opacity(0.5))
+                            .frame(width: 12)
+                        Image(systemName: "folder.fill")
+                            .font(.system(size: 11))
+                            .foregroundStyle(BackupColours.blue.opacity(0.8))
+                        Text(folderName(folder))
+                            .font(.system(size: 12, weight: .medium))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer(minLength: 6)
+                        if failed {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 9))
+                                .foregroundStyle(Palette.amber)
+                        }
+                        Text("\(done) of \(indices.count)")
+                            .font(.system(size: 11).monospacedDigit())
+                            .foregroundStyle(done == indices.count ? .white.opacity(0.6) : .white.opacity(0.45))
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                if open {
+                    ForEach(indices, id: \.self) { i in
+                        let entry = job.entries[i]
+                        VStack(alignment: .leading, spacing: 1) {
+                            HStack(spacing: 6) {
+                                StepLook.icon(entry.step)
+                                    .frame(width: 14)
+                                Text(entry.title)
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.white.opacity(entry.step == .waiting ? 0.4 : 0.8))
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                Spacer(minLength: 4)
+                                Text(StepLook.text(entry))
+                                    .font(.system(size: 10.5))
+                                    .foregroundStyle(StepLook.colour(entry.step))
+                                    .lineLimit(1)
+                            }
+                            // Why it didn't go, right where it says so.
+                            if case .failed(let why) = entry.step {
+                                Text(why)
+                                    .font(.system(size: 10.5))
+                                    .foregroundStyle(Palette.amber.opacity(0.85))
+                                    .lineLimit(2)
+                                    .padding(.leading, 20)
+                                    .help(why)
+                            }
+                        }
+                        .padding(.leading, 22)
+                        .padding(.trailing, 8)
+                        .padding(.vertical, 2)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// How a file in a run is drawn: a mark for where it's got, a word for it, and a colour.
+private enum StepLook {
     @ViewBuilder
-    private func stepIcon(_ step: DriveJob.Step) -> some View {
+    static func icon(_ step: DriveJob.Step) -> some View {
         switch step {
         case .waiting: Image(systemName: "circle").font(.system(size: 9)).foregroundStyle(.white.opacity(0.3))
         case .copying, .checking: ProgressView().controlSize(.mini)
-        case .done: Image(systemName: "checkmark").font(.system(size: 9, weight: .bold)).foregroundStyle(Color(red: 0.36, green: 0.82, blue: 0.56))
+        case .done: Image(systemName: "checkmark").font(.system(size: 9, weight: .bold)).foregroundStyle(BackupColours.green)
         case .failed: Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 9)).foregroundStyle(Palette.amber)
         case .stopped: Image(systemName: "pause.fill").font(.system(size: 8)).foregroundStyle(.white.opacity(0.4))
         }
     }
 
-    private func stepText(_ entry: DriveJob.Entry) -> String {
+    static func text(_ entry: DriveJob.Entry) -> String {
         switch entry.step {
         case .waiting: formatBytes(entry.bytes)
         case .copying: "Copying"
@@ -494,7 +713,7 @@ struct DriveJobCard: View {
         }
     }
 
-    private func stepColor(_ step: DriveJob.Step) -> Color {
+    static func colour(_ step: DriveJob.Step) -> Color {
         switch step {
         case .failed: Palette.amber
         case .done: .white.opacity(0.6)
@@ -552,7 +771,7 @@ struct BackupBar: View {
                 Button {
                     model.perform(main)
                 } label: {
-                    Text(main.blocked ?? (main.kind == .verify ? "Verify \(formatBytes(main.bytes))" : main.title.replacingOccurrences(of: " to ", with: " \(formatBytes(main.bytes)) to ")))
+                    Text(main.blocked ?? main.title)
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
                 }
@@ -609,9 +828,12 @@ private struct ActionCard: View {
                     Text(action.title + (action.kind == .delete ? "…" : ""))
                         .font(.system(size: 12.5, weight: .semibold))
                         .foregroundStyle(action.kind == .delete ? Color(red: 1, green: 0.45, blue: 0.42) : .white.opacity(0.92))
-                    Text(action.blocked ?? action.detail)
-                        .font(.system(size: 11).monospacedDigit())
-                        .foregroundStyle(action.blocked == nil ? .white.opacity(0.5) : Palette.amber)
+                    // How many only when it's not all of what's selected: the summary above says that.
+                    if let line = action.blocked ?? (action.partial ? action.detail : nil) {
+                        Text(line)
+                            .font(.system(size: 11).monospacedDigit())
+                            .foregroundStyle(action.blocked == nil ? .white.opacity(0.5) : Palette.amber)
+                    }
                 }
                 Spacer(minLength: 6)
                 Image(systemName: symbol)
@@ -646,9 +868,11 @@ private struct PairLegend: View {
             ForEach(PairPlace.allCases, id: \.self) { place in
                 if let count = pair.counts[place], count.files > 0 {
                     HStack(spacing: 7) {
+                        // The colours are the ring's in Backed Up; in Map the ring has the map's own.
                         Circle()
                             .fill(Color(.displayP3, red: Double(pow(place.colour.x, 1 / 2.2)), green: Double(pow(place.colour.y, 1 / 2.2)), blue: Double(pow(place.colour.z, 1 / 2.2))))
                             .frame(width: 8, height: 8)
+                            .opacity(model.view == .copies ? 1 : 0)
                         Text(place.title(drive: pair.driveName))
                             .font(.system(size: 11.5))
                             .foregroundStyle(.white.opacity(0.8))

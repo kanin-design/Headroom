@@ -208,7 +208,7 @@ struct HeadroomApp: App {
                     .keyboardShortcut("1", modifiers: .command)
                 Button("Changes") { AppModel.shared.setLens(.changes) }
                     .keyboardShortcut("2", modifiers: .command)
-                Button("Copies") { AppModel.shared.setLens(.copies) }
+                Button(AppModel.shared.mode == .backup ? "Backed Up" : "Copies") { AppModel.shared.setLens(.copies) }
                     .keyboardShortcut("3", modifiers: .command)
                 Divider()
                 Button("Free Up") { AppModel.shared.setLens(.freeUp) }

@@ -5,7 +5,8 @@ extension AppModel {
     /// folders that hold one, so those show at once. Duplicates are looked for only now, never at launch: groups remembered from
     /// an earlier search come back unread, and the rest are read biggest first, showing as they're found.
     func refreshCopies() {
-        guard view == .copies, let tree, !tree.isPartial else { return }
+        // In Backup the third view is Backed Up, and nothing is read for duplicates.
+        guard view == .copies, mode == .freeUp, let tree, !tree.isPartial else { return }
         if let copies, copies.scanID == tree.scanID, copies.duplicatesDone { return }
         // Already looking, in this scan's numbering.
         if copiesReading, copiesScanID == tree.scanID { return }
@@ -178,7 +179,7 @@ extension AppModel {
     /// What lights up with a piece under the pointer in Copies: every copy of the set it holds, wherever it is, as a box's files
     /// light up together in Free Up. The set's row in the inspector lights too.
     func copyLight(for index: Int) -> (full: [Range<Int>], holding: [Int], tint: SIMD3<Float>?) {
-        guard view == .copies, let tree, let copies, copies.scanID == tree.scanID, index < engine.layout.pieces.count else { return ([], [], nil) }
+        guard view == .copies, mode == .freeUp, let tree, let copies, copies.scanID == tree.scanID, index < engine.layout.pieces.count else { return ([], [], nil) }
         let p = engine.layout.pieces[index]
         guard !p.isSmaller, p.style != .free, p.style != .hidden, let set = copies.set(of: p.node) else {
             hotCopyGroup = nil

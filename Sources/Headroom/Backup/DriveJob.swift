@@ -43,6 +43,20 @@ final class DriveJob {
     /// Bytes a second, smoothed, so the time left doesn't jump about.
     private(set) var speed: Double = 0
     let stop = LockedFlag()
+    /// Where a move or a copy goes, and the drive's room when it began, for the bar that fills as files land.
+    struct Room: Equatable {
+        var place: String
+        var capacity: UInt64
+        var free: UInt64
+    }
+    var room: Room?
+    /// What frees nothing on the Mac when it's moved: a hard link or a clone whose other copy stays. By entry.
+    var freesNothing: Set<String> = []
+    /// Who picked what's being moved, when an agent did.
+    var agent: String?
+    /// What's been written to where it goes so far: every file copied there, and as much as has gone of the one it's on.
+    private(set) var landed: UInt64 = 0
+    @ObservationIgnored private var landedBefore: UInt64 = 0
     @ObservationIgnored private var doneBeforeCurrent: UInt64 = 0
     @ObservationIgnored private var lastSample: (time: Date, work: UInt64)?
 
@@ -61,6 +75,13 @@ final class DriveJob {
     var failedCount: Int { entries.filter { if case .failed = $0.step { true } else { false } }.count }
     var doneBytes: UInt64 { entries.reduce(0) { if case .done = $1.step { $0 &+ $1.bytes } else { $0 } } }
     var wasStopped: Bool { stop.value }
+    /// What's been freed on the Mac so far: what's moved, less what had another copy that stays.
+    var freed: UInt64 {
+        guard kind == .move else { return 0 }
+        return entries.reduce(0) { sum, entry in
+            if case .done = entry.step, !freesNothing.contains(entry.id) { sum &+ entry.bytes } else { sum }
+        }
+    }
 
     /// Seconds left at the speed it's going, once there's a speed to go by.
     var timeLeft: TimeInterval? {
@@ -81,6 +102,7 @@ final class DriveJob {
         let passes: UInt64 = kind == .verify || kind == .deleteFromDrive ? 1 : 2
         let inFile = kind == .verify ? bytes : (phase == .copying ? bytes : size &+ bytes)
         workDone = doneBeforeCurrent &+ min(inFile, size &* passes)
+        if kind != .verify { landed = landedBefore &+ (phase == .copying ? min(bytes, size) : size) }
         let step: Step = kind == .verify || phase == .checking ? .checking : .copying
         if entries[index].step != step { entries[index].step = step }
         sample()
@@ -92,6 +114,9 @@ final class DriveJob {
         let passes: UInt64 = kind == .verify || kind == .deleteFromDrive ? 1 : 2
         workDone = doneBeforeCurrent &+ entries[index].bytes &* passes
         doneBeforeCurrent = workDone
+        // A copy that failed is taken away again, so only what's done stays landed.
+        if case .done = step, kind != .verify { landedBefore &+= entries[index].bytes }
+        landed = landedBefore
         sample()
     }
 

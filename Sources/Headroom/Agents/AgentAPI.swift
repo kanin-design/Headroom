@@ -68,7 +68,7 @@ enum AgentLook {
                   description: "Backup's list: big files the user moves to another drive, leaving a note in place of each. Returns the drive and whether it's connected, the selected files, what Move would do now or why it can't, and the files already moved.",
                   properties: ["limit": ["type": "integer", "minimum": 1, "maximum": most, "description": "How many selected and moved files to list. 50 unless given."]]),
         AgentTool(name: "select_for_backup",
-                  description: "Select files of 100 MB or more for Backup. When the user clicks Move, each is copied and verified, a note takes its place, and the original goes to the Trash. Folders aren't accepted. A file selected here is taken off Free Up's list. Nothing moves until the user clicks Move.",
+                  description: "Select files of 10 MB or more for Backup. When the user clicks Move, each is copied and verified, a note takes its place, and the original goes to the Trash. Folders aren't accepted. A file selected here is taken off Free Up's list. Nothing moves until the user clicks Move.",
                   properties: ["paths": ["type": "array", "items": ["type": "string"], "minItems": 1, "maxItems": mostSelected, "description": "Absolute paths of files."],
                                "reason": ["type": "string", "description": "One short line the user sees beside these: why they can live on the drive."]],
                   required: ["paths", "reason"], selects: true),

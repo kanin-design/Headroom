@@ -72,32 +72,19 @@ struct MovedNote: Codable, Equatable, Hashable, Sendable {
     }
 }
 
-/// The hash beside a file on the drive: `name.sha256`, in the form `shasum -a 256 -c` checks, with the size on a line of
-/// its own after it.
+/// The `name.sha256` Backup used to write beside each file on a drive. It isn't written any more: on a large exFAT drive each
+/// took a whole 128 KB cluster, and the hash is kept on the Mac, in the note or Backup's record of copies. One from before
+/// is still read.
 enum Sidecar {
     static let ext = "sha256"
 
     static func path(for file: String) -> String { file + "." + ext }
 
-    static func text(hash: String, name: String, size: UInt64) -> String {
-        "\(hash)  \(name)\n# size \(size) bytes\n"
-    }
-
-    static func parse(_ text: String) -> (hash: String, size: UInt64?)? {
-        let lines = text.split(whereSeparator: \.isNewline)
-        guard let first = lines.first else { return nil }
+    /// The hash in the `.sha256` beside a file, if one is there.
+    static func hash(for file: String) -> String? {
+        guard let data = FileManager.default.contents(atPath: path(for: file)), data.count < 4096,
+              let first = String(decoding: data, as: UTF8.self).split(whereSeparator: \.isNewline).first else { return nil }
         let hash = String(first.prefix(64)).lowercased()
-        guard hash.count == 64, hash.allSatisfy(\.isHexDigit) else { return nil }
-        let size = lines.dropFirst().lazy.compactMap { line -> UInt64? in
-            let words = line.split(separator: " ")
-            guard words.count >= 3, words[0] == "#", words[1] == "size" else { return nil }
-            return UInt64(words[2])
-        }.first
-        return (hash, size)
-    }
-
-    static func read(for file: String) -> (hash: String, size: UInt64?)? {
-        guard let data = FileManager.default.contents(atPath: path(for: file)), data.count < 4096 else { return nil }
-        return parse(String(decoding: data, as: UTF8.self))
+        return hash.count == 64 && hash.allSatisfy(\.isHexDigit) ? hash : nil
     }
 }

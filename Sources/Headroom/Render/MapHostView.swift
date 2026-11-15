@@ -359,7 +359,8 @@ final class MapHostView: NSView {
         if model.mode == .freeUp, model.handlePlanKey(event) { return }
         switch event.keyCode {
         case 53, 51: model.goUp()                 // escape, delete
-        case 49: model.toggleLook()               // space
+        case 49:                                  // space selects; with shift, the card
+            if event.modifierFlags.contains(.shift) { model.toggleLook() } else { model.spaceSelect() }
         default: super.keyDown(with: event)
         }
     }

@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// The card Space opens: what something is, and what you can do about it.
+/// The card Shift-Space opens: what something is, and what you can do about it.
 struct Look: Equatable {
     var node: UInt32
     /// Where you stepped in from, inside the card.
@@ -147,7 +147,7 @@ extension AppModel {
         pointedThing = nil
         setHover(nil)
         // A click on a preview gives it the keyboard, and it keeps it after the card has gone, so Space would no longer
-        // reach the ring to open the card again. Unless you're typing in the search field, the keys go back to the ring.
+        // reach the ring. Unless you're typing in the search field, the keys go back to the ring.
         if let window = mapView?.window, !(window.firstResponder is NSText) { window.makeFirstResponder(mapView) }
     }
 
@@ -289,7 +289,9 @@ extension AppModel {
         case .keyDown:
             if window.firstResponder is NSText || event.modifierFlags.contains(.command) { return false }
             switch event.keyCode {
-            case 49, 53: closeLook()                    // space, escape
+            case 53: closeLook()                        // escape
+            case 49:                                    // space selects; with shift, the card closes
+                if event.modifierFlags.contains(.shift) { closeLook() } else { spaceSelect() }
             case 123: stepLook(by: -1)                  // left
             case 124: stepLook(by: 1)                   // right
             case 125: return moveLookCursor(by: 1)      // down

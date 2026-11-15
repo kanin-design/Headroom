@@ -689,6 +689,10 @@ extension AppModel {
         let root = BackupDestination(drive: drive, folder: destination.folder).root
         let job = DriveJob(kind: copyOnly ? .copy : .move, title: (copyOnly ? "Copying to " : "Moving to ") + drive.name, driveName: drive.name,
                            entries: items.map { DriveJob.Entry(id: $0.path, title: $0.title, bytes: $0.bytes) })
+        // The card it's shown on carries on from the one that was selected: the drive's room, what frees nothing, who picked it.
+        job.room = DriveJob.Room(place: "\(destination.title) › \(BackupPaths.macFolder)", capacity: drive.capacity, free: drive.free)
+        job.freesNothing = backupSummary().freesNothing
+        job.agent = items.compactMap(\.agent).first
         let stop = copyOnly ? job.stop : beginRemoval(CleanProgress(done: 0, total: items.count, title: job.title))
         if !copyOnly {
             // Stopping the job stops the removal between files, and the other way round.
@@ -735,6 +739,8 @@ extension AppModel {
                     await MainActor.run {
                         job.finish(index, .done(said))
                         self.backup.items.removeAll { $0.path == item.path }
+                        // No note for a copy: its hash is kept with Backup's own things, on the Mac.
+                        self.recordCopy(target, on: drive, hash: sent.copied.hash, size: sent.copied.size)
                     }
                     continue
                 }
@@ -755,6 +761,7 @@ extension AppModel {
                     // The copy is proved and stays on the drive, but the original couldn't go, so it's on both, and no note
                     // may say otherwise.
                     unlink(note.notePath)
+                    await MainActor.run { self.recordCopy(target, on: drive, hash: sent.copied.hash, size: sent.copied.size) }
                     let why = Cleaner.whyItFailed(error).text
                     await MainActor.run { job.finish(index, .failed("Copied, but the original couldn't go to the Trash. \(why)")) }
                 }

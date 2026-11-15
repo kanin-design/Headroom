@@ -474,7 +474,7 @@ extension AppModel {
         guard let tree else { return }
         // Both sides are a picture of their own, numbered apart from the map: back goes up in it, and forward waits.
         if showsPair {
-            if step < 0, focus != 0 { goUp() }
+            if step < 0 { goUp() }
             return
         }
         func isThere(_ node: UInt32) -> Bool { node == 0 || (Int(node) < tree.count && tree.totals[Int(node)] > 0) }
@@ -552,13 +552,27 @@ extension AppModel {
         }
         guard let node = thing.single, node != 0 else { return }
         if mode == .backup {
-            Motion.animate(.snappy(duration: 0.2)) { toggleBackup(node) }
+            // A folder is what's in it: Backup moves files.
+            let isFolder = tree.map { $0.nodes[Int(node)].firstChild != 0 && !$0.isGhost(node) } ?? false
+            Motion.animate(.snappy(duration: 0.2)) { isFolder ? toggleBackupFolder(node) : toggleBackup(node) }
             return
         }
         let before = isPlanned(node)
         Motion.animate(.snappy(duration: 0.2)) { togglePiece(node) }
         guard isPlanned(node) != before else { return }
         showTip(before ? "Deselected: \(displayName(node))" : "Selected: \(displayName(node))")
+    }
+
+    /// Space: selects what's under the pointer, or deselects it, for the mode you're in. With the card open and the pointer
+    /// on nothing, it's what the card shows.
+    func spaceSelect() {
+        let pieces = engine.layout.pieces
+        let hovered = hover.flatMap { $0.pieceIndex < pieces.count && !pieces[$0.pieceIndex].isSmaller ? NamedThing($0.node) : nil }
+        guard let thing = pointedThing ?? hovered ?? look.map({ NamedThing($0.node) }) else {
+            showTip("Point at something first")
+            return
+        }
+        toggleSelection(of: thing)
     }
 
     // MARK: The menu bar

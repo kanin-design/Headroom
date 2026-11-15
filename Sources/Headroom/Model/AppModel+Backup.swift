@@ -28,6 +28,40 @@ extension AppModel {
             backup.destination?.drive = found
             for at in backup.knownDrives.indices where backup.knownDrives[at].isSame(as: found) { backup.knownDrives[at] = found }
         }
+        readBackupFolderOnce()
+    }
+
+    /// The whole of this Mac's backup folder on the drive, read once each time it's plugged in, so its half can be drawn
+    /// for any folder while it's unplugged. It's Backup's own folder, so it's quick.
+    private func readBackupFolderOnce() {
+        guard let destination = backup.destination, let drive = connected(destination.drive), !backupFoldersRead.contains(drive.id) else {
+            // Unplugged: read again when it's back.
+            if let destination = backup.destination, connected(destination.drive) == nil { backupFoldersRead.remove(destination.drive.id) }
+            return
+        }
+        backupFoldersRead.insert(drive.id)
+        let root = BackupPaths.onDrive("/", under: BackupDestination(drive: drive, folder: destination.folder).root)
+        let folder = root.hasSuffix("/") ? String(root.dropLast()) : root
+        let id = drive.id, fromTop = BackupPaths.fromDriveTop(folder, mount: drive.mountPath)
+        Task.detached(priority: .utility) {
+            guard FileManager.default.fileExists(atPath: folder), let files = DriveListings.read(folder) else { return }
+            DriveListings.record(id, folder: fromTop, files: files)
+        }
+    }
+
+    /// A folder as Backup's cards name it: on this Mac as you'd say it, and in the backup folder on the drive as the Mac's
+    /// folder it mirrors.
+    func shownFolder(_ folder: String) -> String {
+        guard let destination = backup.destination else { return DiskTree.friendly(folder) }
+        let root = BackupPaths.onDrive("/", under: destination.root)
+        let top = root.hasSuffix("/") ? String(root.dropLast()) : root
+        return folder.hasPrefix(top + "/") ? DiskTree.friendly(String(folder.dropFirst(top.count))) : DiskTree.friendly(folder)
+    }
+
+    /// Whether a file on the Mac is on the drive too, by the picture of both disks.
+    func isBackedUp(_ path: String) -> Bool {
+        guard let pair, let node = pair.macNode(for: path) else { return false }
+        return pair.places[node] == .both
     }
 
     /// The drive as it's connected now, if it is.
@@ -60,6 +94,8 @@ extension AppModel {
 
     func chooseDestination(_ drive: DriveInfo, folder: String = "") {
         guard !isCleaning, whyNotDestination(drive) == nil else { return }
+        // Picks on another drive's half don't carry over.
+        if backup.destination.map({ !$0.drive.isSame(as: drive) }) ?? false { backup.drivePicks = nil }
         backup.destination = BackupDestination(drive: drive, folder: folder)
         if let at = backup.knownDrives.firstIndex(where: { $0.isSame(as: drive) }) {
             backup.knownDrives[at] = drive
@@ -67,6 +103,8 @@ extension AppModel {
             backup.knownDrives.append(drive)
         }
         saveBackup()
+        // Both disks, with this one.
+        if mode == .backup, showDriveSide || showGhosts { applyGhosts() }
     }
 
     /// Choose Folder…: where on a connected drive Backup's files go.
@@ -141,6 +179,41 @@ extension AppModel {
         guard let shared = gain["shared_with_other_copies"] as? [String: Any] else { return nil }
         let place = (shared["paths"] as? [String])?.first.map(DiskTree.friendly)
         return "Frees nothing: hardlinked or cloned" + (place.map { " with \($0)" } ?? "")
+    }
+
+    /// What Backup's list comes to, taken together: a file with a hard link or a clone elsewhere frees nothing while that
+    /// stays, and when it's selected too, the two free their bytes once.
+    func backupSummary() -> BackupSummary {
+        let items = backup.items
+        var hasher = Hasher()
+        hasher.combine(treeVersion)
+        for item in items { hasher.combine(item.path) }
+        let key = hasher.finalize()
+        if let memo = backupSummaryMemo, memo.key == key { return memo.summary }
+        var out = BackupSummary(files: items.count, bytes: items.reduce(0) { $0 &+ $1.bytes })
+        var nodes: [UInt32] = [], pathOf: [UInt32: String] = [:], unmapped: UInt64 = 0
+        if let tree = workTree {
+            for item in items {
+                if let node = tree.find(visible: item.path) ?? tree.find(path: item.path) {
+                    nodes.append(node)
+                    pathOf[node] = item.path
+                } else {
+                    unmapped &+= item.bytes
+                }
+            }
+            let effect = Accounting.effect(of: nodes, except: [], in: tree)
+            out.frees = effect.total &+ unmapped
+            // A file that looks as if it frees little is asked again: what all of it frees, with and without it. The second path
+            // of a hard link, whose first is selected too, frees its share that way.
+            for (node, path) in pathOf where (effect.perTop[node] ?? 0) < max(1_000_000, tree.totals[Int(node)] / 20) {
+                let without = Accounting.effect(of: nodes.filter { $0 != node }, except: [], in: tree).total
+                if effect.total &- min(effect.total, without) < 1_000_000 { out.freesNothing.insert(path) }
+            }
+        } else {
+            out.frees = out.bytes
+        }
+        backupSummaryMemo = (key, out)
+        return out
     }
 
     /// What would stop Backup from running now, and what it would take.
@@ -241,6 +314,54 @@ extension AppModel {
         if let refused = selectForBackup([path]).first, case .refused(let why) = refused.outcome { showTip(why) }
     }
 
+    /// Space on a folder in Backup: every file in it that Backup takes, or on the drive's half every file in it there. When
+    /// they're all selected already, they're all deselected.
+    func toggleBackupFolder(_ node: UInt32) {
+        guard let tree, Int(node) < tree.count else { return }
+        if let pair, pair.tree === tree, pair.isOnDrive(node) {
+            let files = pair.driveRel.keys.filter { tree.isInside($0, node) }.compactMap { pair.driveFile($0) }
+            guard !files.isEmpty else { return }
+            let picked = Set(driveSelection.map(\.path))
+            if files.allSatisfy({ picked.contains($0.path) }) {
+                let gone = Set(files.map(\.path))
+                driveSelection.removeAll { gone.contains($0.path) }
+                showTip(files.count == 1 ? "Deselected 1 file" : "Deselected \(files.count) files")
+            } else {
+                let added = files.filter { !picked.contains($0.path) }
+                driveSelection += added
+                showTip(added.count == 1 ? "Selected 1 file" : "Selected \(added.count) files")
+            }
+            engine.apply(drawing(tree), .live)
+            return
+        }
+        // On this Mac: the files in it big enough for Backup. What else it won't take, it says no to.
+        var paths: [String] = []
+        if let pair, pair.tree === tree {
+            for (file, rel) in pair.macRel where tree.isInside(file, node) && max(tree.nodes[Int(file)].bytes, tree.nodes[Int(file)].aliasBytes) >= BackupState.smallest {
+                paths.append(pair.onMac(rel))
+            }
+        } else {
+            let start = tree.dfsIn[Int(node)], size = tree.dfsSize[Int(node)]
+            for i in 1..<tree.count {
+                let n = tree.nodes[i]
+                guard tree.dfsIn[i] &- start < size, n.firstChild == 0, n.flags & (NodeFlag.directory | NodeFlag.synthetic | NodeFlag.gone) == 0,
+                      max(n.bytes, n.aliasBytes) >= BackupState.smallest, !tree.isGhost(UInt32(i)), let path = tree.path(UInt32(i)) else { continue }
+                paths.append(PathMath.visible(path))
+            }
+        }
+        guard !paths.isEmpty else {
+            showTip("No files of \(formatBytes(BackupState.smallest)) or more here")
+            return
+        }
+        if paths.allSatisfy({ backup.has($0) }) {
+            deselectForBackup(paths)
+            showTip(paths.count == 1 ? "Deselected 1 file" : "Deselected \(paths.count) files")
+        } else {
+            let added = selectForBackup(paths.filter { !backup.has($0) }).filter { $0.outcome == .selected }.count
+            showTip(added == 1 ? "Selected 1 file" : "Selected \(added) files")
+        }
+    }
+
     func clearBackup() {
         guard !isCleaning, !backup.items.isEmpty || !driveSelection.isEmpty else { return }
         backup.items = []
@@ -270,11 +391,12 @@ extension AppModel {
     func copyToMac(_ files: [DriveFile]) {
         guard !isCleaning, let first = files.first else { return }
         let notes = Dictionary(movedNotes.map { ($0.originalPath, $0) }, uniquingKeysWith: { a, _ in a })
+        let known = expectedHashes()
         runDriveJob(.copyToMac, title: "Copying from \(first.driveName)", driveName: first.driveName,
                     entries: files.map { DriveJob.Entry(id: $0.path, title: $0.title, bytes: $0.bytes) }) { index, job in
             let file = files[index]
             let note = notes[file.macPath]
-            let expected = note?.sha256 ?? Sidecar.read(for: file.path)?.hash
+            let expected = note?.sha256 ?? known[file.path] ?? Sidecar.hash(for: file.path)
             var last = Date.distantPast
             do {
                 let copied = try DriveMover.copy(file.path, to: file.macPath, expected: expected, stop: job.stop) { p in
@@ -300,10 +422,11 @@ extension AppModel {
     func checkOnDrive(_ files: [DriveFile]) {
         guard !isCleaning, let first = files.first else { return }
         let notes = Dictionary(movedNotes.map { ($0.originalPath, $0) }, uniquingKeysWith: { a, _ in a })
+        let known = expectedHashes()
         runDriveJob(.verify, title: "Verifying", driveName: first.driveName,
                     entries: files.map { DriveJob.Entry(id: $0.path, title: $0.title, bytes: $0.bytes) }) { index, job in
             let file = files[index]
-            var expected = Sidecar.read(for: file.path)?.hash ?? notes[file.macPath]?.sha256
+            var expected = notes[file.macPath]?.sha256 ?? known[file.path] ?? Sidecar.hash(for: file.path)
             if expected == nil, file.place == .both { expected = try? DriveMover.hash(file.macPath, stop: job.stop).hash }
             guard let expected else { return .failed("No hash to compare with") }
             var last = Date.distantPast
@@ -324,6 +447,7 @@ extension AppModel {
     func deleteFromDrive(_ files: [DriveFile]) {
         guard !isCleaning, let first = files.first else { return }
         let notes = Dictionary(movedNotes.map { ($0.originalPath, $0) }, uniquingKeysWith: { a, _ in a })
+        let known = expectedHashes()
         runDriveJob(.deleteFromDrive, title: "Deleting from \(first.driveName)", driveName: first.driveName,
                     entries: files.map { DriveJob.Entry(id: $0.path, title: $0.title, bytes: $0.bytes) }) { index, job in
             let file = files[index]
@@ -341,7 +465,7 @@ extension AppModel {
                     last = now
                     Task { @MainActor in job.progress(index, phase: .checking, bytes: bytes, of: file.bytes) }
                 }
-                let expected = Sidecar.read(for: file.path)?.hash ?? (try? DriveMover.hash(file.path, stop: job.stop).hash)
+                let expected = known[file.path] ?? Sidecar.hash(for: file.path) ?? (try? DriveMover.hash(file.path, stop: job.stop).hash)
                 guard let expected, let found = try? DriveMover.hash(file.macPath, stop: job.stop, progress: report) else {
                     return .failed(job.stop.value ? "Stopped" : "Couldn't read it")
                 }
@@ -359,7 +483,42 @@ extension AppModel {
         } after: { job in
             let done = Set(job.entries.filter { if case .done = $0.step { true } else { false } }.map(\.id))
             self.driveSelection.removeAll { done.contains($0.path) }
+            self.forgetCopies(done)
         }
+    }
+
+    // MARK: Hashes, kept on the Mac
+
+    /// What files on Backup's drive should hash to, by where they are on it now: from the notes of what was moved there, and
+    /// Backup's record of what was copied.
+    func expectedHashes() -> [String: String] {
+        var out: [String: String] = [:]
+        for note in movedNotes {
+            if let drive = drive(of: note) { out[note.pathOnDrive(mountedAt: drive.mountPath)] = note.sha256 }
+        }
+        if let destination = backup.destination, let drive = connected(destination.drive) {
+            for copy in backup.copies ?? [] where copy.driveID == drive.id { out[drive.mountPath + "/" + copy.path] = copy.sha256 }
+        }
+        return out
+    }
+
+    /// Keeps the hash of a file copied to a drive, which leaves no note.
+    func recordCopy(_ target: String, on drive: DriveInfo, hash: String, size: UInt64) {
+        let path = BackupPaths.fromDriveTop(target, mount: drive.mountPath)
+        var copies = (backup.copies ?? []).filter { !($0.driveID == drive.id && $0.path == path) }
+        copies.append(CopiedFile(driveID: drive.id, path: path, sha256: hash, size: size, copied: Date()))
+        backup.copies = copies
+        saveBackup()
+    }
+
+    /// Forgets copies that are gone from the drive, by where they were on it.
+    func forgetCopies(_ paths: Set<String>) {
+        guard let drive = destinationDrive, var copies = backup.copies, !paths.isEmpty else { return }
+        let before = copies.count
+        copies.removeAll { $0.driveID == drive.id && paths.contains(drive.mountPath + "/" + $0.path) }
+        guard copies.count != before else { return }
+        backup.copies = copies.isEmpty ? nil : copies
+        saveBackup()
     }
 
     // MARK: What can be done with what's selected
@@ -373,6 +532,8 @@ extension AppModel {
         var files: Int
         var bytes: UInt64
         var blocked: String?
+        /// When it's for some of what's selected, not all: then it says how many.
+        var partial = false
         var id: String { kind.rawValue }
         var detail: String { (files == 1 ? "1 file" : "\(files) files") + " · " + formatBytes(bytes) }
     }
@@ -389,8 +550,10 @@ extension AppModel {
             // What would go now, or while it can't, everything that's selected.
             let going = ready.problem == nil ? ready.items : items
             let goingBytes = going.reduce(UInt64(0)) { $0 &+ $1.bytes }
-            out.append(BackupAction(kind: .move, title: "Move to \(drive)", files: going.count, bytes: goingBytes, blocked: ready.problem))
-            out.append(BackupAction(kind: .copy, title: "Copy to \(drive)", files: going.count, bytes: goingBytes, blocked: ready.problem))
+            out.append(BackupAction(kind: .move, title: "Move to \(drive)", files: going.count, bytes: goingBytes, blocked: ready.problem,
+                                    partial: going.count < items.count))
+            out.append(BackupAction(kind: .copy, title: "Copy to \(drive)", files: going.count, bytes: goingBytes, blocked: ready.problem,
+                                    partial: going.count < items.count))
             out.append(BackupAction(kind: .keep, title: "Keep on Mac", files: items.count, bytes: bytes))
         }
         let picks = driveSelection
@@ -398,7 +561,8 @@ extension AppModel {
             let unplugged = destinationDrive == nil ? "Connect \(first.driveName)" : nil
             let back = picks.filter { $0.place == .onlyDrive || $0.place == .moved }
             if !back.isEmpty {
-                out.append(BackupAction(kind: .copyToMac, title: "Copy to Mac", files: back.count, bytes: back.reduce(0) { $0 &+ $1.bytes }, blocked: unplugged))
+                out.append(BackupAction(kind: .copyToMac, title: "Copy to Mac", files: back.count, bytes: back.reduce(0) { $0 &+ $1.bytes }, blocked: unplugged,
+                                        partial: back.count < picks.count))
             }
             let bytes = picks.reduce(UInt64(0)) { $0 &+ $1.bytes }
             out.append(BackupAction(kind: .verify, title: "Verify", files: picks.count, bytes: bytes, blocked: unplugged))
@@ -457,9 +621,13 @@ extension AppModel {
     func backupPlanned() -> RingLayout.Planner {
         // Found in the picture that's drawn, whose numbers may not be the real map's.
         guard let tree, !backup.items.isEmpty || !driveSelection.isEmpty else { return { _ in false } }
-        var nodes = backup.items.compactMap { tree.find(visible: $0.path) ?? tree.find(path: $0.path) }
+        let showsBoth = pair?.tree === tree
+        // On both disks the Mac's files are found by where they are from the folder; the picture has its own numbers.
+        var nodes = backup.items.compactMap { item in
+            showsBoth ? pair?.macNode(for: item.path) : tree.find(visible: item.path) ?? tree.find(path: item.path)
+        }
         // And on the drive's half, what's picked there.
-        if let pair, pair.tree === tree {
+        if let pair, showsBoth {
             nodes += driveSelection.compactMap { file in
                 file.path.hasPrefix(pair.drivePath + "/") ? pair.driveNodes[String(file.path.dropFirst(pair.drivePath.count + 1))] : nil
             }

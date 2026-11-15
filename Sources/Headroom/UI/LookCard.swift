@@ -4,7 +4,7 @@ import QuickLookThumbnailing
 import QuickLookUI
 import SwiftUI
 
-/// The card Space opens: what something is, what it's like, and what you can do about it. It fills its own window, which
+/// The card Shift-Space opens: what something is, what it's like, and what you can do about it. It fills its own window, which
 /// `LookPanel` keeps.
 struct LookCard: View {
     let model: AppModel
@@ -92,7 +92,7 @@ struct LookCard: View {
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
-                .help("Close (Space)")
+                .help("Close (Esc)")
                 Text(tree.sizeText(node))
                     .font(.system(size: 20, weight: .semibold, design: .rounded).monospacedDigit())
                     .foregroundStyle(.white.opacity(0.95))

@@ -2,8 +2,10 @@ import Darwin
 import Foundation
 
 /// Where a file is, seen from both sides of Backup: the folder you're in on the Mac and the same folder on the drive.
-enum PairPlace: Int, CaseIterable, Sendable {
+enum PairPlace: Int, CaseIterable, Codable, Sendable {
     case both, onlyMac, onlyDrive, moved, differs, missing
+    /// On this Mac, and not something Backup moves: under `BackupState.smallest`, or part of macOS or an app.
+    case leftOut
 
     func title(drive: String) -> String {
         switch self {
@@ -13,11 +15,10 @@ enum PairPlace: Int, CaseIterable, Sendable {
         case .moved: "Moved to \(drive)"
         case .differs: "Different on each"
         case .missing: "Missing from \(drive)"
+        case .leftOut: "Not for Backup"
         }
     }
 
-    /// Its colour on the ring, in linear Display P3: green where it's safe on both, amber where only the Mac has it, blue
-    /// where only the drive has it, violet for what was moved, red for what doesn't match or is gone.
     /// Its place in the order things are drawn inside a folder.
     var rank: UInt8 {
         switch self {
@@ -25,9 +26,13 @@ enum PairPlace: Int, CaseIterable, Sendable {
         case .onlyMac, .onlyDrive: 1
         case .moved: 2
         case .differs, .missing: 3
+        case .leftOut: 4
         }
     }
 
+    /// Its colour on the ring, in linear Display P3: green where it's safe on both, amber where only the Mac has it, blue
+    /// where only the drive has it, violet for what was moved, red for what doesn't match or is gone, grey for what Backup
+    /// doesn't take.
     var colour: SIMD3<Float> {
         switch self {
         case .both: SIMD3(0.10, 0.52, 0.27)
@@ -35,12 +40,13 @@ enum PairPlace: Int, CaseIterable, Sendable {
         case .onlyDrive: SIMD3(0.16, 0.36, 0.92)
         case .moved: SIMD3(0.46, 0.30, 0.95)
         case .differs, .missing: SIMD3(0.86, 0.16, 0.16)
+        case .leftOut: SIMD3(0.27, 0.28, 0.32)
         }
     }
 }
 
 /// A file on the drive's half, selected to copy back, check or delete: where it is, and where it goes on the Mac.
-struct DriveFile: Identifiable, Equatable, Sendable {
+struct DriveFile: Identifiable, Equatable, Codable, Sendable {
     var path: String
     var macPath: String
     var bytes: UInt64
@@ -78,15 +84,46 @@ struct PairPicture {
     let online: Bool
     let readAt: Date?
 
+    /// The folder in the map the Mac's half is of, and for each thing on that half the thing in the map it's a copy of.
+    let realFolder: UInt32
+    let realOf: [UInt32: UInt32]
+    /// Where each thing on either half is, from the folder, and what's there on each half.
+    let relOf: [UInt32: String]
+    let macByRel: [String: UInt32]
+    let driveByRel: [String: UInt32]
+
+    /// A path on the Mac, from one from the folder.
+    func onMac(_ rel: String) -> String {
+        let visible = PathMath.visible(macPath)
+        return rel.isEmpty ? visible : (visible == "/" ? "/" + rel : visible + "/" + rel)
+    }
+
     /// The paths on the Mac of the files in one place.
     func macPaths(in place: PairPlace) -> [String] {
-        macRel.compactMap { places[$0.key] == place ? macPath + "/" + $0.value : nil }
+        macRel.compactMap { places[$0.key] == place ? onMac($0.value) : nil }
+    }
+
+    /// Whether a thing is on the drive's half.
+    func isOnDrive(_ node: UInt32) -> Bool { node == driveSide || tree.isInside(node, driveSide) }
+
+    /// The same thing on the other half, when it's there.
+    func counterpart(_ node: UInt32) -> UInt32? {
+        guard let rel = relOf[node] else { return nil }
+        let other = isOnDrive(node) ? macByRel[rel] : driveByRel[rel]
+        return other == node ? nil : other
+    }
+
+    /// A file on the Mac, on the Mac's half.
+    func macNode(for path: String) -> UInt32? {
+        let visible = PathMath.visible(path), folder = PathMath.visible(macPath)
+        let rel = folder == "/" ? String(visible.dropFirst()) : (visible.hasPrefix(folder + "/") ? String(visible.dropFirst(folder.count + 1)) : nil)
+        return rel.flatMap { macByRel[$0] }
     }
 
     /// A file on the drive's half, as it's selected.
     func driveFile(_ node: UInt32) -> DriveFile? {
         guard let rel = driveRel[node] else { return nil }
-        return DriveFile(path: drivePath + "/" + rel, macPath: macPath + "/" + rel, bytes: driveSizes[node] ?? tree.nodes[Int(node)].bytes,
+        return DriveFile(path: drivePath + "/" + rel, macPath: onMac(rel), bytes: driveSizes[node] ?? tree.nodes[Int(node)].bytes,
                          place: places[node] ?? .onlyDrive, driveName: driveName)
     }
 
@@ -102,9 +139,13 @@ struct PairPicture {
         else if node == macSide { colour = SIMD3(0.30, 0.31, 0.36) }
         else if node == driveSide { colour = SIMD3(0.24, 0.28, 0.36) }
         else { colour = SIMD3(0.20, 0.21, 0.25) }
-        // The drive's half, drawn from what was read there last, steps back.
-        if !online, node == driveSide || tree.isInside(node, driveSide) { colour = colour * 0.45 + SIMD3(0.11, 0.115, 0.13) }
-        return colour
+        return dimmed(colour, node)
+    }
+
+    /// The drive's half, drawn from what was read there last, steps back.
+    func dimmed(_ colour: SIMD3<Float>, _ node: UInt32) -> SIMD3<Float> {
+        guard !online, node == driveSide || tree.isInside(node, driveSide) else { return colour }
+        return colour * 0.45 + SIMD3(0.11, 0.115, 0.13)
     }
 
     /// `online` reads the drive; otherwise its half comes from what was read there last, kept under `listingID` with paths
@@ -113,7 +154,8 @@ struct PairPicture {
                       ghosts: Bool, online: Bool = true, listingID: String? = nil, mount: String? = nil, stop: LockedFlag? = nil) -> PairPicture? {
         let builder = Builder()
         let root = builder.add(parent: 0, name: "This Mac and \(driveName)", flags: NodeFlag.synthetic | NodeFlag.directory, isRoot: true)
-        let mac = builder.add(parent: root, name: macPath, flags: NodeFlag.anchor | NodeFlag.directory | NodeFlag.projects)
+        // At the top of the disk the Mac's half is the disk itself, named as the map's own top is, so paths read from it are real.
+        let mac = builder.add(parent: root, name: macPath == "/" ? "" : macPath, flags: NodeFlag.anchor | NodeFlag.directory | NodeFlag.projects)
         let drive = builder.add(parent: root, name: drivePath, flags: NodeFlag.anchor | NodeFlag.directory)
         let tree = builder.tree
         tree.displayNames[mac] = "This Mac"
@@ -124,51 +166,12 @@ struct PairPicture {
         tree.rootPath = macPath
         tree.scanID = UUID()
 
-        // The Mac's side, from the map: nothing on the disk is read again.
-        var macFiles: [String: (node: UInt32, size: UInt64)] = [:]
-        var copied: [UInt32: UInt32] = [macFolder: mac]
-        func copy(_ from: UInt32, into: UInt32, rel: String) {
-            for child in real.children(from) {
-                if stop?.value == true { return }
-                let n = real.nodes[Int(child)]
-                if n.flags & (NodeFlag.gone | NodeFlag.synthetic) != 0 || real.isGhost(child) { continue }
-                let name = real.rawName(child)
-                let path = rel.isEmpty ? name : rel + "/" + name
-                if n.has(NodeFlag.directory) {
-                    if builder.count >= Self.most {
-                        // Too much to draw it all: the folder is one piece, its size as it is.
-                        _ = builder.add(parent: into, name: name, flags: 0, bytes: real.totals[Int(child)], kind: real.dominantKind(child), modTime: real.newest[Int(child)])
-                        continue
-                    }
-                    let id = builder.add(parent: into, name: name, flags: NodeFlag.directory, bytes: n.bytes, modTime: n.modTime, files: n.fileCount)
-                    copied[child] = id
-                    copy(child, into: id, rel: path)
-                } else {
-                    let id = builder.add(parent: into, name: name, flags: n.flags & NodeFlag.alias, bytes: n.bytes, alias: n.aliasBytes,
-                                         kind: Kind(rawValue: n.kind) ?? .other, modTime: n.modTime)
-                    var info = stat()
-                    let size = lstat(macPath + "/" + path, &info) == 0 ? UInt64(info.st_size) : n.bytes
-                    macFiles[path] = (id, size)
-                }
-            }
-        }
-        copy(macFolder, into: mac, rel: "")
-
-        // Files moved off the Mac, from their notes, where they were.
-        var movedRel: [String: UInt32] = [:]
-        var ghostBytes: UInt64 = 0
-        for note in notes where PathMath.isInside(note.originalPath, macPath) && note.originalPath != macPath {
-            let rel = String(note.originalPath.dropFirst(macPath.count + 1))
-            movedRel[rel] = 0
-            guard ghosts else { continue }
-            let folder = (note.notePath as NSString).deletingLastPathComponent
-            let realFolder = real.find(path: folder) ?? real.find(visible: folder)
-            guard let into = realFolder.flatMap({ copied[$0] }) else { continue }
-            let id = builder.add(parent: into, name: note.name, flags: 0, bytes: note.size, kind: .other, modTime: UInt32(clamping: Int(note.moved.timeIntervalSince1970)))
-            tree.ghosts[id] = note
-            ghostBytes &+= note.size
-            if tree.ghostBase == .max { tree.ghostBase = id }
-            movedRel[rel] = id
+        // Where things are from the folder, by the paths you see: the drive's side is named that way.
+        let visibleMac = PathMath.visible(macPath)
+        func relative(_ visible: String) -> String? {
+            if visibleMac == "/" { return visible == "/" ? "" : (visible.hasPrefix("/") ? String(visible.dropFirst()) : nil) }
+            if visible == visibleMac { return "" }
+            return visible.hasPrefix(visibleMac + "/") ? String(visible.dropFirst(visibleMac.count + 1)) : nil
         }
 
         // The drive's side: read from the drive, or while it's unplugged, from what was read there last.
@@ -176,35 +179,90 @@ struct PairPicture {
         var readAt: Date?
         let fromTop = mount.map { BackupPaths.fromDriveTop(drivePath, mount: $0) }
         if online {
-            let skip: Set<String> = [".DS_Store", ".Trashes", ".fseventsd", ".Spotlight-V100", ".TemporaryItems", ".DocumentRevisions-V100"]
-            func walk(_ path: String, rel: String) {
-                guard let names = try? FileManager.default.contentsOfDirectory(atPath: path) else { return }
-                for name in names {
-                    if stop?.value == true { return }
-                    if skip.contains(name) || name.hasPrefix("._") || name.hasSuffix(".hrpart") { continue }
-                    let full = path + "/" + name
-                    let inside = rel.isEmpty ? name : rel + "/" + name
-                    var info = stat()
-                    guard lstat(full, &info) == 0 else { continue }
-                    let kind = info.st_mode & S_IFMT
-                    if kind == S_IFDIR {
-                        walk(full, rel: inside)
-                    } else if kind == S_IFREG {
-                        found[inside] = DriveListing.File(size: UInt64(max(info.st_size, 0)), allocated: UInt64(max(info.st_blocks, 0)) * 512,
-                                                          modified: UInt32(clamping: Int(info.st_mtimespec.tv_sec)))
-                    }
-                }
-            }
-            walk(drivePath, rel: "")
-            if stop?.value == true { return nil }
+            guard let read = DriveListings.read(drivePath, stop: stop) else { return nil }
+            found = read
             readAt = Date()
             if let listingID, let fromTop { DriveListings.record(listingID, folder: fromTop, files: found) }
         } else if let listingID, let fromTop, let listing = DriveListings.load(listingID), let when = listing.readAt(fromTop) {
             found = listing.files(under: fromTop)
             readAt = when
         }
+        // The Mac's side, from the map: nothing on the disk is read again but the size of a file the drive has too. Names,
+        // groups and anchors are as the map has them, so a path read from this picture is the real one.
+        var macFiles: [String: (node: UInt32, size: UInt64)] = [:]
+        var copied: [UInt32: UInt32] = [macFolder: mac]
+        var relOf: [UInt32: String] = [mac: ""]
+        var macByRel: [String: UInt32] = ["": mac]
+        func copy(_ from: UInt32, into: UInt32, rel: String) {
+            var folders: [(real: UInt32, id: UInt32, rel: String)] = []
+            // Everything in a folder first, then what's inside each: the anchors at the top stay among the first nodes.
+            for child in real.children(from) {
+                if stop?.value == true { return }
+                let n = real.nodes[Int(child)]
+                if n.flags & (NodeFlag.gone | NodeFlag.free) != 0 || real.isGhost(child) { continue }
+                let name = real.rawName(child)
+                // The map's own top, where it's the folder itself: what's in it goes straight into the Mac's half.
+                if n.has(NodeFlag.anchor), relative(PathMath.visible(name)) == "" {
+                    copied[child] = into
+                    folders.append((child, into, rel))
+                    continue
+                }
+                let isGroup = n.has(NodeFlag.synthetic) && !n.has(NodeFlag.anchor)
+                // An anchor is named by its own path; a group of macOS's own parts adds nothing to the path.
+                let path: String? = n.has(NodeFlag.anchor) ? relative(PathMath.visible(name)) : isGroup ? nil : (rel.isEmpty ? name : rel + "/" + name)
+                let kept = n.flags & (NodeFlag.anchor | NodeFlag.synthetic | NodeFlag.hidden | NodeFlag.locked | NodeFlag.alias)
+                let id: UInt32
+                if n.firstChild != 0, builder.count < Self.most {
+                    id = builder.add(parent: into, name: name, flags: kept | NodeFlag.directory, bytes: n.bytes, modTime: n.modTime, files: n.fileCount)
+                    folders.append((child, id, path ?? rel))
+                } else if n.firstChild != 0 || n.has(NodeFlag.directory) || isGroup {
+                    // Too much to draw it all, or a part drawn whole: one piece, its size as it is.
+                    id = builder.add(parent: into, name: name, flags: kept, bytes: real.totals[Int(child)], kind: real.dominantKind(child), modTime: real.newest[Int(child)])
+                } else {
+                    id = builder.add(parent: into, name: name, flags: kept, bytes: n.bytes, alias: n.aliasBytes, kind: Kind(rawValue: n.kind) ?? .other, modTime: n.modTime)
+                    if let path {
+                        // Compared by what the file says it holds, read only when the drive has one by the same path. A second path
+                        // of a hard link or a clone has its bytes counted elsewhere on the map, and holds them all the same.
+                        var size = max(n.bytes, n.aliasBytes)
+                        if found[path] != nil {
+                            var info = stat()
+                            if lstat(visibleMac == "/" ? "/" + path : visibleMac + "/" + path, &info) == 0 { size = UInt64(max(info.st_size, 0)) }
+                        }
+                        macFiles[path] = (id, size)
+                    }
+                }
+                if let display = real.displayNames[child] { tree.displayNames[id] = display }
+                copied[child] = id
+                if let path {
+                    relOf[id] = path
+                    if macByRel[path] == nil { macByRel[path] = id }
+                }
+            }
+            for folder in folders { copy(folder.real, into: folder.id, rel: folder.rel) }
+        }
+        copy(macFolder, into: mac, rel: "")
+
+        // Files moved off the Mac, from their notes, where they were.
+        var movedRel: [String: UInt32] = [:]
+        var ghostBytes: UInt64 = 0
+        for note in notes {
+            guard let rel = relative(PathMath.visible(note.originalPath)), !rel.isEmpty else { continue }
+            movedRel[rel] = 0
+            guard ghosts else { continue }
+            let folder = (note.notePath as NSString).deletingLastPathComponent
+            let realFolder = real.find(path: folder) ?? real.find(visible: folder)
+            guard let into = realFolder.flatMap({ copied[$0] }) else { continue }
+            let id = builder.add(parent: into, name: note.name, flags: 0, bytes: note.size, kind: .other, modTime: UInt32(clamping: Int(note.moved.timeIntervalSince1970)))
+            tree.ghosts[id] = note
+            relOf[id] = rel
+            ghostBytes &+= note.size
+            if tree.ghostBase == .max { tree.ghostBase = id }
+            movedRel[rel] = id
+        }
+
         var driveFiles: [String: (node: UInt32, size: UInt64)] = [:]
         var driveFolders: [String: UInt32] = ["": drive]
+        relOf[drive] = ""
         func driveFolder(_ rel: String) -> UInt32 {
             if let id = driveFolders[rel] { return id }
             let parent = driveFolder((rel as NSString).deletingLastPathComponent)
@@ -212,6 +270,7 @@ struct PairPicture {
             guard builder.count < Self.most else { return parent }
             let id = builder.add(parent: parent, name: (rel as NSString).lastPathComponent, flags: NodeFlag.directory)
             driveFolders[rel] = id
+            relOf[id] = rel
             return id
         }
         for (rel, file) in found.sorted(by: { $0.key < $1.key }) {
@@ -226,6 +285,7 @@ struct PairPicture {
                                  kind: Array(name.utf8).withUnsafeBufferPointer { Kind(rawValue: ExtensionTable.shared.kind(name: $0.baseAddress!, length: $0.count)) ?? .other },
                                  modTime: file.modified)
             driveFiles[rel] = (id, file.size)
+            relOf[id] = rel
         }
 
         // Where each file is.
@@ -234,7 +294,9 @@ struct PairPicture {
             if let theirs = driveFiles[rel] {
                 places[mine.node] = theirs.size == mine.size ? .both : .differs
             } else {
-                places[mine.node] = .onlyMac
+                // What Backup wouldn't move isn't missing from the drive: it's left out.
+                let path = visibleMac == "/" ? "/" + rel : visibleMac + "/" + rel
+                places[mine.node] = mine.size >= BackupState.smallest && Safety.canTrash(path) ? .onlyMac : .leftOut
             }
         }
         for (rel, theirs) in driveFiles {
@@ -298,7 +360,9 @@ struct PairPicture {
                            places: places, counts: counts, macBytes: macTotal &- min(ghostBytes, macTotal), driveBytes: tree.totals[Int(drive)],
                            driveRel: driveFiles.reduce(into: [:]) { $0[$1.value.node] = $1.key }, driveNodes: driveFiles.mapValues(\.node),
                            driveSizes: driveFiles.reduce(into: [:]) { $0[$1.value.node] = $1.value.size },
-                           macRel: macFiles.reduce(into: [:]) { $0[$1.value.node] = $1.key }, online: online, readAt: readAt)
+                           macRel: macFiles.reduce(into: [:]) { $0[$1.value.node] = $1.key }, online: online, readAt: readAt,
+                           realFolder: macFolder, realOf: copied.reduce(into: [:]) { $0[$1.value] = $1.key }, relOf: relOf, macByRel: macByRel,
+                           driveByRel: driveFolders.merging(driveFiles.mapValues(\.node)) { a, _ in a })
     }
 
     /// Writes nodes and their names into a new map, as a scan would.
