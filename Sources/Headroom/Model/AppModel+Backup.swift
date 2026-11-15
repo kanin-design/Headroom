@@ -318,16 +318,37 @@ extension AppModel {
     }
 
     /// Files on the drive go to the drive's Trash, with the hash beside each. A moved file's note goes too: it would point
-    /// at nothing. Files that aren't on this Mac are asked about first, by the panel.
+    /// at nothing. Both disks are read again first, not taken from the picture: a file the Mac was to keep a copy of only goes
+    /// when the Mac's copy is there and matches, by the hash beside the drive's copy, or else by reading both. Files that
+    /// aren't on this Mac are asked about first, by the panel.
     func deleteFromDrive(_ files: [DriveFile]) {
         guard !isCleaning, let first = files.first else { return }
         let notes = Dictionary(movedNotes.map { ($0.originalPath, $0) }, uniquingKeysWith: { a, _ in a })
         runDriveJob(.deleteFromDrive, title: "Deleting from \(first.driveName)", driveName: first.driveName,
-                    entries: files.map { DriveJob.Entry(id: $0.path, title: $0.title, bytes: $0.bytes) }) { index, _ in
+                    entries: files.map { DriveJob.Entry(id: $0.path, title: $0.title, bytes: $0.bytes) }) { index, job in
             let file = files[index]
             guard Cleaner.mayAct(on: file.path) else { return .failed(DriveMover.Failure.notAllowed.text) }
+            var there = stat()
+            guard lstat(file.path, &there) == 0 else { return .failed("Not on \(file.driveName) any more") }
+            if file.place == .both {
+                var mine = stat()
+                guard lstat(file.macPath, &mine) == 0, mine.st_mode & S_IFMT == S_IFREG else { return .failed("Not on this Mac any more, so it stays") }
+                guard mine.st_size == there.st_size else { return .failed("This Mac's copy is different now, so it stays") }
+                var last = Date.distantPast
+                let report: (UInt64) -> Void = { bytes in
+                    let now = Date()
+                    guard now.timeIntervalSince(last) > 0.1 else { return }
+                    last = now
+                    Task { @MainActor in job.progress(index, phase: .checking, bytes: bytes, of: file.bytes) }
+                }
+                let expected = Sidecar.read(for: file.path)?.hash ?? (try? DriveMover.hash(file.path, stop: job.stop).hash)
+                guard let expected, let found = try? DriveMover.hash(file.macPath, stop: job.stop, progress: report) else {
+                    return .failed(job.stop.value ? "Stopped" : "Couldn't read it")
+                }
+                guard found.hash == expected else { return .failed("This Mac's copy is different, so it stays") }
+            }
             do {
-                if FileManager.default.fileExists(atPath: file.path) { _ = try Cleaner.trash(file.path) }
+                _ = try Cleaner.trash(file.path)
                 let beside = Sidecar.path(for: file.path)
                 if FileManager.default.fileExists(atPath: beside) { _ = try? Cleaner.trash(beside) }
             } catch {
@@ -335,7 +356,83 @@ extension AppModel {
             }
             if file.place == .moved, let note = notes[file.macPath], Cleaner.mayAct(on: note.notePath) { unlink(note.notePath) }
             return .done("In \(file.driveName)'s Trash")
-        } after: { _ in }
+        } after: { job in
+            let done = Set(job.entries.filter { if case .done = $0.step { true } else { false } }.map(\.id))
+            self.driveSelection.removeAll { done.contains($0.path) }
+        }
+    }
+
+    // MARK: What can be done with what's selected
+
+    /// One thing Backup can do with what's selected, and how many files and how much it's for. `blocked` says why it can't
+    /// run now.
+    struct BackupAction: Identifiable {
+        enum Kind: String { case move, copy, keep, copyToMac, verify, delete }
+        var kind: Kind
+        var title: String
+        var files: Int
+        var bytes: UInt64
+        var blocked: String?
+        var id: String { kind.rawValue }
+        var detail: String { (files == 1 ? "1 file" : "\(files) files") + " · " + formatBytes(bytes) }
+    }
+
+    /// What fits the selection: for files on this Mac, Move, Copy and Keep on Mac; for files picked on the drive's half, Copy
+    /// to Mac (for what this Mac doesn't have), Verify and Delete.
+    var backupActions: [BackupAction] {
+        var out: [BackupAction] = []
+        let drive = backup.destination?.drive.name ?? "Drive"
+        let items = backup.items
+        if !items.isEmpty {
+            let ready = backupReady()
+            let bytes = items.reduce(UInt64(0)) { $0 &+ $1.bytes }
+            // What would go now, or while it can't, everything that's selected.
+            let going = ready.problem == nil ? ready.items : items
+            let goingBytes = going.reduce(UInt64(0)) { $0 &+ $1.bytes }
+            out.append(BackupAction(kind: .move, title: "Move to \(drive)", files: going.count, bytes: goingBytes, blocked: ready.problem))
+            out.append(BackupAction(kind: .copy, title: "Copy to \(drive)", files: going.count, bytes: goingBytes, blocked: ready.problem))
+            out.append(BackupAction(kind: .keep, title: "Keep on Mac", files: items.count, bytes: bytes))
+        }
+        let picks = driveSelection
+        if let first = picks.first {
+            let unplugged = destinationDrive == nil ? "Connect \(first.driveName)" : nil
+            let back = picks.filter { $0.place == .onlyDrive || $0.place == .moved }
+            if !back.isEmpty {
+                out.append(BackupAction(kind: .copyToMac, title: "Copy to Mac", files: back.count, bytes: back.reduce(0) { $0 &+ $1.bytes }, blocked: unplugged))
+            }
+            let bytes = picks.reduce(UInt64(0)) { $0 &+ $1.bytes }
+            out.append(BackupAction(kind: .verify, title: "Verify", files: picks.count, bytes: bytes, blocked: unplugged))
+            out.append(BackupAction(kind: .delete, title: "Delete from \(first.driveName)", files: picks.count, bytes: bytes, blocked: unplugged))
+        }
+        return out
+    }
+
+    /// Runs an action. Delete asks first, in the panel, for anything this Mac doesn't also have.
+    func perform(_ action: BackupAction) {
+        guard action.blocked == nil, !isCleaning else { return }
+        switch action.kind {
+        case .move: runBackup(copyOnly: false)
+        case .copy: runBackup(copyOnly: true)
+        case .keep: for item in backup.items { keepOnMac(item.path, true) }
+        case .copyToMac: copyToMac(driveSelection.filter { $0.place == .onlyDrive || $0.place == .moved })
+        case .verify: checkOnDrive(driveSelection)
+        case .delete: deleteFromDrive(driveSelection)
+        }
+    }
+
+    /// Whether Delete needs a yes first: something picked on the drive isn't on this Mac too.
+    var deleteNeedsAsking: Bool { driveSelection.contains { $0.place != .both } }
+
+    /// Selects everything in the folder that's only on this Mac, as far as Backup takes it: files of at least
+    /// `BackupState.smallest`.
+    func selectOnlyOnMac() {
+        guard let pair, pair.tree === tree else { return }
+        let picks = selectForBackup(pair.macPaths(in: .onlyMac))
+        let added = picks.filter { $0.outcome == .selected }.count
+        let small = picks.filter { if case .refused(let why) = $0.outcome { why.hasPrefix("Smaller") } else { false } }.count
+        var text = added == 1 ? "Selected 1 file" : "Selected \(added) files"
+        if small > 0 { text += " · \(small) under \(formatBytes(BackupState.smallest)) left out" }
+        showTip(text)
     }
 
     func keepOnMac(_ path: String, _ keep: Bool) {

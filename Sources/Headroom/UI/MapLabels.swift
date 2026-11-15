@@ -83,6 +83,8 @@ enum LabelPlacer {
         guard R > 0, !layout.pieces.isEmpty else { return [] }
         var out: [MapLabel] = []
         var labelled = Set<Int>()
+        // A folder drawn as several stretches is named once.
+        var named = Set<UInt32>()
         let cx = ring.center.x, cy = ring.center.y
 
         func point(_ angle: CGFloat, _ radius: CGFloat) -> CGPoint {
@@ -90,11 +92,16 @@ enum LabelPlacer {
         }
 
         // Inside the pieces, biggest first. Only in the Map view: elsewhere most of the ring is dimmed on purpose.
-        let order = layout.pieces.indices.sorted { layout.pieces[$0].bytes > layout.pieces[$1].bytes }
+        // With both of Backup's sides, the two halves are named first, whatever they hold.
+        let order = layout.pieces.indices.sorted { a, b in
+            let pa = layout.pieces[a], pb = layout.pieces[b]
+            if tree.twoSides, (pa.ring == 0) != (pb.ring == 0) { return pa.ring == 0 }
+            return pa.bytes > pb.bytes
+        }
         if lens == .map || lens == .freeUp || lens == .backup {
             for i in order.prefix(160) {
                 let p = layout.pieces[i]
-                if p.isSmaller || p.ring > 3 { continue }
+                if p.isSmaller || p.ring > 3 || named.contains(p.node) { continue }
                 if lens == .freeUp && p.style != .free { continue }
                 let isFree = p.style == .free
                 // A ghost is drawn faint, whatever its colour, so its name is light like on the dark parts.
@@ -110,6 +117,7 @@ enum LabelPlacer {
                     out.append(MapLabel(id: p.key, pieceIndex: i, node: p.node, title: title, value: value, position: point(angle, rm),
                                         anchor: .zero, elbow: .zero, place: .inside, dark: !isFree && !isHidden && isBright(p.color), large: isFree))
                     labelled.insert(i)
+                    named.insert(p.node)
                     if out.count >= 36 { break }
                 }
             }
@@ -124,7 +132,7 @@ enum LabelPlacer {
             let total = Double(max(tree.totals[Int(layout.focus)], 1))
             for i in order.prefix(260) where !labelled.contains(i) {
                 let p = layout.pieces[i]
-                if p.isSmaller || p.style == .free || p.ring > 4 { continue }
+                if p.isSmaller || p.style == .free || p.ring > 4 || named.contains(p.node) { continue }
                 let share = Double(p.bytes) / total
                 if share < 0.015 { continue }
                 if p.ring == 0 && layout.focus == 0 { continue }
@@ -138,6 +146,7 @@ enum LabelPlacer {
                 }
                 if redundant { continue }
                 candidates.append(Candidate(index: i, title: model.displayName(p.node), value: tree.sizeText(p.node), score: share * (1 - 0.13 * Double(p.ring))))
+                named.insert(p.node)
             }
         case .changes:
             for row in model.changeRows.prefix(18) {

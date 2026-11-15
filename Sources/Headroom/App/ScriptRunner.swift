@@ -266,7 +266,7 @@ enum ScriptRunner {
         "drives": .backup, "backupdrive": .backup, "backupselect": .backup, "backupdeselect": .backup, "backupmove": .backup, "backupcopy": .backup,
         "backupwait": .backup, "backupstate": .backup, "ghosts": .backup, "bringback": .backup, "verifymoved": .backup, "deletelast": .backup,
         "backupcandidates": .backup, "undomove": .backup, "driveside": .backup, "drivepick": .backup, "drivecopy": .backup,
-        "drivecheck": .backup, "drivedelete": .backup,
+        "drivecheck": .backup, "drivedelete": .backup, "selectonlymac": .backup, "backupactions": .backup,
     ]
 
     @MainActor
@@ -344,6 +344,12 @@ enum ScriptRunner {
             }
             model.toggleDriveFile(node, in: pair)
             print("drivepick: \(model.driveSelection.map { "\($0.title) (\($0.place))" }.joined(separator: ", "))")
+        case "selectonlymac":
+            model.selectOnlyOnMac()
+            print("selectonlymac: \(model.backup.items.count) selected, \(model.tip ?? "")")
+        case "backupactions":
+            for action in model.backupActions { print("  action \(action.title): \(action.detail)\(action.blocked.map { " (\($0))" } ?? "")") }
+            if let pair = model.pair { print("  pair online \(pair.online), read \(pair.readAt.map { "\($0)" } ?? "never")") }
         case "drivecopy":
             model.copyToMac(model.driveSelection)
         case "drivecheck":

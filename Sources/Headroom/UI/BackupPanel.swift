@@ -5,6 +5,7 @@ import SwiftUI
 struct BackupPanel: View {
     let model: AppModel
     @State private var confirmDelete: [MovedNote] = []
+    @State private var confirmDriveDelete: [DriveFile] = []
 
     var body: some View {
         ScrollView {
@@ -13,6 +14,7 @@ struct BackupPanel: View {
                 if let job = model.driveJob { DriveJobCard(model: model, job: job) }
                 selected
                 driveSelected
+                actions
                 candidates
                 moved
                 kept
@@ -33,6 +35,19 @@ struct BackupPanel: View {
         } message: {
             let bytes = confirmDelete.reduce(UInt64(0)) { $0 &+ $1.size }
             Text("It's the only copy. \(formatBytes(bytes)) goes to the drive's Trash.")
+        }
+        .alert(confirmDriveDelete.count == 1 ? "Delete “\(confirmDriveDelete.first?.title ?? "")” from \(confirmDriveDelete.first?.driveName ?? "the drive")?"
+                                             : "Delete \(confirmDriveDelete.count) files from \(confirmDriveDelete.first?.driveName ?? "the drive")?",
+               isPresented: Binding(get: { !confirmDriveDelete.isEmpty }, set: { if !$0 { confirmDriveDelete = [] } })) {
+            Button("Delete", role: .destructive) {
+                model.deleteFromDrive(confirmDriveDelete)
+                confirmDriveDelete = []
+            }
+            Button("Cancel", role: .cancel) { confirmDriveDelete = [] }
+        } message: {
+            let last = confirmDriveDelete.filter { $0.place != .both }.count
+            let trash = "\(confirmDriveDelete.first?.driveName ?? "the drive")'s Trash"
+            Text(last == confirmDriveDelete.count ? "Not on this Mac. Goes to \(trash)." : "\(last) aren't on this Mac. All go to \(trash).")
         }
     }
 
@@ -74,8 +89,8 @@ struct BackupPanel: View {
                 .controlSize(.mini)
                 .font(.system(size: 11.5))
                 .foregroundStyle(.white.opacity(0.7))
-                .disabled(model.destinationDrive == nil && !model.showDriveSide)
-            if let pair = model.pair { PairLegend(pair: pair) }
+                .disabled(model.backup.destination == nil && !model.showDriveSide)
+            if let pair = model.pair { PairLegend(model: model, pair: pair) }
         }
     }
 
@@ -113,6 +128,25 @@ struct BackupPanel: View {
                     }
                     .contextMenu {
                         Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: file.path)]) }
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: What can be done
+
+    @ViewBuilder
+    private var actions: some View {
+        let list = model.backupActions
+        if !list.isEmpty {
+            PanelSection(title: "Actions", trailing: nil) {
+                VStack(spacing: 6) {
+                    ForEach(list) { action in
+                        ActionCard(action: action, enabled: !model.isCleaning) {
+                            // Deleting what this Mac doesn't also have is asked about first.
+                            if action.kind == .delete, model.deleteNeedsAsking { confirmDriveDelete = model.driveSelection } else { model.perform(action) }
+                        }
                     }
                 }
             }
@@ -503,81 +537,33 @@ private struct FileBar: View {
 /// Backup's bar under the inspector: the Move button, which says where to, and what to do first when it can't.
 struct BackupBar: View {
     let model: AppModel
-    @State private var confirmDelete: [DriveFile] = []
 
     var body: some View {
-        let ready = model.backupReady()
         let count = model.backup.items.count
-        let picked = model.driveSelection
-        let drive = model.backup.destination?.drive.name ?? "Drive"
+        let actions = model.backupActions
+        // The one to press: Move for files on this Mac, otherwise what fits what's picked on the drive.
+        let main = actions.first { $0.kind == .move } ?? actions.first { $0.kind == .copyToMac } ?? actions.first { $0.kind == .verify }
         VStack(alignment: .leading, spacing: 8) {
             if let job = model.driveJob, job.isRunning {
                 Button("Stop") { job.stop.value = true }
                     .buttonStyle(SoftButton())
                     .frame(maxWidth: .infinity)
-            } else if count == 0, picked.isEmpty {
-                Button("Nothing selected") {}
-                    .disabled(true)
-                    .buttonStyle(GoButton(moves: true))
-            } else {
-                if count > 0 {
-                    HStack(spacing: 8) {
-                        Button {
-                            model.runBackup(copyOnly: false)
-                        } label: {
-                            Text(ready.problem ?? "Move \(formatBytes(ready.items.reduce(0) { $0 &+ $1.bytes })) to \(drive)")
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.8)
-                        }
-                        .buttonStyle(GoButton(moves: true))
-                        .disabled(ready.problem != nil || model.isCleaning)
-                        .help("Copy, verify, then move the original to the Trash")
-                        Menu {
-                            Button("Copy to \(drive)") { model.runBackup(copyOnly: true) }
-                                .disabled(ready.problem != nil || model.isCleaning)
-                        } label: {
-                            Image(systemName: "ellipsis")
-                        }
-                        .menuStyle(.button)
-                        .menuIndicator(.hidden)
-                        .buttonStyle(SoftButton())
-                        .fixedSize()
-                    }
-                    if ready.items.count < count, ready.problem == nil {
-                        Text("\(count - ready.items.count) can't move to \(drive)")
+            } else if let main {
+                Button {
+                    model.perform(main)
+                } label: {
+                    Text(main.blocked ?? (main.kind == .verify ? "Verify \(formatBytes(main.bytes))" : main.title.replacingOccurrences(of: " to ", with: " \(formatBytes(main.bytes)) to ")))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+                .buttonStyle(GoButton(moves: true))
+                .disabled(main.blocked != nil || model.isCleaning)
+                HStack {
+                    if main.kind == .move, main.blocked == nil, main.files < count {
+                        Text("\(count - main.files) can't move to \(model.backup.destination?.drive.name ?? "this drive")")
                             .font(.system(size: 11))
                             .foregroundStyle(Palette.amber)
                     }
-                }
-                if !picked.isEmpty {
-                    HStack(spacing: 8) {
-                        Button {
-                            model.copyToMac(picked)
-                        } label: {
-                            Text("Copy \(formatBytes(picked.reduce(0) { $0 &+ $1.bytes })) to Mac")
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.8)
-                        }
-                        .buttonStyle(GoButton(moves: true))
-                        .disabled(model.isCleaning)
-                        Menu {
-                            Button("Verify") { model.checkOnDrive(picked) }
-                            Divider()
-                            Button("Delete from \(picked[0].driveName)…", role: .destructive) {
-                                // What the Mac also has can go without asking; anything else is the last copy.
-                                if picked.allSatisfy({ $0.place == .both }) { model.deleteFromDrive(picked) } else { confirmDelete = picked }
-                            }
-                        } label: {
-                            Image(systemName: "ellipsis")
-                        }
-                        .menuStyle(.button)
-                        .menuIndicator(.hidden)
-                        .buttonStyle(SoftButton())
-                        .fixedSize()
-                        .disabled(model.isCleaning)
-                    }
-                }
-                HStack {
                     Spacer(minLength: 6)
                     Button("Deselect all") { Motion.animate(.snappy(duration: 0.2)) { model.clearBackup() } }
                         .buttonStyle(.plain)
@@ -585,33 +571,78 @@ struct BackupBar: View {
                         .foregroundStyle(.white.opacity(0.55))
                         .disabled(model.isCleaning)
                 }
+            } else {
+                Button("Nothing selected") {}
+                    .disabled(true)
+                    .buttonStyle(GoButton(moves: true))
             }
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.white.opacity(0.03))
-        .alert(confirmDelete.count == 1 ? "Delete “\(confirmDelete.first?.title ?? "")” from \(confirmDelete.first?.driveName ?? "the drive")?"
-                                        : "Delete \(confirmDelete.count) files from \(confirmDelete.first?.driveName ?? "the drive")?",
-               isPresented: Binding(get: { !confirmDelete.isEmpty }, set: { if !$0 { confirmDelete = [] } })) {
-            Button("Delete", role: .destructive) {
-                model.deleteFromDrive(confirmDelete)
-                confirmDelete = []
-            }
-            Button("Cancel", role: .cancel) { confirmDelete = [] }
-        } message: {
-            let last = confirmDelete.filter { $0.place != .both }.count
-            let trash = "\(confirmDelete.first?.driveName ?? "the drive")'s Trash"
-            Text(last == confirmDelete.count ? "Not on this Mac. Goes to \(trash)." : "\(last) aren't on this Mac. All go to \(trash).")
-        }
     }
 }
 
-/// What the colours of both sides mean, with how many files and how much each has. Each file is counted once.
+/// One action in the panel: what it does, for how many files and how much, or why it can't run now.
+private struct ActionCard: View {
+    let action: AppModel.BackupAction
+    let enabled: Bool
+    let run: () -> Void
+    @State private var isHovered = false
+
+    private var symbol: String {
+        switch action.kind {
+        case .move: "arrow.right.circle"
+        case .copy: "doc.on.doc"
+        case .keep: "pin"
+        case .copyToMac: "arrow.left.circle"
+        case .verify: "checkmark.shield"
+        case .delete: "trash"
+        }
+    }
+
+    var body: some View {
+        let isOn = enabled && action.blocked == nil
+        Button(action: run) {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(action.title + (action.kind == .delete ? "…" : ""))
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundStyle(action.kind == .delete ? Color(red: 1, green: 0.45, blue: 0.42) : .white.opacity(0.92))
+                    Text(action.blocked ?? action.detail)
+                        .font(.system(size: 11).monospacedDigit())
+                        .foregroundStyle(action.blocked == nil ? .white.opacity(0.5) : Palette.amber)
+                }
+                Spacer(minLength: 6)
+                Image(systemName: symbol)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.white.opacity(0.5))
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(.white.opacity(isHovered && isOn ? 0.09 : 0.05)))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!isOn)
+        .opacity(isOn ? 1 : 0.6)
+        .onHover { isHovered = $0 }
+    }
+}
+
+/// What the colours of both sides mean, with how many files and how much each has, counted once. What's only on this Mac
+/// can be selected from here. While the drive is unplugged, when its half was read.
 private struct PairLegend: View {
+    let model: AppModel
     let pair: PairPicture
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
+            if !pair.online {
+                Text(pair.readAt.map { "Last read " + LastUse.ago($0, now: Date()) } ?? "Not read yet")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Palette.amber)
+            }
             ForEach(PairPlace.allCases, id: \.self) { place in
                 if let count = pair.counts[place], count.files > 0 {
                     HStack(spacing: 7) {
@@ -621,6 +652,13 @@ private struct PairLegend: View {
                         Text(place.title(drive: pair.driveName))
                             .font(.system(size: 11.5))
                             .foregroundStyle(.white.opacity(0.8))
+                        if place == .onlyMac {
+                            Button("Select") { model.selectOnlyOnMac() }
+                                .buttonStyle(.plain)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(Color(red: 0.45, green: 0.66, blue: 1))
+                                .disabled(model.isCleaning)
+                        }
                         Spacer(minLength: 6)
                         Text("\(count.files) · \(formatBytes(count.bytes))")
                             .font(.system(size: 11).monospacedDigit())

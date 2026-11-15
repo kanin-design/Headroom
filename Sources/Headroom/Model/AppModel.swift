@@ -917,6 +917,8 @@ final class AppModel {
     func volumesChanged() {
         volumes = VolumeFacts.available()
         refreshDrives()
+        // Backup's drive plugged in or out: its half is read again, or drawn from what was read there last.
+        if showDriveSide, mode == .backup, let pair, pair.online != (backup.destination.flatMap { connected($0.drive) } != nil) { applyGhosts() }
         readOtherDisksQuietly()
         guard let volume, !volumes.contains(where: { $0.mountPath == volume.mountPath }), let boot = volumes.first else { return }
         switchVolume(boot)
@@ -1219,7 +1221,14 @@ final class AppModel {
 
     private func describe(_ p: Piece, index: Int, tree: DiskTree) -> HoverInfo {
         // Both sides: where it is. Which half it's in says which side you're pointing at.
-        if let pair, pair.tree === tree, !p.isSmaller, let place = pair.places[p.node] {
+        if let pair, pair.tree === tree, !p.isSmaller, var place = pair.places[p.node] {
+            // A folder cut into stretches: this stretch's place is that of what it's over.
+            let pieces = engine.layout.pieces
+            if index + 1 < pieces.count, pieces[index + 1].parent == Int32(index), pieces[index + 1].node != p.node,
+               engine.layout.piece(of: p.node) != index || (Int(p.end) < pieces.count && pieces[Int(p.end)].node == p.node),
+               let first = pair.places[pieces[index + 1].node] {
+                place = first
+            }
             return HoverInfo(pieceIndex: index, node: p.node, title: displayName(piece: p), bytes: p.bytes, share: "",
                              note: place.title(drive: pair.driveName), links: nil)
         }
@@ -1732,8 +1741,10 @@ extension AppModel {
     func applyGhosts() {
         guard let real = workTree else { return }
         let inBackup = mode == .backup && view == .map && !isCleaning && !real.isPartial
-        if inBackup, showDriveSide, let destination = backup.destination, let drive = connected(destination.drive) {
-            showPair(of: real, on: BackupDestination(drive: drive, folder: destination.folder))
+        if inBackup, showDriveSide, let destination = backup.destination {
+            // Unplugged, the drive's half is what was read there last.
+            let drive = connected(destination.drive)
+            showPair(of: real, on: drive.map { BackupDestination(drive: $0, folder: destination.folder) } ?? destination, online: drive != nil)
             return
         }
         pairTask?.cancel()
@@ -1769,21 +1780,22 @@ extension AppModel {
 
     /// The folder you're in and the same folder on Backup's drive, as two halves. The drive is read in the background; the
     /// picture goes on screen when it's ready, if it's still wanted.
-    private func showPair(of real: DiskTree, on destination: BackupDestination) {
+    private func showPair(of real: DiskTree, on destination: BackupDestination, online: Bool) {
         let realFocus = focusBeforePair ?? focus
         var folder = RingLayout.chainTail(tree: real, realFocus)
         if folder == 0 || real.nodes[Int(folder)].has(NodeFlag.synthetic) { folder = real.home }
         guard folder != 0, let raw = real.path(folder) else { return }
         let visible = PathMath.visible(raw)
         let drivePath = BackupPaths.onDrive(visible, under: destination.root)
-        if let pair, pair.macPath == raw, pair.drivePath == drivePath, tree === pair.tree { return }
+        if let pair, pair.macPath == raw, pair.drivePath == drivePath, pair.online == online, tree === pair.tree { return }
         pairTask?.cancel()
-        let notes = movedNotes, ghosts = showGhosts, name = destination.drive.name
+        let notes = movedNotes, ghosts = showGhosts, name = destination.drive.name, listing = destination.drive.id, mount = destination.drive.mountPath
         let stop = LockedFlag()
         pairTask = Task { [weak self] in
             await withTaskCancellationHandler {
                 let built = await Task.detached(priority: .userInitiated) {
-                    PairPicture.build(real: real, macFolder: folder, macPath: raw, drivePath: drivePath, driveName: name, notes: notes, ghosts: ghosts, stop: stop)
+                    PairPicture.build(real: real, macFolder: folder, macPath: raw, drivePath: drivePath, driveName: name, notes: notes, ghosts: ghosts,
+                                      online: online, listingID: listing, mount: mount, stop: stop)
                 }.value
                 guard let self, let built, !Task.isCancelled, self.workTree === real, self.mode == .backup, self.view == .map, self.showDriveSide, !self.isCleaning else { return }
                 if self.focusBeforePair == nil { self.focusBeforePair = self.focus }

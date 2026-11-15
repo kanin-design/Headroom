@@ -137,9 +137,12 @@ goes to the Trash, so Undo puts it back until you empty it. Each copy gets a `na
 check; the note, `name.hrmoved`, is plain text saying where the file went.
 
 **Show moved files** draws moved files where they were, even with the drive unplugged. **Compare with *drive*** splits
-the ring: this folder on the Mac on the left, on the drive on the right, coloured by where each file is. Select files on
-the drive's half to copy them to the Mac, verify them or delete them from the drive. From the Moved list you can move a
-file back, verify it or delete it from the drive. A file is on Free Up's list or Backup's, never both.
+the ring in two equal halves: this folder on the Mac on the left, on the drive on the right, coloured by where each file
+is. A folder with files in more than one place is drawn in one stretch per place. With the drive unplugged, its half is
+what was last read there, dimmed. Select files on either half; the panel lists what fits: Move, Copy, Keep on Mac, Copy to
+Mac, Verify, Delete. **Select** beside "Only on this Mac" picks everything the drive doesn't have. Delete reads both disks
+again first, and keeps the drive's copy if this Mac's isn't the same. From the Moved list you can move a file back,
+verify it or delete it from the drive. A file is on Free Up's list or Backup's, never both.
 
 ### Agents
 

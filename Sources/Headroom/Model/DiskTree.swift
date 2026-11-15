@@ -142,8 +142,12 @@ final class DiskTree: @unchecked Sendable {
     /// they're the nodes from `ghostBase` on. They have no name in the name table, and nothing on the disk at their path.
     var ghosts: [UInt32: MovedNote] = [:]
     var ghostBase = UInt32.max
-    /// The top level is drawn in the order it's linked, not biggest first: Backup's two sides keep the drive on the right.
-    var keepsTopOrder = false
+    /// Backup's two sides: the top is two equal halves, the drive's then the Mac's, each drawn even when it's empty, with no
+    /// band around the middle.
+    var twoSides = false
+    /// When set, what's in a folder is drawn in this order first, then biggest first, and a folder is cut into one stretch for
+    /// each run of the same order, over what it's made of: Backup's places, on both sides.
+    var order: [UInt32: UInt8] = [:]
     @inline(__always) func isGhost(_ id: UInt32) -> Bool { id >= ghostBase && ghosts[id] != nil }
 
     /// `statRows` for a copy of a tree whose rows are already packed, which needs no more room than they have.
@@ -261,7 +265,8 @@ final class DiskTree: @unchecked Sendable {
         copy.rootPath = rootPath
         copy.ghosts = ghosts
         copy.ghostBase = ghostBase
-        copy.keepsTopOrder = keepsTopOrder
+        copy.twoSides = twoSides
+        copy.order = order
         return copy
     }
 

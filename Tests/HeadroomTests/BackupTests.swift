@@ -12,6 +12,8 @@ final class BackupTests: XCTestCase {
         folder = NSHomeDirectory() + "/Library/Caches/HeadroomBackupTests-\(UUID().uuidString.prefix(8))"
         try FileManager.default.createDirectory(atPath: folder + "/Mac/Films", withIntermediateDirectories: true)
         try FileManager.default.createDirectory(atPath: folder + "/Drive", withIntermediateDirectories: true)
+        // What's read on a drive is kept here, not with the app's own.
+        DriveListings.folder = URL(fileURLWithPath: folder + "/listings")
     }
 
     override func tearDownWithError() throws {
@@ -291,5 +293,93 @@ final class BackupTests: XCTestCase {
         let after = try XCTUnwrap(PairPicture.build(real: disk.tree, macFolder: disk.node(mac), macPath: mac, drivePath: drive, driveName: "Spare",
                                                     notes: [note], ghosts: true))
         XCTAssertEqual(after.counts[.missing]?.files, 1)
+    }
+
+    func testDriveListingKeepsWhatWasRead() {
+        var listing = DriveListing()
+        let file = DriveListing.File(size: 10, allocated: 16, modified: 1)
+        listing.replace(under: "Backup/Films", with: ["a.mkv": file, "Series/b.mkv": file], at: Date(timeIntervalSince1970: 100))
+        XCTAssertEqual(listing.readAt("Backup/Films/Series"), Date(timeIntervalSince1970: 100), "a folder inside one that was read was read too")
+        XCTAssertNil(listing.readAt("Backup"), "the folder above wasn't")
+        XCTAssertEqual(listing.files(under: "Backup/Films").keys.sorted(), ["Series/b.mkv", "a.mkv"])
+        XCTAssertEqual(listing.files(under: "Backup/Films/Series").keys.sorted(), ["b.mkv"])
+        // Reading a folder again replaces what was known in it, and only there.
+        listing.replace(under: "Backup/Films/Series", with: [:], at: Date(timeIntervalSince1970: 200))
+        XCTAssertEqual(listing.files(under: "Backup/Films").keys.sorted(), ["a.mkv"])
+        XCTAssertEqual(listing.readAt("Backup/Films/Series"), Date(timeIntervalSince1970: 200))
+        XCTAssertEqual(listing.readAt("Backup/Films"), Date(timeIntervalSince1970: 100))
+    }
+
+    /// The Mac's Films/Season has one file the drive has too and one it doesn't, and Films has a file of its own.
+    private func seasonOnBothSides() throws -> (disk: FakeDisk, mac: String, drive: String) {
+        let drive = folder + "/Drive"
+        let mac = folder + "/Mac/Films"
+        try FileManager.default.createDirectory(atPath: drive + "/Season", withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(atPath: mac + "/Season", withIntermediateDirectories: true)
+        _ = try file(drive + "/Season/a.mkv", bytes: 3_000_000)
+        _ = try file(mac + "/Season/a.mkv", bytes: 3_000_000)
+        _ = try file(mac + "/Season/b.mkv", bytes: 6_000_000)
+        // Something beside Season, so Films isn't drawn as one with it.
+        _ = try file(mac + "/c.mkv", bytes: 5_000_000)
+        let disk = FakeDisk(root: folder + "/Mac")
+        disk.file(mac + "/Season/a.mkv", 3_000_000, kind: .video)
+        disk.file(mac + "/Season/b.mkv", 6_000_000, kind: .video)
+        disk.file(mac + "/c.mkv", 5_000_000, kind: .video)
+        disk.finish()
+        return (disk, mac, drive)
+    }
+
+    func testHalvesAreEqualAndAFolderIsCutByPlace() throws {
+        let (disk, mac, drive) = try seasonOnBothSides()
+        let pair = try XCTUnwrap(PairPicture.build(real: disk.tree, macFolder: disk.node(mac), macPath: mac, drivePath: drive, driveName: "Spare",
+                                                   notes: [], ghosts: false))
+        let tree = pair.tree
+        XCTAssertTrue(tree.twoSides)
+        let layout = RingLayout.build(tree: tree, focus: 0, colorer: { pair.colour($0) })
+        let halves = layout.pieces.filter { $0.ring == 0 }
+        XCTAssertEqual(halves.map(\.node), [pair.driveSide, pair.macSide], "the drive's half, then the Mac's")
+        XCTAssertEqual(halves[0].sweep, halves[1].sweep, accuracy: 0.0001, "each half is half, whatever it holds")
+        XCTAssertEqual(halves[0].sweep, .pi, accuracy: 0.0001)
+        // The Mac's Season is drawn as two stretches, on both and only on this Mac, each over its own file.
+        let season = try XCTUnwrap(tree.find(path: mac + "/Season"))
+        let stretches = layout.pieces.enumerated().filter { $0.element.node == season && $0.element.ring == 1 }
+        XCTAssertEqual(stretches.count, 2)
+        XCTAssertEqual(stretches[0].element.color, PairPlace.both.colour, "what's on both comes first")
+        XCTAssertEqual(stretches[1].element.color, PairPlace.onlyMac.colour)
+        for (index, stretch) in stretches {
+            let inside = layout.pieces.filter { $0.parent == Int32(index) }
+            XCTAssertEqual(inside.count, 1, "each stretch holds its own file")
+            XCTAssertEqual(inside.first?.color, stretch.color)
+            XCTAssertGreaterThanOrEqual(inside.first?.a0 ?? 0, stretch.a0 - 0.0001)
+            XCTAssertLessThanOrEqual(inside.first?.a1 ?? 0, stretch.a1 + 0.0001)
+        }
+        // A folder the drive doesn't have at all still gets its half, empty.
+        let none = try XCTUnwrap(PairPicture.build(real: disk.tree, macFolder: disk.node(mac), macPath: mac, drivePath: drive + "/Nothing", driveName: "Spare",
+                                                   notes: [], ghosts: false))
+        let emptyHalves = RingLayout.build(tree: none.tree, focus: 0, colorer: { none.colour($0) }).pieces.filter { $0.ring == 0 }
+        XCTAssertEqual(emptyHalves.count, 2)
+        XCTAssertEqual(emptyHalves.first?.bytes, 0)
+    }
+
+    func testTheDrivesHalfIsDrawnFromWhatWasReadWhenItsUnplugged() throws {
+        let (disk, mac, drive) = try seasonOnBothSides()
+        let read = try XCTUnwrap(PairPicture.build(real: disk.tree, macFolder: disk.node(mac), macPath: mac, drivePath: drive, driveName: "Spare",
+                                                   notes: [], ghosts: false, online: true, listingID: "spare-id", mount: folder))
+        XCTAssertTrue(read.online)
+        XCTAssertEqual(read.counts[.both]?.files, 1)
+        // Unplugged: the file is gone from where it was read, but the listing still has it.
+        try FileManager.default.removeItem(atPath: drive + "/Season/a.mkv")
+        let offline = try XCTUnwrap(PairPicture.build(real: disk.tree, macFolder: disk.node(mac), macPath: mac, drivePath: drive, driveName: "Spare",
+                                                      notes: [], ghosts: false, online: false, listingID: "spare-id", mount: folder))
+        XCTAssertFalse(offline.online)
+        XCTAssertNotNil(offline.readAt)
+        XCTAssertEqual(offline.counts[.both]?.files, 1, "drawn from what was read")
+        XCTAssertNotEqual(offline.colour(offline.driveSide), read.colour(read.driveSide), "and it steps back")
+        // A drive never read has an empty half.
+        let never = try XCTUnwrap(PairPicture.build(real: disk.tree, macFolder: disk.node(mac), macPath: mac, drivePath: drive, driveName: "Other",
+                                                    notes: [], ghosts: false, online: false, listingID: "other-id", mount: folder))
+        XCTAssertNil(never.readAt)
+        XCTAssertNil(never.counts[.both])
+        XCTAssertEqual(never.driveBytes, 0)
     }
 }

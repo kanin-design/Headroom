@@ -266,11 +266,20 @@ duplicates instead of the suggestions.
   picture: nothing is selected, counted or cleaned from it, and anything that changes the disk puts the real map back
   first.
 - **Compare.** Compare with *drive* splits the ring: the drive's half on the right, under its capsule, the
-  Mac's on the left, under the disk's. Each half is drawn at its own size, and files are matched by their path from the
-  folder and their size: green on both, amber only on the Mac, blue only on the drive, violet moved, red different or
-  missing. The middle says what the folder holds on the Mac, and on the drive under it. Files on the drive's half can be
-  selected too: Copy to Mac (checked against the `.sha256` beside each, or its note), Verify, and Delete from the drive,
-  which asks first for anything this Mac doesn't also have. Both halves and moved files are drawn on the Map only.
+  Mac's on the left, under the disk's. The halves are equal whatever they hold, so an empty or missing
+  folder on the drive is still half the ring, and each half is named with its size. Files are matched by their path from
+  the folder and their size: green on both, amber only on the Mac, blue only on the drive, violet moved, red different or
+  missing. Inside a folder what's on both comes first, then what's on one side only, then what was moved, then what
+  doesn't match, and a folder with more than one of them is cut into one stretch for each, over what it's made of. The
+  middle says what the folder holds on the Mac, and on the drive under it. Both halves and moved files are drawn on the Map
+  only.
+- **The drive unplugged.** Every time a drive's folder is read, what's in it is kept, by the drive's ID. Unplugged, its
+  half is drawn from that, dimmed, with when it was last read; selecting works, and what needs the drive says so.
+- **One selection, the actions that fit.** Files can be picked on either half. The panel lists what can be done with
+  them, with how many and how much: for files on this Mac Move, Copy and Keep on Mac; for files on the drive Copy to Mac
+  (checked against the `.sha256` beside each, or its note), Verify and Delete. Select beside "Only on this Mac" picks
+  everything the drive lacks, as far as Backup takes it (100 MB and up). Delete reads both disks again first: a file the
+  Mac also has goes only when the Mac's copy matches, by the `.sha256` or by reading both; anything else is asked about.
 - **The drive row.** At the bottom, the disk you're looking at on the left, and in Backup, where files go on the right,
   each a glass capsule with a list of drives and their file systems. The right one can't be the left one, or read-only;
   FAT32 says it can't hold files over 4 GB.
