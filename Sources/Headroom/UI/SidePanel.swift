@@ -66,25 +66,6 @@ struct PanelTitle: View {
     }
 }
 
-struct SectionHeading: View {
-    let text: String
-    var trailing: String? = nil
-
-    var body: some View {
-        HStack {
-            Text(text)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.45))
-            Spacer()
-            if let trailing {
-                Text(trailing)
-                    .font(.system(size: 11, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.45))
-            }
-        }
-    }
-}
-
 /// A row in any list: name, where it is, how big, and a hairline showing its share.
 struct NodeRow: View {
     let title: String
@@ -137,9 +118,9 @@ struct NodeRow: View {
                     .padding(.leading, 16)
                 }
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal, Kit.rowInset)
             .padding(.vertical, 6)
-            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(.white.opacity(isHovered || isLit ? 0.075 : 0)))
+            .background(RoundedRectangle(cornerRadius: Kit.rowRadius, style: .continuous).fill(.white.opacity(isHovered || isLit ? 0.075 : 0)))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -182,41 +163,22 @@ struct ChangesWindow: View {
         VStack(alignment: .leading, spacing: 6) {
             picker(windows)
             HStack(spacing: 8) {
-                Text("Untouched")
-                    .font(.system(size: 11.5, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.5))
-                    .fixedSize()
-                    .padding(.leading, 10)
+                PickerLabel(text: "Untouched")
+                    .padding(.leading, Kit.rowInset)
                 picker(ChangeWindow.untouchedWindows)
             }
             scale
-                .padding(.leading, 10)
+                .padding(.leading, Kit.rowInset)
                 .padding(.top, 2)
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, Kit.panelInset)
         .padding(.top, 12)
         .padding(.bottom, 10)
     }
 
+    /// Both rows choose the one window: each lights only when it's one of its own.
     private func picker(_ windows: [ChangeWindow]) -> some View {
-        HStack(spacing: 2) {
-            ForEach(windows) { window in
-                Button {
-                    model.setChangeWindow(window)
-                } label: {
-                    Text(window.title)
-                        .font(.system(size: 11.5, weight: .semibold))
-                        .foregroundStyle(model.changeWindow == window ? Color.white : Color.white.opacity(0.58))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 26)
-                        .background(Capsule().fill(.white.opacity(model.changeWindow == window ? 0.15 : 0)))
-                        .contentShape(Capsule())
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(2)
-        .background(Capsule().fill(.white.opacity(0.05)))
+        PillPicker(options: windows, selection: model.changeWindow, title: \.title) { model.setChangeWindow($0) }
     }
 
     /// The ring's colours as a scale, taken from the ring itself: how much of each piece is new or changed, or untouched. None
@@ -260,6 +222,7 @@ struct SearchPanel: View {
                     // Like the list on the Map, it says when there's more than it shows.
                     PanelTitle(title: "\(model.searchResults.count.formatted()) found",
                                subtitle: model.searchResults.count > 120 ? "Top 120 shown" : nil)
+                        .padding(.horizontal, Kit.rowInset)
                     let top = model.searchResults.prefix(120)
                     let biggest = Double(max(top.first.map { tree.totals[Int($0)] } ?? 1, 1))
                     LazyVStack(spacing: 0) {
@@ -273,9 +236,8 @@ struct SearchPanel: View {
                                 .named(NamedThing(node), in: model)
                         }
                     }
-                    .padding(.horizontal, -8)
                 }
-                .padding(16)
+                .padding(Kit.panelInset)
             }
             .scrollEdgeEffectStyle(.soft, for: .all)
             .scrollIndicators(.never)

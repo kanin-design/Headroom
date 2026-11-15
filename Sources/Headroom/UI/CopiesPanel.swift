@@ -18,8 +18,10 @@ struct CopiesPanel: View {
         let scale = max(sets.map(\.back).max() ?? 1, 1)
         ScrollView {
             VStack(alignment: .leading, spacing: 1) {
+                // A clean of duplicates is a clean like Free Up's, and shows as one.
+                FreeUpTopCard(model: model, showsSelection: false)
                 summary(sets)
-                    .padding(.horizontal, 11)
+                    .padding(.horizontal, Kit.rowInset)
                     .padding(.top, 3)
                     .padding(.bottom, 9)
                 ForEach(sets.prefix(Self.most)) { set in
@@ -29,7 +31,7 @@ struct CopiesPanel: View {
                     Text("\((sets.count - Self.most).formatted()) more, smaller")
                         .font(.system(size: 11))
                         .foregroundStyle(.white.opacity(0.4))
-                        .padding(.horizontal, 11)
+                        .padding(.horizontal, Kit.rowInset)
                         .padding(.vertical, 6)
                 }
                 if !once.isEmpty {
@@ -41,8 +43,7 @@ struct CopiesPanel: View {
                         .padding(.top, once.isEmpty ? 8 : 2)
                 }
             }
-            .padding(.horizontal, 9)
-            .padding(.vertical, 9)
+            .padding(Kit.panelInset)
         }
         .scrollEdgeEffectStyle(.soft, for: .all)
         .scrollIndicators(.never)
@@ -52,9 +53,10 @@ struct CopiesPanel: View {
     private func summary(_ sets: [CopyGroup]) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
+                // The empty states' look, whether or not there's anything: one line that says what's here.
                 Text(sentence(sets))
-                    .font(.system(size: 13))
-                    .foregroundStyle(.white.opacity(0.9))
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.85))
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
                 @Bindable var model = model
@@ -69,10 +71,7 @@ struct CopiesPanel: View {
                 .popover(isPresented: $model.copiesHelpShown, arrowEdge: .bottom) { CopiesHelp() }
             }
             if model.copiesReading {
-                ProgressView(value: Double(model.copiesGroupsDone), total: Double(max(model.copiesGroupsTotal, 1)))
-                    .progressViewStyle(.linear)
-                    .tint(.white.opacity(0.7))
-                    .controlSize(.small)
+                ThinBar(fraction: Double(model.copiesGroupsDone) / Double(max(model.copiesGroupsTotal, 1)), tint: .white.opacity(0.7), height: 4)
                 Text("Comparing… \(formatBytes(model.copiesBytesRead)) read")
                     .font(.system(size: 11).monospacedDigit())
                     .foregroundStyle(.white.opacity(0.45))
@@ -144,7 +143,7 @@ private struct CopySetRow: View {
             head(state, colour, isLit)
             if isOpen { inside(colour) }
         }
-        .background(RoundedRectangle(cornerRadius: 15, style: .continuous).fill(state.rowFill(colour, isLit: isLit || isOpen)))
+        .background(RoundedRectangle(cornerRadius: Kit.cardRadius, style: .continuous).fill(state.rowFill(colour, isLit: isLit || isOpen)))
         .animation(.easeOut(duration: 0.14), value: isLit)
     }
 
@@ -179,8 +178,7 @@ private struct CopySetRow: View {
                     .padding(.top, 3)
             }
         }
-        .padding(.leading, 11)
-        .padding(.trailing, 10)
+        .padding(.horizontal, Kit.rowInset)
         .padding(.vertical, 7)
         .contentShape(Rectangle())
         .onHover { inside in
@@ -199,9 +197,7 @@ private struct CopySetRow: View {
                 if isOpen { model.copiesOpen.remove(group.id) } else { model.copiesOpen.insert(group.id) }
             }
         } label: {
-            Image(systemName: "chevron.right")
-                .font(.system(size: 10, weight: .bold))
-                .rotationEffect(.degrees(isOpen ? 90 : 0))
+            DisclosureChevron(isOpen: isOpen, size: 10)
                 .foregroundStyle(.white.opacity(isHovered || isOpen ? 0.75 : 0.4))
                 .frame(width: 20, height: 15)
                 .contentShape(Rectangle())
@@ -236,24 +232,17 @@ private struct CopySetRow: View {
             // What happens to every copy not marked Keep.
             HStack(spacing: 6) {
                 ForEach(AppModel.CopyAction.allCases, id: \.self) { action in
-                    Button { model.takeCopies(group, action) } label: {
-                        Text(action.title)
-                            .font(.system(size: 11.5, weight: .semibold))
-                            .foregroundStyle(.white.opacity(model.isCleaning ? 0.4 : 0.95))
-                            .padding(.horizontal, 11)
-                            .padding(.vertical, 5)
-                            .background(Capsule().fill(colour.opacity(model.isCleaning ? 0.12 : 0.3)))
-                            .contentShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(model.isCleaning)
-                    .help(Self.help[action] ?? "")
+                    Button(action.title) { model.takeCopies(group, action) }
+                        .buttonStyle(.pill(colour))
+                        .disabled(model.isCleaning)
+                        .help(Self.help[action] ?? "")
                 }
             }
             .padding(.top, 7)
         }
-        .padding(.leading, 33)
-        .padding(.trailing, 10)
+        // The copies line up under the set's name, past its tick.
+        .padding(.leading, Kit.rowInset + 20 + 10 - 8)
+        .padding(.trailing, Kit.rowInset)
         .padding(.bottom, 10)
     }
 
@@ -323,18 +312,14 @@ private struct CopyLine: View {
                 .foregroundStyle(.white.opacity(0.45))
             }
             Spacer(minLength: 4)
+            // The one that stays is marked; any other says it can be, under the pointer. The whole line is the choice.
             if stays || isHovered {
-                Text("Keep")
-                    .font(.system(size: 10.5, weight: .semibold))
-                    .foregroundStyle(stays ? colour : .white.opacity(0.75))
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 2)
-                    .background(Capsule().fill(stays ? colour.opacity(0.16) : .white.opacity(0.1)))
+                PillLabel(text: "Keep", tint: stays ? colour : nil, prominence: .tinted)
             }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
-        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(.white.opacity(isHovered ? 0.07 : 0)))
+        .background(RoundedRectangle(cornerRadius: Kit.rowRadius, style: .continuous).fill(.white.opacity(isHovered ? 0.07 : 0)))
         .contentShape(Rectangle())
         .onHover { inside in
             isHovered = inside
@@ -382,40 +367,13 @@ private struct Folded: View {
     let title: String
     let groups: [CopyGroup]
     let total: UInt64?
-    private var isOpen: Bool { model.copiesOpen.contains(id) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Button {
-                Motion.animate(.snappy(duration: 0.22)) {
-                    if isOpen { model.copiesOpen.remove(id) } else { model.copiesOpen.insert(id) }
-                }
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 9, weight: .bold))
-                        .rotationEffect(.degrees(isOpen ? 90 : 0))
-                        .foregroundStyle(.white.opacity(0.5))
-                        .frame(width: 10)
-                    Text(title)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.7))
-                    Text(groups.count.formatted())
-                        .font(.system(size: 11).monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.45))
-                    Spacer()
-                    if let total {
-                        Text(formatBytes(total))
-                            .font(.system(size: 11.5, weight: .medium).monospacedDigit())
-                            .foregroundStyle(.white.opacity(0.5))
-                    }
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .padding(.horizontal, 10)
-            if isOpen {
-                LazyVStack(spacing: 0) {
+        let isOpen = Binding(get: { model.copiesOpen.contains(id) }, set: { now in
+            if now { model.copiesOpen.insert(id) } else { model.copiesOpen.remove(id) }
+        })
+        Fold(title: title, count: groups.count.formatted(), trailing: total.map(formatBytes), isOpen: isOpen) {
+            LazyVStack(spacing: 0) {
                     ForEach(groups.prefix(80)) { group in
                         NodeRow(title: group.title, subtitle: subtitle(group), value: value(group), share: 0, color: group.colour.swiftUI,
                                 isLit: model.hotCopyGroup == group.id, showsBar: false,
@@ -424,7 +382,6 @@ private struct Folded: View {
                     }
                 }
                 .padding(.leading, 8)
-            }
         }
     }
 

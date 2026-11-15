@@ -98,9 +98,11 @@ private struct SourceCapsule: View {
                 .disabled(model.isCleaning)
             }
         } label: {
+            // What's free as the map counts it, so the capsule, the title and the middle of the ring say the same.
+            let free = model.shownFree ?? drive?.free ?? current?.free ?? 0
             DriveCapsuleLabel(icon: current?.isBoot == false ? "externaldrive" : "internaldrive",
                          title: current?.shownName ?? "Disk",
-                         detail: drive.map { "\(formatBytes($0.free)) free · \($0.fileSystemTitle)" } ?? (current.map { "\(formatBytes($0.free)) free" } ?? ""))
+                         detail: drive.map { "\(formatBytes(free)) free · \($0.fileSystemTitle)" } ?? (current == nil ? "" : "\(formatBytes(free)) free"))
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
@@ -141,7 +143,7 @@ private struct DestinationCapsule: View {
                 DriveCapsuleLabel(icon: icon(destination.drive), title: destination.title,
                              detail: connected.map { "\(formatBytes($0.free)) free · \($0.fileSystemTitle)" } ?? "Not connected", dim: connected == nil)
             } else {
-                DriveCapsuleLabel(icon: "externaldrive.badge.plus", title: "Choose a Drive", detail: "Backup drive", dim: true)
+                DriveCapsuleLabel(icon: "externaldrive.badge.plus", title: "Choose a drive", detail: "Backup drive", dim: true)
             }
         }
         .menuStyle(.button)

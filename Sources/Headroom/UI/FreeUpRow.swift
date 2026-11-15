@@ -52,10 +52,10 @@ struct ThingRow: View {
             extra
             if isOpen { details(tint) }
         }
-        .padding(.leading, isLarge ? 11 : 8)
-        .padding(.trailing, isLarge ? 10 : 8)
+        .padding(.leading, isLarge ? Kit.rowInset : 8)
+        .padding(.trailing, isLarge ? Kit.rowInset : 8)
         .padding(.vertical, isLarge ? 7 : 6)
-        .background(RoundedRectangle(cornerRadius: isLarge ? 15 : 12, style: .continuous).fill(state.rowFill(tint, isLit: isLit, small: !isLarge)))
+        .background(RoundedRectangle(cornerRadius: isLarge ? Kit.cardRadius : Kit.rowRadius + 1, style: .continuous).fill(state.rowFill(tint, isLit: isLit, small: !isLarge)))
         .contentShape(Rectangle())
         .help(row.detail)
         .onHover { inside in
@@ -84,15 +84,17 @@ struct ThingRow: View {
     private var line: some View {
         let font = Font.system(size: isLarge ? 11 : 10.5)
         if case .move(let folder)? = model.plan.item(row.id)?.step {
-            Text("Moves to \(DiskTree.friendly(folder))")
+            // Moves are blue in this app, as Backup's are: they keep the files, somewhere else.
+            Text("Moves to \(Self.shortPlace(folder))")
                 .font(font.weight(.medium))
-                .foregroundStyle(Palette.gain.opacity(0.9))
+                .foregroundStyle(Kit.blue)
                 .lineLimit(1)
                 .truncationMode(.middle)
+                .help(DiskTree.friendly(folder))
         } else if let note = row.inUse ?? row.otherCopiesCaution.map({ _ in "May still be seeding" }) {
             Text(note)
                 .font(font.weight(.medium))
-                .foregroundStyle(Palette.amber.opacity(0.95))
+                .foregroundStyle(Kit.amber.opacity(0.95))
                 .lineLimit(1)
         } else if !row.subtitle.isEmpty {
             Text(row.subtitle)
@@ -101,6 +103,14 @@ struct ThingRow: View {
                 .lineLimit(isOpen ? nil : 1)
                 .fixedSize(horizontal: false, vertical: isOpen)
         }
+    }
+
+    /// A folder by its last name or two, the way you'd say where something went: `Backup`, `Archive/Films`.
+    static func shortPlace(_ folder: String) -> String {
+        var parts = DiskTree.friendly(folder).split(separator: "/").map(String.init)
+        if parts.first == "Volumes", parts.count > 1 { parts.removeFirst() }
+        if parts.first == "~", parts.count > 1 { parts.removeFirst() }
+        return parts.isEmpty ? DiskTree.friendly(folder) : parts.suffix(2).joined(separator: "/")
     }
 
     /// See it for yourself, send it somewhere else instead of the Trash, or keep it.
@@ -120,7 +130,7 @@ struct ThingRow: View {
                         Button(disk.isPluggedIn ? "Move to \(disk.name)" : "Move to \(disk.name) (not connected)") { model.planMove(row, to: disk) }
                     }
                 } label: {
-                    label("Move")
+                    PillLabel(text: "Move")
                 }
                 .menuStyle(.button)
                 .buttonStyle(.plain)
@@ -148,17 +158,11 @@ struct ThingRow: View {
         .help(isOpen ? "Hide contents" : "Show contents")
     }
 
-    private func label(_ text: String) -> some View {
-        CapsuleLabel(text: text)
-    }
-
     private func small(_ text: String, _ action: @escaping () -> Void) -> some View {
-        Button {
+        Button(text) {
             Motion.animate(.snappy(duration: 0.2)) { action() }
-        } label: {
-            label(text)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pill(nil, size: .small))
     }
 
     private func number(_ state: TickState) -> some View {
@@ -168,7 +172,7 @@ struct ThingRow: View {
             if state != .none, !row.otherCopies.isEmpty, model.plan.covers(row.otherCopiesPath ?? "") == false {
                 Text("\(row.bytes < 1_000_000 ? "0 B" : formatBytes(row.bytes)) of \(formatBytes(row.paperBytes))")
                     .font(font)
-                    .foregroundStyle(Palette.amber)
+                    .foregroundStyle(Kit.amber)
             } else {
                 Text(formatBytes(row.gain))
                     .font(font)
@@ -176,7 +180,7 @@ struct ThingRow: View {
                 if row.otherCopies.isEmpty, row.paperBytes > row.bytes, Double(row.bytes) < Double(row.paperBytes) * 0.9 {
                     Text("of \(formatBytes(row.paperBytes))")
                         .font(.system(size: 9.5).monospacedDigit())
-                        .foregroundStyle(Palette.amber.opacity(0.85))
+                        .foregroundStyle(Kit.amber.opacity(0.85))
                 }
             }
         }
@@ -242,14 +246,12 @@ struct ThingRow: View {
         switch row.action {
         case .softwareUpdate:
             Button("Open Software Update") { model.openSoftwareUpdate() }
-                .buttonStyle(.glass)
-                .controlSize(.small)
+                .buttonStyle(.pill)
                 .padding(.leading, 24)
         case .openApp:
             if let id = row.bundleID {
                 Button("Open \(row.openAppName ?? row.title)") { model.openApp(bundleID: id) }
-                    .buttonStyle(.glass)
-                    .controlSize(.small)
+                    .buttonStyle(.pill)
                     .padding(.leading, 24)
             }
         case .command:
@@ -274,13 +276,8 @@ struct ThingRow: View {
                 }
             }
             if row.nodes.count == 1 || row.previewPath != nil, let node = row.nodes.first {
-                Button {
-                    model.reveal(node)
-                } label: {
-                    Label("Show in Finder", systemImage: "folder")
-                }
-                .buttonStyle(.glass)
-                .controlSize(.small)
+                Button("Show in Finder") { model.reveal(node) }
+                    .buttonStyle(.pill)
             }
             InnerList(model: model, nodes: model.innerNodes(of: row), tint: tint)
             if !row.extraPaths.isEmpty { LooseList(model: model, row: row, tint: tint) }
@@ -307,7 +304,7 @@ private struct CommandChip: View {
             .foregroundStyle(.white.opacity(0.75))
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(.white.opacity(0.07)))
+            .background(RoundedRectangle(cornerRadius: Kit.rowRadius - 2, style: .continuous).fill(.white.opacity(0.07)))
         }
         .buttonStyle(.plain)
         .help("Copy command")

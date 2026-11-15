@@ -265,7 +265,9 @@ struct HeadroomApp: App {
                 .windowMinimizeBehavior(.disabled)
                 .windowFullScreenBehavior(.disabled)
         }
+        .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
+        .windowBackgroundDragBehavior(.enabled)
         .restorationBehavior(.disabled)
         .defaultLaunchBehavior(.suppressed)
         .defaultPosition(.center)

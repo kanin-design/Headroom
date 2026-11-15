@@ -32,7 +32,7 @@ struct AccessGuideView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 14)
             HStack(spacing: 10) {
-                Button("Not Now") { notNow() }
+                Button("Not now") { notNow() }
                     .buttonStyle(.glass)
                     .help("Hide until the next version")
                 Spacer()

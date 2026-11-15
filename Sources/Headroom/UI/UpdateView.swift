@@ -45,7 +45,7 @@ struct UpdateView: View {
                 Button("OK") { close() }
                     .buttonStyle(.glass)
                 Spacer()
-                Button("Try Again") { updater.checkNow() }
+                Button("Try again") { updater.checkNow() }
                     .buttonStyle(.glassProminent)
                     .keyboardShortcut(.defaultAction)
             }
@@ -86,7 +86,7 @@ struct UpdateView: View {
                 Button("Download Page") { openURL(release.page) }
                     .buttonStyle(.glass)
                 Spacer()
-                Button("Try Again") { updater.install(release) }
+                Button("Try again") { updater.install(release) }
                     .buttonStyle(.glassProminent)
                     .keyboardShortcut(.defaultAction)
             }

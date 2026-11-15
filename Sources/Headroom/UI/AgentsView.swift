@@ -51,7 +51,7 @@ struct AgentsConnected: View {
             Button { openWindow(id: "agents") } label: {
                 HStack(spacing: 7) {
                     Circle()
-                        .fill(Palette.reclaim(.rebuilds).swiftUI)
+                        .fill(Kit.green)
                         .frame(width: 6, height: 6)
                     Text(names + " connected")
                         .font(.system(size: 12, weight: .medium))
@@ -81,16 +81,22 @@ struct AgentsConnected: View {
     }
 }
 
-/// Agents, in the app menu: which are connected, which you've allowed, and what they asked for.
+/// Agents, in the app menu: which are connected, which you've allowed, and what they asked for. Drawn like About and the
+/// other small windows: no title bar, the app's own text colours, pills for its buttons.
 struct AgentsView: View {
     private let agents = Agents.shared
     @State private var copied = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
+            Text("Agents")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.95))
+                .frame(maxWidth: .infinity)
             if agents.allowed.isEmpty && agents.connected.isEmpty {
                 Text("No agents")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.85))
             }
             if !agents.connected.isEmpty {
                 section("Connected") {
@@ -103,15 +109,12 @@ struct AgentsView: View {
                 section("Allowed") {
                     ForEach(agents.allowed) { one in
                         row(one.identity, detail: one.lastUsed.map { "Last used \(LastUse.ago($0, now: Date()))" } ?? "Not used yet") {
-                            Picker("Access", selection: Binding(get: { one.maySelect }, set: { agents.setMaySelect(one, $0) })) {
-                                Text("Look and Select").tag(true)
-                                Text("Look Only").tag(false)
-                            }
-                            .labelsHidden()
-                            .controlSize(.small)
-                            .fixedSize()
+                            PillPicker(options: [true, false], selection: one.maySelect, title: { $0 ? "Look and select" : "Look only" },
+                                       help: { $0 ? "Let it select files for Free Up and Backup" : "Let it only look" },
+                                       fills: false, height: 22) { agents.setMaySelect(one, $0) }
                             Button("Remove") { agents.remove(one) }
-                                .controlSize(.small)
+                                .buttonStyle(.pill)
+                                .help("Take back its access")
                         }
                     }
                 }
@@ -120,19 +123,21 @@ struct AgentsView: View {
                 HStack(spacing: 8) {
                     Text(AgentText.command)
                         .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.85))
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .textSelection(.enabled)
-                        .padding(.horizontal, 8)
-                        .frame(height: 24)
+                        .padding(.horizontal, Kit.rowInset)
+                        .frame(height: 28)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(RoundedRectangle(cornerRadius: 6).fill(.white.opacity(0.07)))
+                        .background(RoundedRectangle(cornerRadius: Kit.rowRadius, style: .continuous).fill(Kit.cardFill))
+                        .overlay(RoundedRectangle(cornerRadius: Kit.rowRadius, style: .continuous).strokeBorder(Kit.cardStroke))
                     Button(copied ? "Copied" : "Copy") {
                         AppModel.clipboard.clearContents()
                         AppModel.clipboard.setString(AgentText.command, forType: .string)
                         copied = true
                     }
-                    .controlSize(.small)
+                    .buttonStyle(.pill)
                 }
                 .help("Add to an agent as an MCP server")
             }
@@ -143,11 +148,12 @@ struct AgentsView: View {
                             ForEach(agents.activity.reversed()) { one in
                                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                                     Text(one.date, format: .dateTime.hour().minute().second())
-                                        .foregroundStyle(.tertiary)
+                                        .foregroundStyle(Kit.tertiary)
                                         .monospacedDigit()
                                     Text(one.agent)
-                                        .foregroundStyle(.secondary)
+                                        .foregroundStyle(Kit.secondary)
                                     Text(one.what)
+                                        .foregroundStyle(.white.opacity(0.82))
                                         .lineLimit(1)
                                         .truncationMode(.middle)
                                     Spacer(minLength: 0)
@@ -162,7 +168,9 @@ struct AgentsView: View {
                 }
             }
         }
-        .padding(22)
+        .padding(.horizontal, 24)
+        .padding(.top, 14)
+        .padding(.bottom, 24)
         .frame(width: 460, alignment: .leading)
         .containerBackground(Palette.window, for: .window)
         .preferredColorScheme(.dark)
@@ -180,7 +188,7 @@ struct AgentsView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.white.opacity(0.5))
             content()
         }
     }
@@ -190,15 +198,16 @@ struct AgentsView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(identity.name)
                     .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.92))
                 Text(AgentText.originLabel(identity))
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Kit.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .help(identity.program)
                 Text(detail)
                     .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Kit.tertiary)
             }
             Spacer(minLength: 0)
             trailing()

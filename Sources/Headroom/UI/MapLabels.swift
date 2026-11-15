@@ -513,12 +513,12 @@ struct CenterReadout: View {
     @ViewBuilder
     private func diskContent(size: CGFloat) -> some View {
         // Nothing until the disk is known, so the first frame doesn't roll up from zero.
-        if let free = model.tree.map({ $0.totals[Int($0.free)] }) ?? model.volume?.free {
-            let capacity = model.tree?.capacityBytes ?? model.volume?.capacity ?? 0
+        if let free = model.shownFree {
+            let capacity = model.shownCapacity
             let planning = model.planNumbers.total >= 1_000_000 && model.mode == .freeUp
             let preview = free &+ model.planNumbers.total
             let usedShare = 1 - Double(free) / Double(max(capacity, 1))
-            slots(size, number: bigNumber(planning ? preview : free, size: size, color: planning ? Color(red: 0.45, green: 1, blue: 0.68) : .white)) {
+            slots(size, number: bigNumber(planning ? preview : free, size: size, color: planning ? Kit.green : .white)) {
                 EmptyView()
             } below: {
                 VStack(spacing: size * 0.012) {
@@ -530,7 +530,7 @@ struct CenterReadout: View {
                     } else if planning {
                         Text("+\(formatBytes(model.planNumbers.total))")
                             .font(.system(size: size * 0.05, weight: .semibold).monospacedDigit())
-                            .foregroundStyle(Color(red: 0.45, green: 1, blue: 0.68).opacity(0.8))
+                            .foregroundStyle(Kit.green.opacity(0.8))
                     } else if let delta = sinceLast(free) {
                         deltaCapsule(delta, size: size)
                     } else {
@@ -550,7 +550,7 @@ struct CenterReadout: View {
         // With something selected, the middle says how much, as Free Up says what cleaning frees.
         let picked = model.backup.items.count + model.driveSelection.count
         let pickedBytes = model.backupBytes &+ model.driveSelection.reduce(UInt64(0)) { $0 &+ $1.bytes }
-        let blue = Color(red: 0.45, green: 0.66, blue: 1)
+        let blue = Kit.blue
         return slots(size, number: bigNumber(picked > 0 ? pickedBytes : pair.macBytes, size: size, color: picked > 0 ? blue : .white)) {
             Text(pair.realFolder == 0 ? (model.volume?.shownName ?? "") : pair.folderName)
                 .font(.system(size: size * 0.07, weight: .semibold))
@@ -659,7 +659,7 @@ struct CenterReadout: View {
             Text("\(formatBytes(UInt64(abs(info.delta)))) \(info.label)")
                 .font(.system(size: size * 0.05, weight: .semibold).monospacedDigit())
         }
-        .foregroundStyle(down ? Color(red: 1, green: 0.58, blue: 0.48) : Color(red: 0.5, green: 0.95, blue: 0.68))
+        .foregroundStyle(down ? Color(red: 1, green: 0.58, blue: 0.48) : Kit.green)
         .padding(.top, size * 0.01)
     }
 
@@ -712,7 +712,7 @@ struct CenterReadout: View {
             if let links = hover.links {
                 Text(links)
                     .font(.system(size: size * 0.072, weight: .semibold))
-                    .foregroundStyle(Palette.amber)
+                    .foregroundStyle(Kit.amber)
                     .lineLimit(2)
                     .minimumScaleFactor(0.85)
                     .truncationMode(.middle)

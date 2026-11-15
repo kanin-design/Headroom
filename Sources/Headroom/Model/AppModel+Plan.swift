@@ -54,6 +54,8 @@ extension AppModel {
     func loadPlan() {
         // What you've selected is written down under its real names, and it's still yours when you start the app normally.
         guard !HiddenNames.isOn else { return }
+        // A scripted check starts from nothing selected, so a selection one run left can never be cleaned by the next.
+        guard ScriptRunner.path == nil else { return }
         let file = PlanStore.load()
         plan = file.list
         lastPlanItems = file.lastItems

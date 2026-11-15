@@ -14,6 +14,7 @@ struct FreeUpPanel: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 1) {
+                    FreeUpTopCard(model: model)
                     NeedsALook(model: model)
                     RecommendedButton(model: model)
                     ForEach(boxes) { box in
@@ -24,8 +25,7 @@ struct FreeUpPanel: View {
                     if !others.isEmpty { TuckedAway(model: model, title: "Other actions", promise: "Done outside Headroom", rows: others).padding(.top, 8) }
                     keptLink
                 }
-                .padding(.horizontal, 9)
-                .padding(.vertical, 9)
+                .padding(Kit.panelInset)
             }
             .scrollEdgeEffectStyle(.soft, for: .all)
             .scrollIndicators(.never)
@@ -36,48 +36,19 @@ struct FreeUpPanel: View {
     }
 
     private var emptyState: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            // With nothing read, there's no knowing what could go.
-            Text(!model.hasFullAccess ? "Needs Full Disk Access" : model.focus == 0 ? "No suggestions" : "No suggestions here")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.white.opacity(0.85))
-                .fixedSize(horizontal: false, vertical: true)
-            if model.hasFullAccess {
-                Text("Click a piece of the ring to select it.")
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(.white.opacity(0.5))
-            }
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
+        // With nothing read, there's no knowing what could go.
+        EmptyNote(title: !model.hasFullAccess ? "Needs Full Disk Access" : model.focus == 0 ? "No suggestions" : "No suggestions here",
+                  detail: model.hasFullAccess ? "Click a piece of the ring to select it." : nil)
     }
 
     @ViewBuilder
     private var keptLink: some View {
         if !model.plan.kept.isEmpty {
-            DisclosureGroup {
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(model.plan.kept) { kept in
-                        HStack {
-                            Text(kept.title)
-                                .font(.system(size: 11.5))
-                                .foregroundStyle(.white.opacity(0.65))
-                                .lineLimit(1)
-                            Spacer()
-                            Button("Suggest again") { model.stopKeeping(kept.id) }
-                                .buttonStyle(.plain)
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundStyle(.white.opacity(0.75))
-                        }
-                    }
+            Fold(title: "Kept", count: "\(model.plan.kept.count)") {
+                ForEach(model.plan.kept) { kept in
+                    KeptLine(title: kept.title) { model.stopKeeping(kept.id) }
                 }
-                .padding(.top, 4)
-            } label: {
-                Text("\(model.plan.kept.count) kept")
-                    .font(.system(size: 11.5, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.5))
             }
-            .padding(.horizontal, 10)
             .padding(.top, 8)
         }
     }
@@ -105,10 +76,10 @@ private struct RecommendedButton: View {
                     Text(formatBytes(rows.reduce(UInt64(0)) { $0 &+ $1.aTickFrees }))
                         .font(.system(size: 12.5, weight: .semibold).monospacedDigit())
                 }
-                .foregroundStyle(Palette.gain)
-                .padding(.horizontal, 11)
+                .foregroundStyle(Kit.green)
+                .padding(.horizontal, Kit.rowInset)
                 .padding(.vertical, 8)
-                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.gain.opacity(isHovered ? 0.18 : 0.1)))
+                .background(RoundedRectangle(cornerRadius: Kit.cardRadius, style: .continuous).fill(Kit.green.opacity(isHovered ? 0.18 : 0.1)))
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -122,44 +93,19 @@ private struct RecommendedButton: View {
     }
 }
 
-/// A section that stays folded until you want it.
+/// What can't be ticked, folded away until it's wanted.
 private struct TuckedAway: View {
     let model: AppModel
     let title: String
     let promise: String
     let rows: [WinRow]
-    @State private var isOpen = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Button {
-                Motion.animate(.snappy(duration: 0.22)) { isOpen.toggle() }
-            } label: {
-                HStack(spacing: 6) {
-                    DisclosureChevron(isOpen: isOpen, size: 9)
-                        .foregroundStyle(.white.opacity(0.5))
-                        .frame(width: 10)
-                    Text(title)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.7))
-                    Text(rows.count == 1 ? "1 item" : "\(rows.count) items")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.white.opacity(0.45))
-                    Spacer()
-                    Text(formatBytes(rows.reduce(UInt64(0)) { $0 &+ $1.gain }))
-                        .font(.system(size: 11.5, weight: .medium).monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.5))
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .padding(.horizontal, 10)
-            .help(promise)
-            if isOpen {
-                VStack(spacing: 0) {
-                    ForEach(rows) { row in
-                        ThingRow(model: model, row: row, color: Palette.Box.other)
-                    }
+        Fold(title: title, count: rows.count == 1 ? "1 item" : "\(rows.count) items",
+             trailing: formatBytes(rows.reduce(UInt64(0)) { $0 &+ $1.gain }), help: promise) {
+            VStack(spacing: 0) {
+                ForEach(rows) { row in
+                    ThingRow(model: model, row: row, color: Palette.Box.other)
                 }
             }
         }

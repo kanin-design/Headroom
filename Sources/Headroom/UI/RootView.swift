@@ -102,16 +102,16 @@ struct RootView: View {
         return model.displayName(model.focus)
     }
 
-    /// Under the title: how far the scan has got, or how much is free, the same as in the middle of the ring. Inside a
-    /// folder, which disk it's on as well.
+    /// Under the title: how far the scan has got, or how much is free, the same as in the middle of the ring and on the disk's
+    /// capsule. Inside a folder, which disk it's on as well. With the drive's half beside it, which drive: the title already
+    /// says which folder or disk, so this only finishes the sentence, short enough never to be cut.
     private var subtitle: String {
         if model.isScanning { return model.scanFiles > 0 ? "Scanning… \(formatCount(model.scanFiles)) files" : "Scanning…" }
         if !model.hasFullAccess, model.volume?.isBoot == true { return "Needs Full Disk Access" }
-        if let pair = model.pair, pair.tree === model.tree { return "\(model.volume?.shownName ?? "This Mac")  ·  compared with \(pair.driveName)" }
-        guard let free = model.tree.map({ $0.totals[Int($0.free)] }) ?? model.volume?.free else { return "" }
+        if let pair = model.pair, pair.tree === model.tree { return "and \(pair.driveName)" }
+        guard let free = model.shownFree else { return "" }
         if model.focus != 0 { return "\(model.volume?.shownName ?? "Disk")  ·  \(formatBytes(free)) free" }
-        let capacity = model.tree?.capacityBytes ?? model.volume?.capacity ?? 0
-        return "\(formatBytes(free)) free of \(formatBytes(capacity))"
+        return "\(formatBytes(free)) free of \(formatBytes(model.shownCapacity))"
     }
 
     /// The real place on the disk the title stands for. Groups Headroom makes up, such as macOS's own parts, have none.
@@ -227,7 +227,7 @@ struct BottomArea: View {
                         Button("Undo") { model.undoCommand() }
                             .buttonStyle(.plain)
                             .font(.system(size: 12.5, weight: .semibold))
-                            .foregroundStyle(Palette.reclaim(.rebuilds).swiftUI)
+                            .foregroundStyle(Kit.green)
                             .pointerStyle(.link)
                     }
                 }
@@ -320,15 +320,13 @@ struct AccessCard: View {
             Image(systemName: "lock.fill")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.75))
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Needs Full Disk Access")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.95))
-            }
-            .frame(maxWidth: 330, alignment: .leading)
-            Button("Allow Full Disk Access") { openWindow(id: "access") }
+            Text("Needs Full Disk Access")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.95))
+            Button("Allow…") { openWindow(id: "access") }
                 .buttonStyle(.glassProminent)
                 .controlSize(.small)
+                .help("Show how to allow access")
             Button {
                 model.accessCardDismissed = true
             } label: {

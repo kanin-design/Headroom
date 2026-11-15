@@ -75,7 +75,7 @@ struct LookCard: View {
                 if node != 0, let links = Accounting.hoverLine(node, bytes: bytes, in: tree) {
                     Text(links)
                         .font(.system(size: 11.5, weight: .semibold))
-                        .foregroundStyle(Palette.amber)
+                        .foregroundStyle(Kit.amber)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -145,7 +145,10 @@ struct LookCard: View {
                 .buttonStyle(.glass)
             }
             Spacer(minLength: 4)
-            if model.canPlan(node) {
+            // The tick is the mode's: in Backup it selects a file to move, in Free Up something to clean.
+            if model.mode == .backup {
+                if model.backupTakes(node) { BackupTick(model: model, node: node) }
+            } else if model.canPlan(node) {
                 FreeUpTick(model: model, node: node)
             }
             if node != 0 {
@@ -277,6 +280,45 @@ private struct FreeUpTick: View {
         }
         .buttonStyle(.glass)
         .help(planned ? "Deselect in Free Up" : "Select in Free Up")
+    }
+}
+
+/// Ticks a file for Backup from the card, in Backup's blue, on whichever half it's on.
+private struct BackupTick: View {
+    let model: AppModel
+    let node: UInt32
+
+    var body: some View {
+        let selected = model.isSelectedForBackup(node)
+        Button {
+            model.toggleBackup(node)
+        } label: {
+            HStack(spacing: 7) {
+                TickMark(selected, color: Kit.blue, size: 15)
+                Text("Backup")
+            }
+        }
+        .buttonStyle(.glass)
+        .help(selected ? "Deselect for Backup" : "Select for Backup")
+    }
+}
+
+extension AppModel {
+    /// Whether the card offers Backup's tick for this: a file, on either half, that isn't a moved file's ghost.
+    func backupTakes(_ node: UInt32) -> Bool {
+        guard let tree, Int(node) < tree.count, !tree.isGhost(node) else { return false }
+        let n = tree.nodes[Int(node)]
+        return node != 0 && !n.has(NodeFlag.directory) && !n.has(NodeFlag.synthetic)
+    }
+
+    /// Whether a file on the map is on Backup's list, or picked on the drive's half.
+    func isSelectedForBackup(_ node: UInt32) -> Bool {
+        guard let tree, Int(node) < tree.count, let raw = tree.path(node) else { return false }
+        if let pair, pair.tree === tree, tree.isInside(node, pair.driveSide) {
+            guard let file = pair.driveFile(node) else { return false }
+            return driveSelection.contains { $0.path == file.path }
+        }
+        return backup.has(PathMath.visible(raw))
     }
 }
 

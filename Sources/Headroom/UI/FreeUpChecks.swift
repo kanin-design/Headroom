@@ -11,17 +11,14 @@ struct NeedsALook: View {
             .sorted { (model.checks[$0.item.id]?.canGo ?? true ? 1 : 0) < (model.checks[$1.item.id]?.canGo ?? true ? 1 : 0) }
         if !found.isEmpty {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Needs attention")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Palette.amber)
-                    .padding(.horizontal, 10)
+                SectionHeading(text: "Needs attention", colour: Kit.amber)
                     .padding(.top, 8)
                 ForEach(found, id: \.item.id) { one in
                     LookRow(model: model, item: one.item, problems: one.problems)
                 }
             }
             .padding(.bottom, 4)
-            .background(RoundedRectangle(cornerRadius: 15, style: .continuous).fill(Palette.amber.opacity(0.08)))
+            .background(RoundedRectangle(cornerRadius: Kit.cardRadius, style: .continuous).fill(Kit.amber.opacity(0.08)))
             .padding(.bottom, 6)
         }
     }
@@ -51,14 +48,14 @@ private struct LookRow: View {
             ForEach(Array(problems.enumerated()), id: \.offset) { _, problem in
                 Text(problem.text)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(problem.holdsBack ? Palette.amber : .white.opacity(0.62))
+                    .foregroundStyle(problem.holdsBack ? Kit.amber : .white.opacity(0.62))
                     .fixedSize(horizontal: false, vertical: true)
             }
             if isOpen { paths }
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, Kit.rowInset)
         .padding(.vertical, 5)
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(.white.opacity(isHovered ? 0.05 : 0)))
+        .background(RoundedRectangle(cornerRadius: Kit.rowRadius, style: .continuous).fill(.white.opacity(isHovered ? 0.05 : 0)))
         .contentShape(Rectangle())
         .onHover { inside in
             isHovered = inside
@@ -71,13 +68,10 @@ private struct LookRow: View {
     }
 
     private func action(_ text: String, _ run: @escaping () -> Void) -> some View {
-        Button {
+        Button(text) {
             Motion.animate(.snappy(duration: 0.2)) { run() }
-        } label: {
-            CapsuleLabel(text: text, isLit: isHovered)
         }
-        .buttonStyle(.plain)
-        .fixedSize()
+        .buttonStyle(.pill(nil, size: .small))
     }
 
     @ViewBuilder

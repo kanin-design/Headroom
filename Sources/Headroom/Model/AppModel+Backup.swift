@@ -70,6 +70,15 @@ extension AppModel {
     /// The drive the map is of.
     var sourceDrive: DriveInfo? { volume.flatMap { v in drives.first { $0.mountPath == v.mountPath } } }
 
+    /// What's free on the disk the map is of, as the ring counts it: the disk's own count of free blocks when it was read,
+    /// which the Free piece is drawn from. The title, the middle of the ring, the disk's capsule and the cards all say this,
+    /// so the disk has one number for its free space. (The system's figure for a drive, in `DriveInfo.free`, also counts
+    /// purgeable space macOS would clear on demand, so it's a few GB more on the boot disk.)
+    var shownFree: UInt64? { workTree.map { $0.totals[Int($0.free)] } ?? volume?.free }
+
+    /// How big the disk the map is of is, by the same count.
+    var shownCapacity: UInt64 { workTree?.capacityBytes ?? volume?.capacity ?? 0 }
+
     /// Where Backup's files go, while it's connected.
     var destinationDrive: DriveInfo? { backup.destination.flatMap { connected($0.drive) } }
 
@@ -127,6 +136,15 @@ extension AppModel {
 
     // MARK: Big files
 
+    /// How old a big file has to be for Backup's list, in days, 0 for any age: the age chosen over the list, or in Changes,
+    /// where the list has no picker of its own, the Untouched window chosen there. A Changes window of what changed lately
+    /// leaves out nothing.
+    var backupAgeShown: Int {
+        guard view == .changes else { return backupAge }
+        if case .untouched(let days) = changeWindow { return days }
+        return 0
+    }
+
     /// Files in the folder you're in that Backup offers: at least `BackupState.smallest`, yours to move, and at least as old as
     /// the age chosen. Largest first.
     func backupCandidates() -> [UInt32] {
@@ -134,9 +152,10 @@ extension AppModel {
         // With both sides on screen, the folder they were drawn for: the picture's own numbers aren't the map's.
         let here = showsPair ? (focusBeforePair ?? 0) : focus
         guard Int(here) < tree.count else { return [] }
-        if let memo = backupCandidatesMemo, memo.version == treeVersion, memo.focus == here, memo.age == backupAge { return memo.rows }
+        let age = backupAgeShown
+        if let memo = backupCandidatesMemo, memo.version == treeVersion, memo.focus == here, memo.age == age { return memo.rows }
         let start = Int(tree.dfsIn[Int(here)]), size = Int(tree.dfsSize[Int(here)])
-        let before = backupAge == 0 ? UInt32.max : UInt32(clamping: Int(Date().timeIntervalSince1970) - backupAge * 86_400)
+        let before = age == 0 ? UInt32.max : UInt32(clamping: Int(Date().timeIntervalSince1970) - age * 86_400)
         let trash = trashNode(in: tree)
         var rows: [UInt32] = []
         for i in 1..<tree.count {
@@ -156,7 +175,7 @@ extension AppModel {
             let visible = PathMath.visible(path)
             return Safety.canTrash(path) && !self.backup.isKept(visible)
         }.prefix(300))
-        backupCandidatesMemo = (treeVersion, here, backupAge, offered)
+        backupCandidatesMemo = (treeVersion, here, age, offered)
         return offered
     }
 

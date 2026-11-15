@@ -34,7 +34,7 @@ struct BoxView: View {
     private var head: some View {
         let state = model.rowStates[box.id] ?? .none
         // Worked out once for the heading: its size, its line and its button all ask.
-        let short = state == .none ? nil : shortfall()
+        let short = state == .none ? nil : model.shortfall(of: box)
         return HStack(alignment: .top, spacing: nested ? 8 : 10) {
             // A category is a heading that opens, in its own colour. What's ticked is the things inside it.
             DisclosureChevron(isOpen: isOpen, size: nested ? 9.5 : 11)
@@ -49,10 +49,9 @@ struct BoxView: View {
                         .lineLimit(1)
                     Spacer(minLength: 2)
                     if state != .none {
-                        // Something in here is selected: all of it, or part.
-                        Image(systemName: state == .all ? "checkmark.circle.fill" : "minus.circle.fill")
-                            .font(.system(size: nested ? 10 : 11))
-                            .foregroundStyle(color)
+                        // Something in here is selected: all of it, or part. The same tick as the things inside, small.
+                        TickMark(state: state, color: color, size: nested ? 11 : 12)
+                            .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 2 }
                     }
                     size(state, short)
                 }
@@ -60,13 +59,10 @@ struct BoxView: View {
                     detail(state, short)
                     Spacer(minLength: 0)
                     if short != nil {
-                        Button {
+                        Button("Include other copies") {
                             Motion.animate(.snappy(duration: 0.2)) { model.includeOtherCopies(of: box) }
-                        } label: {
-                            CapsuleLabel(text: "Include other copies", isLit: isHovered)
                         }
-                        .buttonStyle(.plain)
-                        .fixedSize()
+                        .buttonStyle(.pill(nil, size: .small))
                         .help("Also select the hardlinks and clones elsewhere, so the space is freed. Torrents stop seeding.")
                     }
                 }
@@ -81,10 +77,10 @@ struct BoxView: View {
                 }
             }
         }
-        .padding(.leading, nested ? 8 : 11)
-        .padding(.trailing, 10)
+        .padding(.leading, nested ? 8 : Kit.rowInset)
+        .padding(.trailing, Kit.rowInset)
         .padding(.vertical, nested ? 6 : 7)
-        .background(RoundedRectangle(cornerRadius: nested ? 12 : 15, style: .continuous).fill(state.rowFill(color, isLit: isLit)))
+        .background(RoundedRectangle(cornerRadius: Kit.cardRadius, style: .continuous).fill(state.rowFill(color, isLit: isLit)))
         .contentShape(Rectangle())
         .onHover { inside in
             isHovered = inside
@@ -99,23 +95,12 @@ struct BoxView: View {
         .animation(.easeOut(duration: 0.14), value: isLit)
     }
 
-    /// Selecting something can give back less than it looks, when another copy of the files stays behind.
-    private func shortfall() -> (real: UInt64, wanted: UInt64)? {
-        let planned = box.rows.filter { (model.rowStates[$0.id] ?? .none) != .none }
-        let wanted = planned.reduce(UInt64(0)) { $0 &+ $1.gain }
-        let shared = planned.filter { !$0.otherCopies.isEmpty }
-        let promised = shared.reduce(UInt64(0)) { $0 &+ $1.gain }
-        let got = shared.reduce(UInt64(0)) { $0 &+ (model.planNumbers.byItem[$1.id] ?? 0) &+ (model.planNumbers.byItem[PlanItem.otherCopyID(of: $1.id)] ?? 0) }
-        guard promised > 0, Double(got) < Double(promised) * 0.9 else { return nil }
-        return (wanted &- (promised &- got), wanted)
-    }
-
     @ViewBuilder
     private func size(_ state: TickState, _ short: (real: UInt64, wanted: UInt64)?) -> some View {
         if let short {
             Text("\(formatBytes(short.real)) of \(formatBytes(short.wanted))")
                 .font(.system(size: nested ? 12 : 13, weight: .semibold).monospacedDigit())
-                .foregroundStyle(Palette.amber)
+                .foregroundStyle(Kit.amber)
         } else if state == .some {
             // What's ticked, and of what's only partly ticked, what really goes.
             let part = box.rows.reduce(UInt64(0)) { sum, row in
@@ -146,12 +131,12 @@ struct BoxView: View {
         } else if short != nil {
             Text("Other copies remain")
                 .font(font.weight(.medium))
-                .foregroundStyle(Palette.amber)
+                .foregroundStyle(Kit.amber)
                 .lineLimit(1)
         } else if let note = box.note {
             Text(note)
                 .font(font.weight(.medium))
-                .foregroundStyle(Palette.amber)
+                .foregroundStyle(Kit.amber)
                 .lineLimit(1)
         } else {
             Text(box.detail)
@@ -169,12 +154,10 @@ struct BoxView: View {
             Button(all ? "Deselect all" : "Select all") {
                 Motion.animate(.snappy(duration: 0.18)) { model.toggle(box) }
             }
-            .buttonStyle(.plain)
-            .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(.white.opacity(0.6))
+            .buttonStyle(.textLink)
             .help(box.rowsATickTakes.count < box.rows.count ? "Skips items in use or set up by hand" : "")
         }
-        .padding(.trailing, 10)
+        .padding(.trailing, Kit.rowInset)
         .padding(.top, 1)
         .padding(.bottom, 2)
     }
@@ -198,10 +181,8 @@ struct BoxView: View {
                     Button("\(rest.count) more, \(formatBytes(rest.reduce(UInt64(0)) { $0 &+ $1.gain }))") {
                         Motion.animate(.snappy(duration: 0.2)) { showAll = true }
                     }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.54))
-                    .padding(.leading, 34)
+                    .buttonStyle(.textLink)
+                    .padding(.leading, 32)
                     .padding(.vertical, 4)
                 }
             }
@@ -312,5 +293,19 @@ struct BoxBar: View {
         guard x >= 0, x <= width, width > 0 else { return nil }
         let share = x / width
         return list.first { share >= $0.start && share <= $0.end }
+    }
+}
+
+extension AppModel {
+    /// Selecting something in a box can give back less than it looks, when another copy of the files stays behind: what it
+    /// really frees, and what it looks like it frees. Nil when it frees what it looks like.
+    func shortfall(of box: Box) -> (real: UInt64, wanted: UInt64)? {
+        let planned = box.rows.filter { (rowStates[$0.id] ?? .none) != .none }
+        let wanted = planned.reduce(UInt64(0)) { $0 &+ $1.gain }
+        let shared = planned.filter { !$0.otherCopies.isEmpty }
+        let promised = shared.reduce(UInt64(0)) { $0 &+ $1.gain }
+        let got = shared.reduce(UInt64(0)) { $0 &+ (planNumbers.byItem[$1.id] ?? 0) &+ (planNumbers.byItem[PlanItem.otherCopyID(of: $1.id)] ?? 0) }
+        guard promised > 0, Double(got) < Double(promised) * 0.9 else { return nil }
+        return (wanted &- (promised &- got), wanted)
     }
 }

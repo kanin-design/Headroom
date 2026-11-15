@@ -57,6 +57,8 @@ enum Palette {
     static let amber = Color(red: 1, green: 0.74, blue: 0.42)
     /// What you get back.
     static let gain = Color(red: 0.5, green: 0.98, blue: 0.7)
+    /// What deletes for good: an action's words, never a fill.
+    static let delete = Color(red: 1, green: 0.45, blue: 0.42)
     /// Behind everything, in every window.
     static let window = Color(red: 0.03, green: 0.03, blue: 0.042)
 
