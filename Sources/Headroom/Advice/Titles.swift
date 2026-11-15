@@ -104,6 +104,11 @@ enum Titles {
         return digits >= 2
     }
 
+    /// An app's name without the ending the Finder hides. Only at the end: "Notes.app Helper" keeps all of its name.
+    static func withoutAppEnding(_ name: String) -> String {
+        name.hasSuffix(".app") ? String(name.dropLast(4)) : name
+    }
+
     /// How a number of months reads, for "no sign of use".
     static func monthsText(since date: Date, now: Date = Date()) -> String {
         let days = Int(now.timeIntervalSince(date) / 86_400)
@@ -113,12 +118,22 @@ enum Titles {
         return "\(days / 365) years"
     }
 
-    static func dayText(_ date: Date, now: Date = Date()) -> String {
+    /// Headroom is written in English, so its dates are too: with the clock and the order of the days of where you are,
+    /// never with another language's words in the middle of an English sentence.
+    static let locale = Locale(identifier: "en_" + (Locale.current.region?.identifier ?? "US"))
+
+    private static func dayFormatter(_ format: String) -> DateFormatter {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = format
+        return formatter
+    }
+
+    nonisolated(unsafe) private static let thisYear = dayFormatter("MMM d"), anotherYear = dayFormatter("MMM yyyy")
+
+    static func dayText(_ date: Date, now: Date = Date()) -> String {
         let sameYear = Calendar.current.isDate(date, equalTo: now, toGranularity: .year)
-        formatter.dateFormat = sameYear ? "MMM d" : "MMM yyyy"
-        return formatter.string(from: date)
+        return (sameYear ? thisYear : anotherYear).string(from: date)
     }
 
     /// How much bigger something is than its neighbours, in words.

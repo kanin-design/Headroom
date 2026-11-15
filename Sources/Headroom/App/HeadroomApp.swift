@@ -23,6 +23,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         ScriptRunner.startIfAsked()
         Updater.shared.checkAtLaunch()
+        AgentServer.shared.start()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        MainActor.assumeIsolated { AgentServer.shared.stop() }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
@@ -106,6 +111,14 @@ private struct AboutCommand: View {
     }
 }
 
+private struct AgentsCommand: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("Agents…") { openWindow(id: "agents") }
+    }
+}
+
 private struct UpdateCommand: View {
     @Environment(\.openWindow) private var openWindow
 
@@ -137,6 +150,7 @@ struct HeadroomApp: App {
             CommandGroup(replacing: .appInfo) {
                 AboutCommand()
                 UpdateCommand()
+                AgentsCommand()
             }
             CommandGroup(replacing: .newItem) {
                 Button("Scan Again") { AppModel.shared.scan(hurry: true) }
@@ -225,6 +239,17 @@ struct HeadroomApp: App {
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
         .windowBackgroundDragBehavior(.enabled)
+        .restorationBehavior(.disabled)
+        .defaultLaunchBehavior(.suppressed)
+        .defaultPosition(.center)
+        .commandsRemoved()
+
+        Window("Agents", id: "agents") {
+            AgentsView()
+                .windowMinimizeBehavior(.disabled)
+                .windowFullScreenBehavior(.disabled)
+        }
+        .windowResizability(.contentSize)
         .restorationBehavior(.disabled)
         .defaultLaunchBehavior(.suppressed)
         .defaultPosition(.center)

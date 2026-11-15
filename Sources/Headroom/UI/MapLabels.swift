@@ -95,9 +95,9 @@ enum LabelPlacer {
             for i in order.prefix(160) {
                 let p = layout.pieces[i]
                 if p.isSmaller || p.ring > 3 { continue }
-                if lens == .freeUp && p.style != 1 { continue }
-                let isFree = p.style == 1
-                let isHidden = p.style == 2
+                if lens == .freeUp && p.style != .free { continue }
+                let isFree = p.style == .free
+                let isHidden = p.style == .hidden
                 // The top of a chain is what you'd call it. The whole chain shows when you point at it.
                 let title = isFree ? "Free" : model.displayName(p.node)
                 let value = tree.sizeText(p.node)
@@ -123,7 +123,7 @@ enum LabelPlacer {
             let total = Double(max(tree.totals[Int(layout.focus)], 1))
             for i in order.prefix(260) where !labelled.contains(i) {
                 let p = layout.pieces[i]
-                if p.isSmaller || p.style == 1 || p.ring > 4 { continue }
+                if p.isSmaller || p.style == .free || p.ring > 4 { continue }
                 let share = Double(p.bytes) / total
                 if share < 0.015 { continue }
                 if p.ring == 0 && layout.focus == 0 { continue }
@@ -299,12 +299,7 @@ enum LabelPlacer {
     }
 
     private static func visiblePiece(for node: UInt32, layout: RingLayout, tree: DiskTree) -> Int? {
-        var target = node
-        while true {
-            if let i = layout.pieces.firstIndex(where: { !$0.isSmaller && $0.node == target }) { return i }
-            if target == 0 || target == layout.focus { return nil }
-            target = tree.nodes[Int(target)].parent
-        }
+        layout.nearestPiece(to: node, tree: tree)
     }
 }
 
@@ -317,7 +312,7 @@ struct LabelsLayer: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             ForEach(model.labels.filter { $0.place != .inside }) { label in
-                let isOn = model.hover?.node == label.node
+                let isOn = model.labelLight.node == label.node
                 LeaderLine(anchor: label.anchor, elbow: label.elbow,
                            end: CGPoint(x: label.position.x + (label.place == .right ? -7 : 7), y: label.position.y))
                     .stroke(.white.opacity(isOn ? 0.7 : 0.26), lineWidth: isOn ? 1 : 0.75)
@@ -334,15 +329,15 @@ struct LabelsLayer: View {
             ForEach(model.labels) { label in
                 if label.place == .inside {
                     InsideLabel(label: label)
-                        .opacity(model.hover == nil || model.hover?.node == label.node ? 1 : 0.5)
-                        .animation(.easeOut(duration: 0.14), value: model.hover?.node)
+                        .opacity(!model.labelLight.onAnything || model.labelLight.node == label.node ? 1 : 0.5)
+                        .animation(.easeOut(duration: 0.14), value: model.labelLight)
                         .position(label.position)
                         .allowsHitTesting(false)
                         .transition(Self.comeAndGo)
                 } else {
                     let right = label.place == .right
                     let room = max(right ? model.ring.mapWidth - label.position.x - 6 : label.position.x - 12, 60)
-                    OuterLabel(label: label, isOn: model.hover?.node == label.node)
+                    OuterLabel(label: label, isOn: model.labelLight.node == label.node)
                         .onHover { inside in
                             if inside { model.enterLabel(piece: label.pieceIndex) } else { model.leaveLabel(piece: label.pieceIndex) }
                         }
@@ -505,8 +500,8 @@ struct CenterReadout: View {
         // Nothing until the disk is known, so the first frame doesn't roll up from zero.
         if let free = model.tree.map({ $0.totals[Int($0.free)] }) ?? model.volume?.free {
             let capacity = model.tree?.capacityBytes ?? model.volume?.capacity ?? 0
-            let planning = model.planBytes >= 1_000_000 && model.lens == .freeUp
-            let preview = free &+ model.planBytes
+            let planning = model.planNumbers.total >= 1_000_000 && model.lens == .freeUp
+            let preview = free &+ model.planNumbers.total
             let usedShare = 1 - Double(free) / Double(max(capacity, 1))
             slots(size, number: bigNumber(planning ? preview : free, size: size, color: planning ? Color(red: 0.45, green: 1, blue: 0.68) : .white)) {
                 EmptyView()
@@ -518,7 +513,7 @@ struct CenterReadout: View {
                     if let pointing = model.pointing, model.lens == .freeUp {
                         pointingLine(pointing, size: size)
                     } else if planning {
-                        Text("+\(formatBytes(model.planBytes))")
+                        Text("+\(formatBytes(model.planNumbers.total))")
                             .font(.system(size: size * 0.05, weight: .semibold).monospacedDigit())
                             .foregroundStyle(Color(red: 0.45, green: 1, blue: 0.68).opacity(0.8))
                     } else if let delta = sinceLast(free) {
@@ -537,9 +532,9 @@ struct CenterReadout: View {
 
     /// In Changes the middle says how much free space changed, from the scan it compares with, or else how much was
     /// touched, going by file dates.
-    private func changeColour(_ note: String) -> Color {
+    private func changeColour(shrank: Bool) -> Color {
         if model.changeWindow.isUntouched { return Palette.untouched.swiftUI }
-        return note.hasPrefix("−") ? Palette.cool.swiftUI : Palette.grew.swiftUI
+        return shrank ? Palette.cool.swiftUI : Palette.grew.swiftUI
     }
 
     /// In Copies the middle says how much the duplicates take, in white as free space is. Pointing at a set in the inspector says
@@ -664,7 +659,7 @@ struct CenterReadout: View {
             if let links = hover.links {
                 Text(links)
                     .font(.system(size: size * 0.072, weight: .semibold))
-                    .foregroundStyle(Color(red: 1, green: 0.74, blue: 0.42))
+                    .foregroundStyle(Palette.amber)
                     .lineLimit(2)
                     .minimumScaleFactor(0.85)
                     .truncationMode(.middle)
@@ -674,7 +669,7 @@ struct CenterReadout: View {
                 let saysChange = model.lens == .changes && !hover.tellsUse
                 Text(hover.note)
                     .font(.system(size: size * 0.072, weight: saysChange ? .semibold : .medium))
-                    .foregroundStyle(saysChange ? changeColour(hover.note) : .white.opacity(0.72))
+                    .foregroundStyle(saysChange ? changeColour(shrank: hover.shrank) : .white.opacity(0.72))
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
             } else if !hover.share.isEmpty {

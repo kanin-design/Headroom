@@ -40,7 +40,7 @@ enum Aliases {
     static func find(in tree: DiskTree, rules: RuleBook, stop: LockedFlag) -> [Found] {
         let nodes = tree.nodes
         let field = DiskTree.statSymlinks
-        let onBoot = tree.home != 0
+        let onBoot = tree.isBoot
         var out: [Found] = []
         var looked = 0
         var stack: [UInt32] = [0]
@@ -121,7 +121,7 @@ enum Aliases {
         var st = stat()
         let exists = stat(full, &st) == 0
         let disk = full.hasPrefix("/Volumes/") ? full.split(separator: "/").dropFirst().first.map(String.init) : nil
-        let onThisDisk = disk == nil ? tree.home != 0 : tree.rootPath == "/Volumes/" + disk!
+        let onThisDisk = disk == nil ? tree.isBoot : tree.rootPath == "/Volumes/" + disk!
         guard exists else {
             if let disk, !onThisDisk, !FileManager.default.fileExists(atPath: "/Volumes/" + disk) {
                 return Found(dir: folder, name: name, target: full, node: nil, state: .diskMissing(disk))
@@ -132,7 +132,7 @@ enum Aliases {
             return Found(dir: folder, name: name, target: full, node: nil, state: .otherDisk(disk))
         }
         // On the startup disk the map's paths begin with the data volume's own name.
-        let node = tree.find(path: full) ?? tree.find(path: "/System/Volumes/Data" + full)
+        let node = tree.find(visible: full)
         // Something too small to have a piece of its own isn't worth a line.
         guard let node, node != 0 else { return nil }
         return Found(dir: folder, name: name, target: full, node: node, state: .here)

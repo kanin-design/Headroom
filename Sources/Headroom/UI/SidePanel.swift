@@ -155,7 +155,6 @@ struct MapPanel: View {
     var body: some View {
         if let tree = model.tree {
             let subject = model.selected ?? model.focus
-            let _ = model.treeVersion
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     // The disk's name is the window's title, so the whole disk starts with what's on it.
@@ -192,7 +191,7 @@ struct MapPanel: View {
     private func summary(_ tree: DiskTree) -> some View {
         let free = tree.totals[Int(tree.free)]
         let fullness = 1 - Double(free) / Double(max(tree.capacityBytes, 1))
-        let biggest = model.flatTop(tree).first
+        let biggest = model.biggestAtTop(tree)
         let canGo = model.suggestions.everything.filter(\.isRecommended).reduce(UInt64(0)) { $0 &+ $1.bytes }
         return VStack(alignment: .leading, spacing: 10) {
             if !model.hasFullAccess {
@@ -215,7 +214,7 @@ struct MapPanel: View {
                         Text(tree.isPartial ? "\(formatBytes(canGo)) safe to clear so far" : "About \(formatBytes(canGo)) safe to clear")
                     }
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color(red: 0.5, green: 0.98, blue: 0.7))
+                    .foregroundStyle(Palette.gain)
                 }
                 .buttonStyle(.plain)
             }
@@ -263,7 +262,7 @@ struct MapPanel: View {
                                 .foregroundStyle(.white.opacity(0.65))
                             Text(formatBytes(story.reclaim))
                                 .font(.system(size: 14, weight: .semibold, design: .rounded).monospacedDigit())
-                                .foregroundStyle(Color(red: 1, green: 0.74, blue: 0.42))
+                                .foregroundStyle(Palette.amber)
                         }
                         Text("\(formatBytes(story.sharedOut)) hardlinked or cloned with \(story.sharedPlace ?? "another folder")")
                             .font(.system(size: 12))
@@ -286,7 +285,7 @@ struct MapPanel: View {
             }
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color(red: 1, green: 0.74, blue: 0.42).opacity(0.08)))
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.amber.opacity(0.08)))
         }
     }
 
@@ -299,7 +298,7 @@ struct MapPanel: View {
             } label: {
                 Label("Go to \(place)", systemImage: "arrow.right")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color(red: 1, green: 0.74, blue: 0.42))
+                    .foregroundStyle(Palette.amber)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -394,15 +393,7 @@ struct MapPanel: View {
     }
 
     // Asked for when it's clicked. A row that held on to the tree it was drawn from would keep all of that tree in memory.
-    private func open(_ node: UInt32) {
-        guard let tree = model.tree else { return }
-        let n = tree.nodes[Int(node)]
-        if n.has(NodeFlag.directory) && n.firstChild != 0 {
-            model.zoom(into: RingLayout.chainTail(tree: tree, node))
-        } else {
-            model.selected = node
-        }
-    }
+    private func open(_ node: UInt32) { model.openFromList(node, goingToItsFolder: false) }
 
     @ViewBuilder
     private func actions(_ tree: DiskTree, _ subject: UInt32) -> some View {
@@ -428,8 +419,6 @@ struct DeleteMenu: View {
     let node: UInt32
 
     var body: some View {
-        // Depends on the list, so it follows any change to it.
-        let _ = model.plan.items.count
         let planned = model.isPlanned(node)
         Menu {
             ThingMenuItems(actions: model.deleteActions(for: NamedThing(node)))
@@ -612,16 +601,7 @@ struct ChangesPanel: View {
         .padding(.horizontal, -8)
     }
 
-    private func open(_ node: UInt32) {
-        guard let tree = model.tree else { return }
-        let n = tree.nodes[Int(node)]
-        if n.has(NodeFlag.directory) && n.firstChild != 0 {
-            model.zoom(into: RingLayout.chainTail(tree: tree, node))
-        } else {
-            model.zoom(into: n.parent)
-            model.selected = node
-        }
-    }
+    private func open(_ node: UInt32) { model.openFromList(node) }
 }
 
 // MARK: Search
@@ -629,12 +609,7 @@ struct ChangesPanel: View {
 struct SearchPanel: View {
     let model: AppModel
 
-    private func open(_ node: UInt32) {
-        guard let tree = model.tree else { return }
-        let n = tree.nodes[Int(node)]
-        if n.has(NodeFlag.directory) && n.firstChild != 0 { model.zoom(into: RingLayout.chainTail(tree: tree, node)) }
-        else { model.zoom(into: n.parent); model.selected = node }
-    }
+    private func open(_ node: UInt32) { model.openFromList(node) }
 
     var body: some View {
         if let tree = model.tree {

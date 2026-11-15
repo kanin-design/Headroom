@@ -74,8 +74,6 @@ struct Facts: Sendable {
         var path: String
         var name: String
         var finished: Date?
-        var uploaded: Int
-        var isPaused: Bool
     }
 
     struct SteamGame: Sendable {
@@ -84,7 +82,6 @@ struct Facts: Sendable {
         var folder: String
         var manifest: String
         var lastPlayed: Date?
-        var size: UInt64
     }
 
     struct RepoFact: Sendable {
@@ -110,11 +107,6 @@ struct Facts: Sendable {
     func torrent(holding path: String) -> Torrent? {
         torrents.first { PathMath.isInside(path, $0.path) || PathMath.isInside($0.path, path) }
     }
-
-    /// Visible path: without the data volume's prefix, as other apps write it.
-    static func visible(_ path: String) -> String {
-        path.hasPrefix("/System/Volumes/Data/") ? String(path.dropFirst("/System/Volumes/Data".count)) : path
-    }
 }
 
 /// An app, and what can be told about it from the outside.
@@ -123,7 +115,6 @@ struct AppFact: Sendable {
     var name: String
     var bundleID: String
     var fromAppStore: Bool
-    var addedAt: Date?
     var newestSign: Date?
     var signCount: Int
     var isRunning: Bool
@@ -165,7 +156,7 @@ enum DiskIndex {
             guard size >= 50_000_000 else { continue }
             // A copy in the Trash isn't a copy to count on.
             if let path = tree.path(UInt32(i)), Cleaner.isInTrash(path) { continue }
-            files[tree.name(UInt32(i)).lowercased()] = size
+            files[tree.rawName(UInt32(i)).lowercased()] = size
         }
         guard let data = try? JSONEncoder().encode(File(disk: tree.volumeName, files: files, readAt: Date())) else { return }
         try? data.write(to: url(tree.volumeName), options: .atomic)
@@ -177,23 +168,18 @@ enum DiskIndex {
         return Date().timeIntervalSince(date)
     }
 
-    static func diskNames() -> [String] {
-        let names = (try? FileManager.default.contentsOfDirectory(at: AppData.folder, includingPropertiesForKeys: nil)) ?? []
-        return names.filter { $0.lastPathComponent.hasPrefix("index-") }.compactMap { file in
-            guard let data = try? Data(contentsOf: file), let index = try? JSONDecoder().decode(File.self, from: data) else { return nil }
-            return index.disk
-        }
-    }
-
-    /// Everything known about every other disk.
-    static func loadOthers(than volume: String) -> [String: [Entry]] {
-        var out: [String: [Entry]] = [:]
+    /// Every disk there's a list for, and everything known about every disk but this one. Each list is read once for both.
+    static func load(besides volume: String) -> (disks: [String], elsewhere: [String: [Entry]]) {
+        var disks: [String] = []
+        var elsewhere: [String: [Entry]] = [:]
         let names = (try? FileManager.default.contentsOfDirectory(at: AppData.folder, includingPropertiesForKeys: nil)) ?? []
         for file in names where file.lastPathComponent.hasPrefix("index-") {
-            guard let data = try? Data(contentsOf: file), let index = try? JSONDecoder().decode(File.self, from: data), index.disk != volume else { continue }
-            for (name, size) in index.files { out[name, default: []].append(Entry(disk: index.disk, size: size, readAt: index.readAt ?? .distantPast)) }
+            guard let data = try? Data(contentsOf: file), let index = try? JSONDecoder().decode(File.self, from: data) else { continue }
+            disks.append(index.disk)
+            guard index.disk != volume else { continue }
+            for (name, size) in index.files { elsewhere[name, default: []].append(Entry(disk: index.disk, size: size, readAt: index.readAt ?? .distantPast)) }
         }
-        return out
+        return (disks, elsewhere)
     }
 }
 
@@ -222,9 +208,10 @@ extension Facts {
         // The Desktop is guarded: without Full Disk Access, looking there would bring up a prompt.
         facts.screenshots = fullAccess ? readScreenshots(home: NSHomeDirectory()) : []
         readTree(into: &facts, tree: tree, earlier: earlier)
-        facts.elsewhere = DiskIndex.loadOthers(than: tree.volumeName)
+        let lists = DiskIndex.load(besides: tree.volumeName)
+        facts.elsewhere = lists.elsewhere
         // Plex remembers disks too, even when they're away.
-        var known = Set(DiskIndex.diskNames())
+        var known = Set(lists.disks)
         for root in facts.plexRoots where root.hasPrefix("/Volumes/") {
             let parts = root.split(separator: "/")
             if parts.count >= 2 { known.insert(String(parts[1])) }
@@ -315,14 +302,13 @@ extension Facts {
                   let record = Bencode.parse(data)?.dict,
                   let destination = record["destination"]?.string, let title = record["name"]?.string else { continue }
             let done = record["done-date"]?.int ?? 0
-            facts.torrents.append(Torrent(path: destination + "/" + title, name: title, finished: done > 0 ? Date(timeIntervalSince1970: TimeInterval(done)) : nil,
-                                          uploaded: record["uploaded"]?.int ?? 0, isPaused: (record["paused"]?.int ?? 0) != 0))
+            facts.torrents.append(Torrent(path: destination + "/" + title, name: title, finished: done > 0 ? Date(timeIntervalSince1970: TimeInterval(done)) : nil))
         }
     }
 
     // MARK: Steam
 
-    private static func readSteam(into facts: inout Facts, home: String) {
+    static func readSteam(into facts: inout Facts, home: String) {
         let library = home + "/Library/Application Support/Steam/steamapps"
         let names = (try? FileManager.default.contentsOfDirectory(atPath: library)) ?? []
         for name in names where name.hasPrefix("appmanifest_") && name.hasSuffix(".acf") {
@@ -334,7 +320,7 @@ extension Facts {
             guard !dir.isEmpty, !dir.contains("/"), dir != ".", dir != ".." else { continue }
             let played = TimeInterval(values["LastPlayed"] ?? "") ?? 0
             facts.games.append(SteamGame(appID: appID, name: title, folder: library + "/common/" + dir, manifest: path,
-                                         lastPlayed: played > 0 ? Date(timeIntervalSince1970: played) : nil, size: UInt64(values["SizeOnDisk"] ?? "") ?? 0))
+                                         lastPlayed: played > 0 ? Date(timeIntervalSince1970: played) : nil))
         }
     }
 
@@ -370,7 +356,7 @@ extension Facts {
             var link = stat()
             guard lstat(path, &link) == 0, link.st_mode & S_IFMT != S_IFLNK else { continue }
             guard let plist = NSDictionary(contentsOfFile: path + "/Contents/Info.plist"), let id = plist["CFBundleIdentifier"] as? String else { continue }
-            let name = (path as NSString).lastPathComponent.replacingOccurrences(of: ".app", with: "")
+            let name = Titles.withoutAppEnding((path as NSString).lastPathComponent)
             let fromAppStore = fm.fileExists(atPath: path + "/Contents/_MASReceipt/receipt")
             // Apple's apps only if the App Store can give them back.
             if id.hasPrefix("com.apple."), !fromAppStore { continue }
@@ -409,10 +395,8 @@ extension Facts {
                 }
             }
 
-            var addedAt: Date?
             if let item = MDItemCreateWithURL(nil, URL(fileURLWithPath: path) as CFURL) {
                 if let used = MDItemCopyAttribute(item, kMDItemLastUsedDate) as? Date { signs.append(used) }
-                addedAt = MDItemCopyAttribute(item, kMDItemDateAdded) as? Date
             }
 
             // Something else from the same maker is doing something: say so, rather than let it look forgotten.
@@ -422,24 +406,22 @@ extension Facts {
                 let maker = parts.prefix(2).joined(separator: ".")
                 if !sharedPrefixes.contains(maker) {
                     if let other = running.first(where: { $0.bundleID.hasPrefix(maker + ".") && $0.bundleID != id }) {
-                        makerNote = "\(other.name), by the same developer, is running."
+                        makerNote = "\(other.name), by the same developer, is running"
                     } else if let process = open.running(containing: maker) {
-                        makerNote = "\(process.process), by the same developer, is running."
-                    } else if startsByItself(maker: maker, home: home) {
-                        makerNote = "A background item by the same developer is installed."
+                        makerNote = "\(process.process), by the same developer, is running"
+                    } else if launchItems(home).contains(where: { $0.hasPrefix(maker + ".") }) {
+                        makerNote = "A background item by the same developer is installed"
                     }
                 }
             }
-            facts.apps.append(AppFact(path: path, name: name, bundleID: id, fromAppStore: fromAppStore, addedAt: addedAt, newestSign: signs.max(), signCount: signs.count,
+            facts.apps.append(AppFact(path: path, name: name, bundleID: id, fromAppStore: fromAppStore, newestSign: signs.max(), signCount: signs.count,
                                       isRunning: running.contains { $0.bundleID == id }, makerNote: makerNote, settings: settings, data: data))
         }
     }
 
-    private static func startsByItself(maker: String, home: String) -> Bool {
-        for folder in [home + "/Library/LaunchAgents", "/Library/LaunchAgents", "/Library/LaunchDaemons"] {
-            for name in (try? FileManager.default.contentsOfDirectory(atPath: folder)) ?? [] where name.hasPrefix(maker + ".") { return true }
-        }
-        return false
+    /// Everything set to start by itself, by file name, which begins with its maker's. Listed once for all the apps.
+    private static func launchItems(_ home: String) -> [String] {
+        JustListed.names(in: [home + "/Library/LaunchAgents", "/Library/LaunchAgents", "/Library/LaunchDaemons"])
     }
 
     // MARK: Left behind
@@ -478,13 +460,13 @@ extension Facts {
             guard !n.has(NodeFlag.synthetic) else { continue }
             if n.has(NodeFlag.directory) {
                 // A Hugging Face cache. Its model folders can be too small to be on a saved map, so they're read from here.
-                if n.nameLength == 3, tree.name(id) == "hub", let path = tree.path(id),
+                if n.nameLength == 3, tree.rawName(id) == "hub", let path = tree.path(id),
                    let names = try? FileManager.default.contentsOfDirectory(atPath: path) {
                     for name in names where name.hasPrefix("models--") { modelFolders.append(path + "/" + name) }
                 }
                 guard nodes[Int(n.parent)].has(NodeFlag.projects) || n.has(NodeFlag.projects) else { continue }
                 // A project under git.
-                if gitAvailable, n.nameLength == 4, tree.name(id) == ".git", tree.totals[Int(n.parent)] >= 100_000_000, let path = tree.path(n.parent) {
+                if gitAvailable, n.nameLength == 4, tree.rawName(id) == ".git", tree.totals[Int(n.parent)] >= 100_000_000, let path = tree.path(n.parent) {
                     // Worked on lately, or not yours to move: it won't be suggested, whatever git would say.
                     if tree.statRow(n.parent)[DiskTree.statRecent30] == 0, Safety.canTrash(path),
                        let fact = earlier?.repos[path] ?? Git.read(path) { facts.repos[path] = fact }
@@ -492,14 +474,14 @@ extension Facts {
                 }
                 // A folder of numbered images.
                 if n.fileCount >= 100, tree.totals[i] >= 200_000_000 {
-                    let images = UInt64(tree.statRow(i)[Int(Kind.image.rawValue)]) << 14
+                    let images = DiskTree.bytes(units: tree.statRow(i)[Int(Kind.image.rawValue)])
                     if Double(images) >= Double(tree.totals[i]) * 0.8, let path = tree.path(id) {
                         if let frames = earlier?.frames[path] ?? frameFolder(path) { facts.frames[path] = frames }
                     }
                 }
             } else if n.kind == Kind.video.rawValue, max(n.bytes, n.aliasBytes) >= 100_000_000, videos < 800, let path = tree.path(id) {
                 videos += 1
-                let visible = Facts.visible(path)
+                let visible = PathMath.visible(path)
                 facts.askedSpotlight.insert(visible)
                 if let earlier, earlier.askedSpotlight.contains(visible) {
                     facts.lastOpened[visible] = earlier.lastOpened[visible]
@@ -586,6 +568,9 @@ enum Git {
 
     static var isAvailable: Bool { tool != nil }
 
+    /// How long one question to git may take.
+    static let patience: TimeInterval = 10
+
     private static func run(_ arguments: [String], in path: String) -> String? {
         guard let tool else { return nil }
         let process = Process()
@@ -597,6 +582,11 @@ enum Git {
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
         do { try process.run() } catch { return nil }
+        // A project on a disk that has stopped answering, or one so big that git takes minutes, mustn't hold up
+        // everything else that's being found out. Then nothing is known about it, which is what no answer means anyway.
+        let giveUp = DispatchWorkItem { if process.isRunning { process.terminate() } }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + patience, execute: giveUp)
+        defer { giveUp.cancel() }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         guard process.terminationStatus == 0 else { return nil }

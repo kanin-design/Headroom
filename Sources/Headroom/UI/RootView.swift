@@ -22,6 +22,8 @@ struct RootView: View {
                 BottomArea(model: model, ring: ring)
                     .frame(width: ring.mapWidth, height: geometry.size.height, alignment: .bottom)
 
+                AgentQuestion()
+
                 // The folder's own icon beside the title, as a Finder window has: drag it to another app, or ⌘-click the
                 // title for where it is. Not with names hidden, since that would show them.
                 if let url = proxyURL {
@@ -35,7 +37,7 @@ struct RootView: View {
         }
         // The map goes on under the toolbar, which has no background of its own over it.
         .ignoresSafeArea(.container, edges: .top)
-        .background(Color(red: 0.03, green: 0.03, blue: 0.042))
+        .background(Palette.window)
         .navigationTitle(title)
         .navigationSubtitle(subtitle)
         .toolbarTitleMenu { TitleMenu(model: model) }
@@ -155,7 +157,7 @@ struct LensPicker: View {
             Motion.animate(.spring(response: 0.34, dampingFraction: 0.82)) { model.setLens(lens) }
         })) {
             ForEach(Lens.allCases) { lens in
-                Text(lens.rawValue)
+                Text(lens.title)
                     .help(lens.help)
                     .tag(lens)
             }
@@ -203,6 +205,7 @@ struct BottomArea: View {
 
     var body: some View {
         VStack(spacing: 10) {
+            AgentsConnected()
             if let message = model.message {
                 MessageCard(model: model, message: message)
                     .transition(Motion.arrival(from: .bottom))
@@ -238,6 +241,7 @@ struct BottomArea: View {
         .padding(.bottom, 12)
         .animation(.spring(response: 0.38, dampingFraction: 0.86), value: model.message)
         .animation(.easeOut(duration: 0.18), value: model.tip)
+        .animation(.easeOut(duration: 0.18), value: Agents.shared.connected)
         .animation(.spring(response: 0.38, dampingFraction: 0.86), value: model.focus)
     }
 }

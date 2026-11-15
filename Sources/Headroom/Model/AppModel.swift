@@ -17,11 +17,23 @@ struct ScanRequest {
 
 /// The three questions the map can answer. The geometry stays put, so changing the question never loses your place.
 enum Lens: String, CaseIterable, Identifiable {
+    // What each is saved as, for the view you left. Not what it's called: renaming a tab mustn't forget which one you were in.
     case map = "Map"
     case changes = "Changes"
     case freeUp = "Free Up"
     case copies = "Copies"
     var id: String { rawValue }
+
+    /// What the tab says.
+    var title: String {
+        switch self {
+        case .map: "Map"
+        case .changes: "Changes"
+        case .freeUp: "Free Up"
+        case .copies: "Copies"
+        }
+    }
+
     var help: String {
         switch self {
         case .map: "Disk usage by kind"
@@ -29,6 +41,20 @@ enum Lens: String, CaseIterable, Identifiable {
         case .freeUp: "Space you can free, safest first"
         case .copies: "Duplicates, hardlinks, clones and symlinks"
         }
+    }
+}
+
+/// Whether the pointer is on anything on the ring, and which named piece it's on, if any.
+struct LabelLight: Equatable {
+    var onAnything = false
+    var node: UInt32?
+
+    init() {}
+
+    /// For the piece the pointer is on, if any, and the pieces that have names.
+    init(hovering node: UInt32?, named: Set<UInt32>) {
+        onAnything = node != nil
+        self.node = node.flatMap { named.contains($0) ? $0 : nil }
     }
 }
 
@@ -63,6 +89,8 @@ struct HoverInfo: Equatable {
     var tellsUse = false
     /// It's in the Trash, which is all the line says.
     var inTrash = false
+    /// In Changes: the line says it got smaller.
+    var shrank = false
 }
 
 @MainActor
@@ -73,7 +101,7 @@ final class AppModel {
     // Disk
     var volumes: [VolumeFacts] = []
     var volume: VolumeFacts?
-    private(set) var tree: DiskTree?
+    private(set) var tree: DiskTree? { didSet { planner = nil } }
     /// Goes up whenever the tree's numbers change, so views can follow along.
     var treeVersion = 0
     var isScanning = false
@@ -103,6 +131,11 @@ final class AppModel {
     /// For a check: whether the card's film is playing.
     @ObservationIgnored var lookIsPlaying = false
     @ObservationIgnored var factsCache: [UInt32: String] = [:]
+    @ObservationIgnored var storyTask: Task<Void, Never>?
+    /// The last link story worked out for a menu: a right-click asks for the same one twice.
+    @ObservationIgnored var menuStory: (node: UInt32, version: Int, story: LinkStory)?
+    /// The pictures the card shows for a folder, found once for that folder and that map: the card redraws on every arrow key.
+    @ObservationIgnored var lookMediaKnown: (node: UInt32, version: Int, files: [UInt32])?
     @ObservationIgnored var factsVersion = -1
     /// Where you've been, for the back and forward arrows, and where in that you are now.
     var visited = [Visit()]
@@ -124,7 +157,12 @@ final class AppModel {
     /// How many rings the picture has now, and how many it could fill. The menu offers no more than that.
     var ringsDrawn = RingSizes.saved.depth
     var ringReach = RingSizes.most
-    var hover: HoverInfo?
+    var hover: HoverInfo? { didSet { noteLabelLight() } }
+    /// What the names around the ring need to know of where the pointer is. It changes when the pointer comes onto the
+    /// ring, leaves it, or reaches a piece that has a name, and not for every piece it crosses on the way, so the names
+    /// aren't all drawn again each time `hover` changes.
+    private(set) var labelLight = LabelLight()
+    @ObservationIgnored private var labelledNodes: Set<UInt32> = []
     var selected: UInt32? { didSet { if oldValue != selected { refreshStory(); visitChanged() } } }
     var ring = RingGeometry(center: .zero, radius: 0, mapWidth: 0, windowHeight: 0)
 
@@ -135,6 +173,8 @@ final class AppModel {
     var boxes: [Box] = []
     /// Every suggestion in those boxes, and what can't be ticked.
     var shownRows: [WinRow] = []
+    /// The rows on screen that offer to include another copy of their files, by id.
+    var rowsOfferingOtherCopies: Set<String> = []
     var openBoxes: Set<String> = []
     /// What you're pointing at in the panel, so the ring and its middle can say so too.
     var pointing: Pointing?
@@ -176,7 +216,7 @@ final class AppModel {
     /// What the last search found, so the sets can be worked out again when something changes, with nothing read.
     @ObservationIgnored var copiesFound: [Duplicates.Found] = []
     /// The colour each set wears, so it keeps it while others come and go.
-    @ObservationIgnored var copyColours: [String: Int] = [:]
+    @ObservationIgnored var copyColours: [UInt64: Int] = [:]
     @ObservationIgnored var copiesAliasesFound: [Aliases.Found] = []
     @ObservationIgnored var copiesStop: LockedFlag?
     @ObservationIgnored var copiesScanID: UUID?
@@ -187,13 +227,11 @@ final class AppModel {
     /// Goes up whenever the plan changes, so anything showing a tick redraws, even when what it asks is cached out of sight.
     var planVersion = 0
     /// What you'd really get back.
-    var planBytes: UInt64 = 0
-    var planBytesByItem: [String: UInt64] = [:]
     var rowStates: [String: TickState] = [:]
     var checks: [String: ItemCheck] = [:]
     var isChecking = false
     var cleanProgress: CleanProgress?
-    var afterClean: AfterClean?
+    var afterClean: AfterClean? { didSet { planner = nil } }
     /// A clean is being put back where it came from.
     var isPuttingBack = false
     /// A few words beside the ring, for when a click can't do what you asked.
@@ -209,13 +247,12 @@ final class AppModel {
     var expandedRow: String?
     var previewingAfter = false
 
-    @ObservationIgnored var planNodes: [String: [UInt32]] = [:]
-    @ObservationIgnored var planExcluded: [UInt32] = []
-    /// Planned files too small to be on the map, by item: a screenshot, say. They count, and show as ticked, by their paths.
-    @ObservationIgnored var planLoose: [String: [String]] = [:]
-    @ObservationIgnored var planSet: NodeSet?
-    @ObservationIgnored var planBack: NodeSet?
-    @ObservationIgnored var nodeOfPath: [String: UInt32] = [:]
+    /// What the plan would give back, as last worked out. See `PlanNumbers`.
+    var planNumbers = PlanNumbers()
+    /// Where everything planned is on the map on screen. See `PlanPlaces`.
+    @ObservationIgnored var planPlaces = PlanPlaces() { didSet { planner = nil } }
+    /// Whether a node goes at the next clean, made once for the plan, the map and the Trash as they are, and asked many times.
+    @ObservationIgnored var planner: RingLayout.Planner?
     /// You unticked these, so they don't tick themselves again.
     @ObservationIgnored var refusedRows: Set<String> = []
     /// Each thing's colour on the ring for the picture on screen, and the same by the map's numbering.
@@ -226,7 +263,6 @@ final class AppModel {
     @ObservationIgnored var checkTask: Task<Void, Never>?
     @ObservationIgnored var pointingTask: Task<Void, Never>?
     /// Every suggestion on screen with its parts spelled out, and which one a node belongs to.
-    @ObservationIgnored var flatRows: [WinRow] = []
     /// Which scan's node numbers the suggestions use.
     @ObservationIgnored var winsScanID: UUID?
     @ObservationIgnored var quitAfterClean = false
@@ -243,10 +279,15 @@ final class AppModel {
     /// The folder the ring went to when a row was opened. While it's there, the list stays as it was: only the ring moved.
     @ObservationIgnored var expandedFocus: UInt32?
     @ObservationIgnored var cleanStop = LockedFlag()
-    @ObservationIgnored var takenOut: [(node: UInt32, bytes: UInt64, tree: DiskTree, heldBy: UInt32?, heldBytes: UInt64)] = []
+    /// What has been taken out of the map since the last clean began, so Undo can put it back without reading the disk. Each
+    /// says which scan's numbers it's in, not which tree: a tree kept here would stay in memory until the Trash is emptied.
+    @ObservationIgnored var takenOut: [(node: UInt32, bytes: UInt64, scanID: UUID, heldBy: UInt32?, heldBytes: UInt64)] = []
+    /// The copy of the map that things are being taken out of or put back into, until it's shown. See `draftTree`.
+    @ObservationIgnored private var draft: DiskTree?
+    /// Goes up each time the map on screen is about to be changed by hand. A map read from the disk before that is out of date.
+    @ObservationIgnored private(set) var mapEdits = 0
     @ObservationIgnored var clearedItems: [PlanItem] = []
     @ObservationIgnored var rescanWhenBack = false
-    @ObservationIgnored var cachedAfterPlan: AfterPlan?
     @ObservationIgnored var facts: Facts = .none
     @ObservationIgnored var factsRunning = false
     @ObservationIgnored var factsWanted = false
@@ -274,7 +315,12 @@ final class AppModel {
     var history: [HistoryPoint] = []
 
     // Names around the ring
-    var labels: [MapLabel] = []
+    var labels: [MapLabel] = [] {
+        didSet {
+            labelledNodes = Set(labels.map(\.node))
+            noteLabelLight()
+        }
+    }
     var labelsVisible = false
 
     // Search
@@ -552,7 +598,6 @@ final class AppModel {
             suggestions = Suggestions()
             boxes = []
             winsScanID = nil
-            flatRows = []
             rowOfNode = [:]
             shownRows = []
             otherCopies = [:]
@@ -670,6 +715,7 @@ final class AppModel {
         let running = runningBundleIDs()
         let facts = self.facts
         let kept = plan.kept
+        let edits = mapEdits
         mapsOnTheirWay += 1
         Task.detached(priority: .userInitiated) {
             let (wins, map) = Self.suggest(tree: newTree, rules: rules, running: running, facts: facts, kept: kept)
@@ -679,6 +725,13 @@ final class AppModel {
                 self.mapsOnTheirWay -= 1
                 // You may have picked another disk while this was being worked out.
                 guard newTree.rootPath == self.volume?.mountPath else { return }
+                // Things left this disk, or came back, after this map was read: it would show them where they no longer
+                // are. The map on screen stays, and the disk is read again once they've gone.
+                if Self.isOutOfDate(replacing: self.tree, with: newTree, cleaning: self.isCleaning, editsThen: edits, editsNow: self.mapEdits) {
+                    self.scanOnceCleaned()
+                    if !self.isCleaning { self.runScanAfterClean() }
+                    return
+                }
                 // The end of a scan you've been watching: its folders are the same ones, so you simply stay where you are.
                 let sameScan = self.tree?.scanID == newTree.scanID
                 var newFocus: UInt32?
@@ -720,6 +773,12 @@ final class AppModel {
         }
     }
 
+    /// Whether a map that has just arrived was read before the one on screen, of the same disk, was changed by hand.
+    nonisolated static func isOutOfDate(replacing shown: DiskTree?, with new: DiskTree, cleaning: Bool, editsThen: Int, editsNow: Int) -> Bool {
+        guard let shown, !shown.isPartial, shown.rootPath == new.rootPath else { return false }
+        return cleaning || editsThen != editsNow
+    }
+
     private func adopt(_ map: ReclaimMap, _ new: Suggestions, _ change: ChangeMap, _ rows: [ChangeRow], for window: ChangeWindow) {
         reclaim = map
         suggestions = new
@@ -732,7 +791,6 @@ final class AppModel {
             show(current, current.rows(tree: tree, rules: rules))
         }
         refreshShownRows()
-        tickTheTrash()
         refreshPlanNumbers()
     }
 
@@ -770,13 +828,8 @@ final class AppModel {
         volume = facts
         tree = nil
         // The plan's node numbers belong to the disk that was on screen, and so does everything worked out from them.
-        planNodes = [:]
-        planExcluded = []
-        planSet = nil
-        planBack = nil
-        nodeOfPath = [:]
-        cachedAfterPlan = nil
-        flatRows = []
+        planPlaces = PlanPlaces()
+        planNumbers.after = nil
         rowOfNode = [:]
         winsScanID = nil
         otherCopies = [:]
@@ -969,11 +1022,13 @@ final class AppModel {
         guard let tree, !tree.links.isEmpty else { story = nil; return }
         let node = selected ?? focus
         guard node != 0, !tree.nodes[Int(node)].has(NodeFlag.synthetic) else { story = nil; return }
-        Task.detached(priority: .userInitiated) {
-            let found = Accounting.story(node, in: tree)
-            await MainActor.run {
-                if (self.selected ?? self.focus) == node { self.story = found }
-            }
+        // Only the last one asked for is wanted: moving through folders quickly doesn't leave a pass over every link on the
+        // disk running for each one passed.
+        storyTask?.cancel()
+        storyTask = Task { [weak self] in
+            let found = await Task.detached(priority: .userInitiated) { Accounting.story(node, in: tree) }.value
+            guard let self, !Task.isCancelled, (self.selected ?? self.focus) == node else { return }
+            self.story = found
         }
     }
 
@@ -1086,7 +1141,7 @@ final class AppModel {
         hover = info
         // Whether its files also have another path, and when it was last used, are worked out off the main thread from
         // the moment the pointer arrives, and the line shows them when they're ready. Pointing at something else stops it.
-        let wantsLinks = !info.inTrash && !p.isSmaller && p.style != 1 && p.style != 2 && !tree.links.isEmpty && tree.nodes[Int(p.node)].flags & NodeFlag.synthetic == 0
+        let wantsLinks = !info.inTrash && !p.isSmaller && p.style != .free && p.style != .hidden && !tree.links.isEmpty && tree.nodes[Int(p.node)].flags & NodeFlag.synthetic == 0
         if hasFullAccess, wantsLinks || info.tellsUse {
             let node = p.node, bytes = p.bytes, tellsUse = info.tellsUse
             linksTask = Task { [weak self] in
@@ -1119,6 +1174,7 @@ final class AppModel {
         }
         var note = ""
         var tellsUse = false
+        var shrank = false
         let ownShape = p.node == tree.free || p.node == tree.hidden
         if lens == .changes, let changes, changes.isUntouched {
             // All of it, or how much of it. A piece that's been touched says when, as it would on the map.
@@ -1126,19 +1182,22 @@ final class AppModel {
             if untouched > 0 {
                 // The window is in the panel, so a part only needs saying how much: the whole line has to fit in the middle.
                 note = Double(untouched) >= Double(p.bytes) * 0.999 ? "Untouched \(changeWindow.span)" : "\(formatBytes(UInt64(untouched))) untouched"
-            } else if !ownShape, !p.isSmaller, p.style != 2, !(tree.isPartial && tree.isStillGrowing(p.node)) {
+            } else if !ownShape, !p.isSmaller, p.style != .hidden, !(tree.isPartial && tree.isStillGrowing(p.node)) {
                 share = ""
                 tellsUse = !(n.has(NodeFlag.synthetic) || (n.rule != 0 && rules.rule(n.rule).tier == .handsOff))
             }
         } else if lens == .changes, let changes {
             let delta = changes.value(of: p.node)
             if delta > 0 { note = "+\(formatBytes(UInt64(delta))) \(changes.shortCaption)" }
-            else if delta < 0 { note = "−\(formatBytes(UInt64(-delta))) \(changes.shortCaption)" }
-        } else if !ownShape, !p.isSmaller, p.style != 2, !(tree.isPartial && tree.isStillGrowing(p.node)) {
+            else if delta < 0 {
+                note = "−\(formatBytes(UInt64(-delta))) \(changes.shortCaption)"
+                shrank = true
+            }
+        } else if !ownShape, !p.isSmaller, p.style != .hidden, !(tree.isPartial && tree.isStillGrowing(p.node)) {
             // The ring already shows its share. Once the pointer rests, the line says when it was last used, except on
             // macOS's own parts, which have nothing to add.
             share = ""
-            if let path = tree.path(p.node), LastUse.isInTrash(Facts.visible(path), home: NSHomeDirectory()) {
+            if let path = tree.path(p.node), LastUse.isInTrash(PathMath.visible(path), home: NSHomeDirectory()) {
                 return HoverInfo(pieceIndex: index, node: p.node, title: displayName(piece: p), bytes: p.bytes,
                                  share: "", note: LastUse.trashLine, links: nil, inTrash: true)
             }
@@ -1146,24 +1205,14 @@ final class AppModel {
             tellsUse = !leftAlone
         }
         return HoverInfo(pieceIndex: index, node: p.node, title: displayName(piece: p), bytes: p.bytes,
-                         share: share, note: note, links: nil, tellsUse: tellsUse)
+                         share: share, note: note, links: nil, tellsUse: tellsUse, shrank: shrank)
     }
 
     /// Lights up one thing from the panel or a label, as if the pointer were on it.
     func highlight(node: UInt32?) {
         ringLitIt = false
         guard let node, let tree else { setHover(nil); return }
-        let layout = engine.layout
-        var target = node
-        while true {
-            if let index = layout.pieces.firstIndex(where: { $0.node == target && !$0.isSmaller }) {
-                setHover(index)
-                return
-            }
-            if target == 0 || target == focus { break }
-            target = tree.nodes[Int(target)].parent
-        }
-        setHover(nil)
+        setHover(engine.layout.nearestPiece(to: node, tree: tree))
     }
 
     /// Lights up many things at once: every node_modules on the disk. Whatever is too small to draw lights what holds it.
@@ -1194,7 +1243,7 @@ final class AppModel {
         var ranges: [Range<Int>] = []
         for (i, p) in layout.pieces.enumerated() {
             let isLeaf = Int(p.end) == i + 1
-            if isLeaf && !p.isSmaller && p.style != 1 && p.style != 2 && tree.dominantKind(p.node) == kind { ranges.append(i..<i + 1) }
+            if isLeaf && !p.isSmaller && p.style != .free && p.style != .hidden && tree.dominantKind(p.node) == kind { ranges.append(i..<i + 1) }
         }
         engine.setEmphasis(primary: nil, related: ranges)
     }
@@ -1301,7 +1350,7 @@ final class AppModel {
 
     func zoom(into node: UInt32, from piece: Piece? = nil) {
         guard node != focus else { return }
-        let source = piece ?? engine.layout.pieces.first(where: { $0.node == node && !$0.isSmaller })
+        let source = piece ?? engine.layout.piece(of: node).map { engine.layout.pieces[$0] }
         let mapping = source.map { ZoomMapping(a0: $0.a0, a1: $0.a1, r1: $0.r1) }
         trail.append(focus)
         focus = node
@@ -1354,15 +1403,9 @@ final class AppModel {
         selected = nil
         let layout = drawing(tree)
         // The piece that holds where you were tells the zoom which way to go.
-        var mapping: ZoomMapping?
-        var search = old
-        while mapping == nil {
-            if let p = layout.pieces.first(where: { $0.node == search && !$0.isSmaller }) {
-                mapping = ZoomMapping(a0: p.a0, a1: p.a1, r1: p.r1)
-                break
-            }
-            if search == 0 { break }
-            search = tree.nodes[Int(search)].parent
+        let mapping = layout.nearestPiece(to: old, tree: tree).map { at -> ZoomMapping in
+            let p = layout.pieces[at]
+            return ZoomMapping(a0: p.a0, a1: p.a1, r1: p.r1)
         }
         zoomedAt = Date()
         engine.apply(layout, .zoomOut(mapping))
@@ -1398,17 +1441,49 @@ final class AppModel {
         if tree?.isPartial == true, !scanIsHurrying { activeScan?.scanner.setHurry(new != .map) }
     }
 
+    private func noteLabelLight() {
+        let light = LabelLight(hovering: hover?.node, named: labelledNodes)
+        if light != labelLight { labelLight = light }
+    }
+
     // MARK: Taking things out of the picture
 
-    /// Takes something out of the picture, and into the Trash piece. If you were looking inside it, you step back to the
-    /// folder that held it. What another copy still holds stays on the disk, and shows up there.
-    func takeOut(_ node: UInt32, from tree: DiskTree, trueBytes: UInt64? = nil) -> UInt64 {
+    /// The map on screen is never changed where it is: hovering, the suggestions, the checks and Copies read it on other
+    /// threads, and a scan may be refreshing from it. A change is made to a copy, which `showDraft` then puts in its place.
+    /// The copy has the same folder numbers, so everything that holds one carries on. Nil while a scan is still filling
+    /// the map in, when nothing may be taken out of it.
+    func draftTree() -> DiskTree? {
+        guard let tree, !tree.isPartial else { return nil }
+        if let draft, draft.scanID == tree.scanID { return draft }
+        mapEdits += 1
+        draft = tree.copy()
+        return draft
+    }
+
+    /// Puts the changed copy on screen. False when there was nothing to show.
+    @discardableResult func showDraft() -> Bool {
+        guard let changed = draft else { return false }
+        draft = nil
+        // Another map took its place meanwhile.
+        guard changed.scanID == tree?.scanID else { return false }
+        tree = changed
+        treeVersion += 1
+        return true
+    }
+
+    /// Whether the map on screen is the one this was started on, with or without things taken out since.
+    func isOnScreen(_ other: DiskTree?) -> Bool { other != nil && tree?.scanID == other?.scanID }
+
+    /// Takes something out of the picture, and into the Trash piece, in the copy that `showDraft` shows. If you were looking
+    /// inside it, you step back to the folder that held it. What another copy still holds stays on the disk, and shows up there.
+    func takeOut(_ node: UInt32, trueBytes: UInt64? = nil) -> UInt64 {
         // Already in the Trash: taking it out again would count it twice, and putting it back twice would loop.
-        guard !tree.nodes[Int(node)].has(NodeFlag.gone) else { return 0 }
+        guard let tree = draftTree(), !tree.nodes[Int(node)].has(NodeFlag.gone) else { return 0 }
         let bytes = tree.totals[Int(node)]
         let real = min(trueBytes ?? bytes, bytes)
-        if focus != 0, tree.isInside(focus, node) {
-            focus = tree.nodes[Int(node)].parent
+        var stay = focus
+        if stay != 0, tree.isInside(stay, node) {
+            stay = tree.nodes[Int(node)].parent
             trail = []
         }
         if let chosen = selected, tree.isInside(chosen, node) { selected = nil }
@@ -1418,17 +1493,40 @@ final class AppModel {
         if let trash = trashNode(in: tree) { tree.add(real, to: trash) }
         let heldBy = stillHeld ?? tree.hidden
         tree.add(bytes &- real, to: heldBy)
-        takenOut.append((node, real, tree, heldBy, bytes &- real))
+        takenOut.append((node, real, tree.scanID, heldBy, bytes &- real))
         // Nothing left to show here.
-        while focus != 0, tree.totals[Int(focus)] == 0 { focus = tree.nodes[Int(focus)].parent }
+        while stay != 0, tree.totals[Int(stay)] == 0 { stay = tree.nodes[Int(stay)].parent }
+        if stay != focus { focus = stay }
         return real
+    }
+
+    /// Puts back everything `takeOut` took, newest first, in the copy that `showDraft` shows. False when the map on screen
+    /// isn't the one they were taken from, and the disk has to be read again instead.
+    func putBackWhatWasTakenOut() -> Bool {
+        guard let tree, !takenOut.isEmpty, takenOut.allSatisfy({ $0.scanID == tree.scanID }), let draft = draftTree() else { return false }
+        let trash = trashNode(in: draft)
+        for entry in takenOut.reversed() {
+            if let trash { draft.subtract(entry.bytes, from: trash) }
+            if let held = entry.heldBy { draft.subtract(entry.heldBytes, from: held) }
+            draft.restore(entry.node)
+        }
+        takenOut = []
+        return true
+    }
+
+    /// The Trash has that much less in it, and the disk that much more free, in the copy that `showDraft` shows.
+    func moveFromTrashToFree(_ bytes: UInt64) {
+        guard bytes > 0, let draft = draftTree() else { return }
+        if let trash = trashNode(in: draft) { draft.subtract(bytes, from: trash) }
+        draft.add(bytes, to: draft.free)
     }
 
     func trashNode(in tree: DiskTree) -> UInt32? {
         func child(of parent: UInt32, named name: String) -> UInt32? {
             var c = tree.nodes[Int(parent)].firstChild
             while c != 0 {
-                if tree.name(c) == name { return c }
+                // The name on disk: the one shown may be made up.
+                if tree.rawName(c) == name { return c }
                 c = tree.nodes[Int(c)].nextSibling
             }
             return nil
@@ -1502,6 +1600,24 @@ final class LockedFlag: @unchecked Sendable {
     }
 }
 
+/// For progress that's reported far more often than anyone can see: says yes at most once in each interval, from any thread.
+final class Pace: @unchecked Sendable {
+    private let lock = NSLock()
+    private let interval: TimeInterval
+    private var last = 0.0
+
+    init(every interval: TimeInterval = 0.1) { self.interval = interval }
+
+    func isDue() -> Bool {
+        let now = ProcessInfo.processInfo.systemUptime
+        lock.lock()
+        defer { lock.unlock() }
+        guard now - last >= interval else { return false }
+        last = now
+        return true
+    }
+}
+
 final class MenuAction: NSObject {
     let run: () -> Void
     init(_ run: @escaping () -> Void) { self.run = run }
@@ -1510,49 +1626,4 @@ final class MenuAction: NSObject {
 final class MenuTarget: NSObject {
     static let shared = MenuTarget()
     @objc func run(_ sender: NSMenuItem) { (sender.representedObject as? MenuAction)?.run() }
-}
-
-/// The last check before anything moves. Only your own files, never the folders that hold everything together.
-enum Safety {
-    /// An app's own settings live in a folder nothing else is allowed to touch.
-    static func canUninstall(_ path: String) -> Bool {
-        if canTrash(path) { return true }
-        if HiddenNames.isOn { return false }
-        let visible = path.hasPrefix("/System/Volumes/Data/") ? String(path.dropFirst("/System/Volumes/Data".count)) : path
-        return visible.hasPrefix(NSHomeDirectory() + "/Library/Preferences/") && visible.hasSuffix(".plist")
-    }
-
-    private static let home = NSHomeDirectory()
-    private static let protected: Set<String> = [
-        "/", home, "/Users", "/Applications", "/Library", "/System", "/private", "/usr", "/opt", "/bin", "/sbin", "/etc", "/var",
-        home + "/Library", home + "/Desktop", home + "/Documents", home + "/Downloads", home + "/Pictures", home + "/Movies",
-        home + "/Music", home + "/.Trash", home + "/Library/Application Support", home + "/Library/Caches", home + "/Library/Preferences",
-        home + "/Library/Containers", home + "/Library/Group Containers", home + "/.config", home + "/.ssh", home + "/dev",
-    ]
-
-    static func canTrash(_ path: String) -> Bool {
-        if HiddenNames.isOn { return false }
-        var visible = PathMath.visible(path)
-        // One spelling for each place: `/Users/me/` and `/Users/me//x` mustn't slip past a check written for `/Users/me`.
-        while visible.count > 1, visible.hasSuffix("/") { visible.removeLast() }
-        guard visible.hasPrefix("/"), !visible.dropFirst().split(separator: "/", omittingEmptySubsequences: false).contains(where: { $0.isEmpty || $0 == "." || $0 == ".." })
-        else { return false }
-        if protected.contains(visible) { return false }
-        for keep in ["/.Trash", "/.ssh", "/.gnupg", "/Library/Keychains", "/Library/Preferences", "/Library/Mail", "/Library/Messages", "/Library/Safari",
-                     "/Library/Mobile Documents", "/Library/CloudStorage", "/Library/Calendars", "/Library/Reminders", "/Library/Accounts", "/Library/Cookies",
-                     "/Music/Music"]
-        where PathMath.isInside(visible, home + keep) { return false }
-        // A package is one thing to the Finder. What's inside isn't yours to pick apart, and a library of photos is only
-        // safe in the hands of its own app.
-        let parts = visible.split(separator: "/")
-        for (at, part) in parts.enumerated() {
-            if part.hasSuffix(".photoslibrary") || part.hasSuffix(".musiclibrary") || part.hasSuffix(".tvlibrary") || part.hasSuffix(".imovielibrary") { return false }
-            if at < parts.count - 1, part.hasSuffix(".app") || part.hasSuffix(".framework") || part.hasSuffix(".fcpbundle") || part.hasSuffix(".logicx")
-                || part.hasSuffix(".sparsebundle") || part.hasSuffix(".xcarchive") || part.hasSuffix(".band") { return false }
-        }
-        if visible.hasPrefix(home + "/") { return true }
-        if visible.hasPrefix("/Applications/") { return true }
-        if visible.hasPrefix("/Volumes/") { return visible.split(separator: "/").count > 2 }
-        return false
-    }
 }

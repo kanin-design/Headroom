@@ -177,4 +177,99 @@ final class PlanListTests: XCTestCase {
         XCTAssertEqual(back.cleaned.first?.bytes, 5)
         XCTAssertEqual(back.list.items.first?.step, .move(folder: "/Volumes/Spare/Media"))
     }
+
+    // MARK: Looking things up
+
+    func testAnItemIsFoundByItsIDAfterEveryKindOfChange() {
+        var list = PlanList()
+        for n in 0..<50 { list.add(PlanItem(id: "row:\(n)", title: "Row \(n)", note: "", tierRaw: Tier.noLoss.rawValue, paths: ["/Volumes/Fake/\(n)"])) }
+        XCTAssertEqual(list.item("row:7")?.title, "Row 7")
+        XCTAssertNil(list.item("row:50"))
+        let before = list
+        list.remove("row:7")
+        XCTAssertNil(list.item("row:7"))
+        XCTAssertEqual(list.item("row:49")?.title, "Row 49", "everything after it moved up one")
+        XCTAssertEqual(before.item("row:7")?.title, "Row 7", "a copy made earlier still answers for itself")
+        list.items[0].title = "Renamed"
+        XCTAssertEqual(list.item("row:0")?.title, "Renamed")
+        list.items.removeAll { $0.id == "row:1" }
+        XCTAssertNil(list.item("row:1"))
+        list.takeBack("/Volumes/Fake/2")
+        XCTAssertNil(list.item("row:2"))
+        let again = try? JSONDecoder().decode(PlanList.self, from: JSONEncoder().encode(list))
+        XCTAssertEqual(again, list)
+        XCTAssertEqual(again?.item("row:30")?.title, "Row 30")
+    }
+
+    func testPlannedPathsAreFoundOnTheMapOnceEach() {
+        let disk = FakeDisk()
+        let film = disk.file("/Volumes/Fake/films/a.mkv", 4_000_000_000)
+        disk.file("/Volumes/Fake/films/b.mkv", 2_000_000_000)
+        let shots = disk.file("/Volumes/Fake/shots/big.png", 3_000_000)
+        disk.finish()
+        var places = PlanPlaces()
+        let items = [
+            PlanItem(id: "films", title: "Films", note: "", tierRaw: Tier.yourCall.rawValue, paths: ["/Volumes/Fake/films"], excluded: ["/Volumes/Fake/films/b.mkv"]),
+            PlanItem(id: "shots", title: "Shots", note: "", tierRaw: Tier.noLoss.rawValue,
+                     paths: ["/Volumes/Fake/shots/big.png", "/Volumes/Fake/shots/small.png", "/Volumes/Fake/nowhere/x.png"]),
+        ]
+        places.resolve(items, in: disk.tree)
+        XCTAssertEqual(places.nodes["films"], [disk.node("/Volumes/Fake/films")])
+        XCTAssertEqual(places.nodes["shots"], [shots])
+        XCTAssertEqual(places.loose["shots"], ["/Volumes/Fake/shots/small.png"], "in a folder that's on the map, though too small to be on it itself")
+        XCTAssertEqual(places.excluded, [disk.node("/Volumes/Fake/films/b.mkv")])
+        XCTAssertEqual(places.set?.contains(film), true)
+        XCTAssertEqual(places.back?.contains(film), false)
+        XCTAssertNil(places.node(at: "/Volumes/Fake/nowhere/x.png", in: disk.tree))
+        // What wasn't there is remembered as that, until it's known to be.
+        places.remember(film, at: "/Volumes/Fake/nowhere/x.png")
+        XCTAssertEqual(places.node(at: "/Volumes/Fake/nowhere/x.png", in: disk.tree), film)
+    }
+
+    func testANameIsFoundHoweverItsAccentsAreWritten() {
+        let disk = FakeDisk()
+        let composed = "Caf\u{00E9}", decomposed = "Cafe\u{0301}"
+        XCTAssertNotEqual(Array(composed.utf8), Array(decomposed.utf8))
+        let file = disk.file("/Volumes/Fake/\(decomposed)/menu.pdf", 5_000_000)
+        disk.file("/Volumes/Fake/plain/x.bin", 5_000_000)
+        disk.finish()
+        XCTAssertEqual(disk.tree.find(path: "/Volumes/Fake/\(decomposed)/menu.pdf"), file)
+        XCTAssertEqual(disk.tree.find(path: "/Volumes/Fake/\(composed)/menu.pdf"), file, "the same name to anyone reading it")
+        XCTAssertEqual(disk.tree.find(visible: "/Volumes/Fake/plain/x.bin"), disk.node("/Volumes/Fake/plain/x.bin"))
+        XCTAssertNil(disk.tree.find(path: "/Volumes/Fake/plain/X.BIN"))
+        XCTAssertNil(disk.tree.find(path: "/Volumes/Fake/plai"))
+        XCTAssertEqual(disk.tree.child(of: disk.node("/Volumes/Fake"), named: "plain"), disk.node("/Volumes/Fake/plain"))
+    }
+
+    /// A planned thing's id is in the plan that's saved between launches, and ties a suggestion to its other copy and its
+    /// data. If what an id looks like ever changed, a saved plan would no longer match what's on screen.
+    func testPlanIDsStayWhatASavedPlanHolds() throws {
+        XCTAssertEqual(PlanItem.trashID, "trash")
+        XCTAssertEqual(PlanItem.id(pickedByHand: "/Users/someone/big.mov"), "path:/Users/someone/big.mov")
+        XCTAssertEqual(PlanItem.id(sent: "/Users/someone/big.mov"), "sent:/Users/someone/big.mov")
+        XCTAssertEqual(PlanItem.otherCopyID(of: "series:Show"), "series:Show:other-copy")
+        XCTAssertEqual(PlanItem.dataID(of: "app:com.example"), "app:com.example:also")
+        func item(_ id: String) -> PlanItem { PlanItem(id: id, title: id, note: "", tierRaw: Tier.yourCall.rawValue, paths: ["/Volumes/Fake/" + id]) }
+        XCTAssertTrue(item("path:/x").isPickedByHand)
+        XCTAssertFalse(item("series:Show").isPickedByHand)
+        XCTAssertTrue(item("series:Show:other-copy").isOtherCopy)
+        XCTAssertFalse(item("series:Show").isOtherCopy)
+
+        // Taking a suggestion out takes its other copy and its data with it, and nothing else.
+        var list = PlanList()
+        for id in ["series:Show", PlanItem.otherCopyID(of: "series:Show"), PlanItem.dataID(of: "series:Show"), "series:Show 2", PlanItem.id(pickedByHand: "/y")] { list.add(item(id)) }
+        list.remove("series:Show")
+        XCTAssertEqual(list.items.map(\.id), ["series:Show 2", "path:/y"])
+
+        // A plan saved before today reads back, with every id as it was.
+        let saved = #"{"list":{"items":[{"id":"series:Show:other-copy","title":"Other copy of Show","note":"","tierRaw":3,"paths":["/Volumes/Fake/t"],"excluded":[],"step":{"trash":{}},"addedAt":0,"byHand":false,"lastKnownBytes":5}],"kept":[]},"cleaned":[],"lastItems":[],"oldTrashBytes":0}"#
+        if let file = try? JSONDecoder().decode(PlanFile.self, from: Data(saved.utf8)) {
+            XCTAssertEqual(file.list.items.first?.isOtherCopy, true)
+        } else {
+            // What a step looks like when saved is the encoder's business. Round-trip one made here instead.
+            let file = PlanFile(list: list)
+            let back = try JSONDecoder().decode(PlanFile.self, from: JSONEncoder().encode(file))
+            XCTAssertEqual(back.list.items.map(\.id), list.items.map(\.id))
+        }
+    }
 }

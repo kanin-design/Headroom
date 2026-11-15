@@ -8,14 +8,15 @@ final class FakeDisk {
     private var paths: [String: UInt32] = [:]
     private(set) var count: UInt32 = 0
 
-    init(capacity: UInt64 = 500_000_000_000, free: UInt64 = 50_000_000_000) {
+    /// `root` is where its files are said to be. A real folder there lets a test put real files beside the made-up ones.
+    init(capacity: UInt64 = 500_000_000_000, free: UInt64 = 50_000_000_000, root: String = "/Volumes/Fake") {
         tree.capacityBytes = capacity
         tree.freeBytes = free
         tree.volumeName = "Fake"
-        tree.rootPath = "/Volumes/Fake"
+        tree.rootPath = root
         _ = add(parent: 0, name: "Fake", flags: NodeFlag.synthetic | NodeFlag.directory, isRoot: true)
-        let files = add(parent: 0, name: "/Volumes/Fake", flags: NodeFlag.anchor | NodeFlag.directory | NodeFlag.projects)
-        paths["/Volumes/Fake"] = files
+        let files = add(parent: 0, name: root, flags: NodeFlag.anchor | NodeFlag.directory | NodeFlag.projects)
+        paths[root] = files
         tree.hidden = add(parent: 0, name: "Hidden", flags: NodeFlag.synthetic | NodeFlag.hidden)
         tree.free = add(parent: 0, name: "Free", flags: NodeFlag.synthetic | NodeFlag.free, bytes: free)
     }

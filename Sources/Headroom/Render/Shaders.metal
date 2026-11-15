@@ -31,6 +31,9 @@ struct Uniforms {
     float ghostCount;       // how many colours the new free space has
     float freeOuter;        // how far out the free wedge reaches, as a share of the radius
     float minLit;           // points: the least a lit piece is drawn across while a tint shows, so a small one can be seen
+    float layer;            // which pieces this pass draws: 0 the ones at rest, 1 the lit, 2 the lifted, 3 the one on top
+    float litAbove;         // how lit a piece has to be to count as lit, for that
+    float top;              // the piece pointed at, which lies over all the others; -1 when there's none
     float4 previewColor;
     float4 tint;            // the colour lit pieces and the folders they're in take on, and in w how much
     float4 ghostSlices[12]; // each colour, and in w where it ends, as a share of the whole
@@ -112,6 +115,10 @@ vertex SegmentOut segment_vertex(uint vid [[vertex_id]],
     o.deeper = s.params.w;
     o.emphasis = e;
     o.planned = mix(s.plan.x, s.plan.y, saturate(u.t));
+    // Lit pieces lie over the ones at rest, lifted ones over those, and the one pointed at over them all, however lit it
+    // is yet. Each pass draws one of the layers: a piece that isn't in it gets no area at all.
+    float layer = float(iid) == u.top ? 3.0 : (e > 1.0 ? 2.0 : (e > u.litAbove ? 1.0 : 0.0));
+    if (layer != u.layer) o.position = float4(2.0, 2.0, 0.0, 1.0);
     return o;
 }
 

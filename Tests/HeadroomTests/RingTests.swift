@@ -137,6 +137,91 @@ final class RingTests: XCTestCase {
     }
 
     /// The path of the folder this many levels down.
+    /// Every picture is measured first, to see how many rings it can fill. That pass makes no pieces, and has to say what
+    /// the finished picture with the most rings says.
+    func testMeasuringAgreesWithThePictureItMeasuresFor() throws {
+        let d = deepDisk()
+        for style in [RingStyle.standard, .tapered] {
+            for focus in [d.node("/Volumes/Fake"), d.node(deep(2)), 0] {
+                let measured = RingLayout.fill(tree: d.tree, focus: focus, style: style)
+                let drawn = RingLayout.build(tree: d.tree, focus: focus, colorer: { _ in .zero }, sizes: RingSizes(depth: RingSizes.most, style: style))
+                XCTAssertGreaterThan(measured.count, 3)
+                // With fewer rings than the most, each sits further out and goes at least as far around.
+                guard drawn.rings == RingSizes.most else {
+                    for (a, b) in zip(drawn.fill, measured) { XCTAssertGreaterThanOrEqual(a, b - 0.0001) }
+                    continue
+                }
+                XCTAssertEqual(drawn.fill.count, measured.count)
+                for (a, b) in zip(drawn.fill, measured) { XCTAssertEqual(a, b, accuracy: 0.0001) }
+            }
+        }
+        let full = RingLayout.build(tree: d.tree, focus: d.node("/Volumes/Fake"), colorer: { _ in .zero }, sizes: RingSizes(depth: 12, style: .tapered))
+        XCTAssertEqual(full.rings, 12, "this disk fills all twelve, so the comparison above was exact at least once")
+    }
+
+    /// Looking a node's piece up says what going through every piece would.
+    func testEveryNodeIsFoundWhereItsDrawn() throws {
+        let d = FakeDisk()
+        for folder in 0..<30 {
+            for file in 0..<12 { d.file("/Volumes/Fake/films/set\(folder)/f\(file).mkv", UInt64(40 - folder) * gb / UInt64(file + 1)) }
+        }
+        d.file("/Volumes/Fake/only/chain/of/folders/big.bin", 300 * gb)
+        let tiny = d.file("/Volumes/Fake/films/set29/tiny.txt", 2_000_000)
+        d.finish()
+        for focus in [0, d.node("/Volumes/Fake"), d.node("/Volumes/Fake/films")] {
+            let layout = RingLayout.build(tree: d.tree, focus: focus, colorer: { _ in .zero })
+            let pieces = layout.pieces
+            XCTAssertGreaterThan(pieces.count, 30)
+            for node in 0..<UInt32(d.tree.count) {
+                let slow = pieces.firstIndex { !$0.isSmaller && ($0.node == node || $0.tail == node) }
+                XCTAssertEqual(layout.piece(of: node), slow, "node \(node)")
+            }
+            for (at, p) in pieces.enumerated() where !p.isSmaller {
+                XCTAssertEqual(layout.smallerPiece(in: at), pieces.firstIndex { $0.isSmaller && Int($0.parent) == at })
+            }
+            XCTAssertEqual(layout.outerSmaller, pieces.firstIndex { $0.isSmaller && $0.parent < 0 })
+            XCTAssertEqual(layout.freePiece, pieces.firstIndex { $0.style == .free })
+            // Too small to draw: what holds it stands in.
+            XCTAssertNil(layout.piece(of: tiny))
+            let holder = try XCTUnwrap(layout.nearestPiece(to: tiny, tree: d.tree))
+            XCTAssertTrue(d.tree.isInside(tiny, pieces[holder].node))
+        }
+        // A chain drawn as one piece answers for every folder in it.
+        let layout = RingLayout.build(tree: d.tree, focus: d.node("/Volumes/Fake"), colorer: { _ in .zero })
+        let chain = try XCTUnwrap(layout.piece(of: d.node("/Volumes/Fake/only")))
+        XCTAssertEqual(layout.piece(of: d.node("/Volumes/Fake/only/chain/of/folders")), chain)
+        XCTAssertEqual(layout.nearestPiece(to: d.node("/Volumes/Fake/only/chain/of"), tree: d.tree), chain)
+    }
+
+    /// A piece glides from one picture to the next by its key, which is made from the names on the way to it and nothing else.
+    func testAPiecesKeyIsItsPathWhateverItsNumber() throws {
+        func disk(reversed: Bool) -> FakeDisk {
+            let d = FakeDisk()
+            var paths = (0..<8).flatMap { a in (0..<6).map { b in "/Volumes/Fake/a\(a)/b\(b)/file.bin" } } + ["/Volumes/Fake/only/chain/of/folders/x.bin", "/Volumes/Fake/only/chain/of/folders/y.bin"]
+            if reversed { paths.reverse() }
+            for path in paths { d.file(path, UInt64(abs(path.hashValue % 50) + 20) * gb) }
+            d.finish()
+            return d
+        }
+        func keys(_ d: FakeDisk, focus: String?) -> [String: UInt64] {
+            let layout = RingLayout.build(tree: d.tree, focus: focus.map(d.node) ?? 0, colorer: { _ in .zero })
+            var out: [String: UInt64] = [:]
+            for p in layout.pieces where d.tree.path(p.node) != nil { out[d.tree.path(p.node)! + (p.isSmaller ? " (smaller)" : "")] = p.key }
+            return out
+        }
+        // The same files in another order have other numbers. Sizes are set from the path, so both disks hold the same.
+        let one = disk(reversed: false), other = disk(reversed: true)
+        XCTAssertNotEqual(one.node("/Volumes/Fake/a3/b2"), other.node("/Volumes/Fake/a3/b2"))
+        let whole = keys(one, focus: "/Volumes/Fake")
+        XCTAssertEqual(whole, keys(other, focus: "/Volumes/Fake"))
+        XCTAssertEqual(Set(whole.values).count, whole.count, "no two pieces share one")
+        XCTAssertGreaterThan(whole.count, 40)
+        // Zoomed in, a piece still has the key it had from further out, also inside a chain.
+        for (path, key) in keys(one, focus: "/Volumes/Fake/a3") { XCTAssertEqual(whole[path], key, path) }
+        for (path, key) in keys(one, focus: "/Volumes/Fake/only") { XCTAssertEqual(whole[path], key, path) }
+        XCTAssertEqual(whole["/Volumes/Fake/only/chain/of/folders/x.bin"], RingLayout.pathKey(one.tree, one.node("/Volumes/Fake/only/chain/of/folders/x.bin")))
+    }
+
     private func deep(_ level: Int) -> String {
         "/Volumes/Fake/" + (1...level).map { "d\($0)" }.joined(separator: "/")
     }

@@ -1,6 +1,11 @@
 import Foundation
 import simd
 
+/// How a piece is drawn. The shaders know these by number: see `StyleFree` and the others in `Shaders.metal`.
+enum PieceStyle: Float {
+    case folder = 0, free = 1, hidden = 2, smaller = 3, file = 4
+}
+
 /// One drawn piece of the ring.
 struct Piece {
     var node: UInt32              // the node, or its parent for a "smaller items" piece
@@ -14,7 +19,7 @@ struct Piece {
     var isSmaller: Bool
     var smallerCount: Int32       // how many things a "smaller items" piece stands for
     var color: SIMD3<Float>
-    var style: Float
+    var style: PieceStyle
     var seed: Float
     var bytes: UInt64
     var calm: Float = 0           // how far it steps back until you point at it
@@ -111,7 +116,7 @@ struct RingLayout {
     /// A folder at least this share one subfolder is drawn together with it.
     static let chainShare = 0.88
 
-    var pieces: [Piece] = []
+    private(set) var pieces: [Piece] = []
     var focus: UInt32 = 0
     /// How many rings of folders are drawn, and how many this picture could fill, up to the most there can be.
     private(set) var rings = 0
@@ -125,29 +130,75 @@ struct RingLayout {
     private var planner: Planner?
     private var after: AfterPlan?
     private var marksDeeper = false
+    /// While measuring: how far around each ring goes, added up as the folders are gone through, with no piece made.
+    private var around: [Float]?
+
+    // Where things are in `pieces`, worked out once when the picture is made, so nothing has to search it.
+    private var pieceOf: [UInt32: Int32] = [:]
+    private var smallerIn: [Int32: Int32] = [:]
+    /// The "smaller items" piece of the folder in view itself.
+    private(set) var outerSmaller: Int?
+    /// The free space piece.
+    private(set) var freePiece: Int?
+
+    /// The piece that stands for a node: its own, or the one a chain like Media › TV is drawn as, for any folder in the chain.
+    func piece(of node: UInt32) -> Int? { pieceOf[node].map(Int.init) }
+
+    /// The "smaller items" piece directly inside a piece.
+    func smallerPiece(in piece: Int) -> Int? { smallerIn[Int32(piece)].map(Int.init) }
+
+    /// The piece for a node, or for the nearest folder above it that has one. Something too small to draw lights what holds it.
+    func nearestPiece(to node: UInt32, tree: DiskTree) -> Int? {
+        var target = node
+        while true {
+            if let at = pieceOf[target] { return Int(at) }
+            if target == 0 || target == focus { return nil }
+            target = tree.nodes[Int(target)].parent
+        }
+    }
+
+    private mutating func indexPieces() {
+        pieceOf = [UInt32: Int32](minimumCapacity: pieces.count)
+        smallerIn = [:]
+        outerSmaller = nil
+        freePiece = nil
+        for (at, p) in pieces.enumerated() {
+            let at32 = Int32(at)
+            if p.isSmaller {
+                if p.parent >= 0 { smallerIn[p.parent] = at32 } else { outerSmaller = at }
+            } else {
+                if pieceOf[p.node] == nil { pieceOf[p.node] = at32 }
+                if pieceOf[p.tail] == nil { pieceOf[p.tail] = at32 }
+                if p.style == .free, freePiece == nil { freePiece = at }
+            }
+        }
+    }
 
     /// `after` draws the picture as it will be once the plan has run. It gets as many rings as asked for, but never more
     /// than it can fill, so there's no empty ring around the edge.
     static func build(tree: DiskTree, focus: UInt32, colorer: Colorer, planned: Planner? = nil, after: AfterPlan? = nil,
                       sizes: RingSizes = .saved) -> RingLayout {
         let style = sizes.style
-        let fill = measure(tree: tree, focus: focus, after: after, style: style).fill
+        let fill = fill(tree: tree, focus: focus, after: after, style: style)
         let reach = fill.prefix { $0 > 0 && $0 >= style.leastFill }.count
         let count = max(min(sizes.depth, reach), 1)
         var layout = draw(tree: tree, focus: focus, colorer: colorer, planned: planned, after: after,
                           shares: style.shares(count: count, fill: fill), marksDeeper: style.marksDeeper)
         layout.rings = count
         layout.reach = reach
+        layout.indexPieces()
         return layout
     }
 
-    /// The picture with the most rings there can be, for measuring how far around each ring goes. With fewer rings, every
-    /// ring sits further out, so each goes at least as far around then as it does here.
-    static func measure(tree: DiskTree, focus: UInt32, after: AfterPlan? = nil, style: RingStyle) -> RingLayout {
+    /// How far around each ring would go with the most rings there can be, as the `fill` of that picture, without making the
+    /// picture: this runs before every one that is made. With fewer rings, every ring sits further out, so each goes at
+    /// least as far around then as it does here.
+    static func fill(tree: DiskTree, focus: UInt32, after: AfterPlan? = nil, style: RingStyle) -> [Float] {
         // Adaptive rings are measured on the taper, the fixed curve nearest to them.
         let measuring: RingStyle = style == .standard ? .standard : .tapered
-        return draw(tree: tree, focus: focus, colorer: { _ in .zero }, planned: nil, after: after,
-                    shares: measuring.shares(count: RingSizes.most, fill: []), marksDeeper: false)
+        let measured = draw(tree: tree, focus: focus, colorer: { _ in .zero }, planned: nil, after: after,
+                            shares: measuring.shares(count: RingSizes.most, fill: []), marksDeeper: false, measuring: true)
+        return shares(of: Array((measured.around ?? []).dropFirst(focus == 0 ? 1 : 0)))
     }
 
     /// The thinnest a ring gets: five points on a typical window, so it stays easy to see and to point at.
@@ -176,25 +227,30 @@ struct RingLayout {
             if i >= around.count { around += [Float](repeating: 0, count: i + 1 - around.count) }
             around[i] += p.sweep
         }
+        return Self.shares(of: around)
+    }
+
+    private static func shares(of around: [Float]) -> [Float] {
         guard let whole = around.first, whole > 0 else { return [] }
         return around.map { $0 / whole }
     }
 
     private static func draw(tree: DiskTree, focus: UInt32, colorer: Colorer, planned: Planner?, after: AfterPlan?,
-                             shares: [Float], marksDeeper: Bool) -> RingLayout {
+                             shares: [Float], marksDeeper: Bool, measuring: Bool = false) -> RingLayout {
         var layout = RingLayout()
         layout.focus = focus
         layout.planner = planned
         layout.after = after
         layout.marksDeeper = marksDeeper
-        layout.pieces.reserveCapacity(4096)
+        if measuring { layout.around = [] } else { layout.pieces.reserveCapacity(4096) }
         let isRoot = focus == 0
         guard (after?.size(focus) ?? tree.totals[Int(focus)]) > 0 else { return layout }
         var edges: [Float] = [hole]
         if isRoot { edges.append(hole + band) }
         for width in widths(shares, filling: 1 - edges[edges.count - 1]) { edges.append(edges[edges.count - 1] + width) }
-        layout.place(tree, parentNode: focus, parentPiece: -1, a0: 0, a1: 2 * .pi, ring: 0, edges: edges, colorer: colorer)
-        if isRoot { layout.reachLikeTheRest(free: tree.free, hidden: tree.hidden, atLeast: edges[2]) }
+        layout.place(tree, parentNode: focus, parentPiece: -1, parentKey: measuring ? 0 : pathKey(tree, focus),
+                     a0: 0, a1: 2 * .pi, ring: 0, edges: edges, colorer: colorer)
+        if isRoot, !measuring { layout.reachLikeTheRest(free: tree.free, hidden: tree.hidden, atLeast: edges[2]) }
         return layout
     }
 
@@ -214,24 +270,13 @@ struct RingLayout {
         var i = 0
         while i < pieces.count {
             let p = pieces[i]
-            if !p.isSmaller, p.style != 1, p.style != 2, set.contains(p.node) || set.contains(p.tail) {
+            if !p.isSmaller, p.style != .free, p.style != .hidden, set.contains(p.node) || set.contains(p.tail) {
                 let end = max(Int(p.end), i + 1)
                 full.append(i..<end)
                 addParents(of: i)
                 i = end
             } else {
                 i += 1
-            }
-        }
-        var pieceOf = [UInt32: Int](minimumCapacity: pieces.count)
-        var smallerOf: [Int: Int] = [:]
-        var outerSmaller: Int?
-        for (at, p) in pieces.enumerated() {
-            if p.isSmaller {
-                if p.parent >= 0 { smallerOf[Int(p.parent)] = at } else { outerSmaller = at }
-            } else {
-                if pieceOf[p.node] == nil { pieceOf[p.node] = at }
-                if pieceOf[p.tail] == nil { pieceOf[p.tail] = at }
             }
         }
         for top in set.tops {
@@ -243,8 +288,8 @@ struct RingLayout {
             if drawn { continue }
             var walk = top
             while true {
-                if let at = pieceOf[walk] {
-                    let target = smallerOf[at] ?? at
+                if let at = piece(of: walk) {
+                    let target = smallerPiece(in: at) ?? at
                     holding.insert(target)
                     addParents(of: target)
                     break
@@ -324,20 +369,23 @@ struct RingLayout {
         return tail
     }
 
-    private static func pathKey(_ tree: DiskTree, _ id: UInt32) -> UInt64 {
-        var h: UInt64 = 0xCBF2_9CE4_8422_2325
+    /// A folder's key is made from the key of the folder it's in and its own name, so the names on the way down from the
+    /// top are each read once for a whole picture, not once for every piece under them.
+    @inline(__always) private static func key(_ tree: DiskTree, _ id: UInt32, in parentKey: UInt64) -> UInt64 {
+        let n = tree.nodes[Int(id)]
+        let own = n.nameLength > 0 ? RuleBook.hash(UnsafePointer(tree.names + Int(n.nameOffset)), Int(n.nameLength)) : UInt64(id)
+        return (parentKey &* 0x0000_0100_0000_01B3) ^ own
+    }
+
+    /// The key of any node, from the top of the disk down to it.
+    static func pathKey(_ tree: DiskTree, _ id: UInt32) -> UInt64 {
+        var path: [UInt32] = []
         var i = id
-        let nodes = tree.nodes, names = tree.names
         while i != 0 {
-            let n = nodes[Int(i)]
-            if n.nameLength > 0 {
-                h = (h &* 0x0000_0100_0000_01B3) ^ RuleBook.hash(UnsafePointer(names + Int(n.nameOffset)), Int(n.nameLength))
-            } else {
-                h = (h &* 0x0000_0100_0000_01B3) ^ UInt64(i)
-            }
-            i = n.parent
+            path.append(i)
+            i = tree.nodes[Int(i)].parent
         }
-        return h
+        return path.reversed().reduce(0xCBF2_9CE4_8422_2325) { key(tree, $1, in: $0) }
     }
 
     /// Free space and what's hidden are shapes of their own, the free wedge being the thing that grows when you clean up.
@@ -364,9 +412,11 @@ struct RingLayout {
         return Float(Double(inFolders) / Double(max(total(id), 1)))
     }
 
-    private mutating func place(_ tree: DiskTree, parentNode: UInt32, parentPiece: Int32,
+    /// `parentKey` is the key of `parentNode`.
+    private mutating func place(_ tree: DiskTree, parentNode: UInt32, parentPiece: Int32, parentKey: UInt64,
                                 a0: Float, a1: Float, ring: Int, edges: [Float], colorer: Colorer) {
         guard ring + 1 < edges.count else { return }
+        let measuring = around != nil
         let after = self.after
         let plannerNow = self.planner
         let totals = tree.totals
@@ -382,8 +432,19 @@ struct RingLayout {
         let visible = Self.visibleChildren(tree: tree, of: parentNode, after: after)
         var kids = visible.kids
         let ownBytes = visible.ownBytes
+        // What's drawn inside a chain is in the folder at its end, and keyed from there.
+        var kidsKey = parentKey
         if parentNode != 0 {
-            if visible.tail != parentNode, parentPiece >= 0 { pieces[Int(parentPiece)].tail = visible.tail }
+            if visible.tail != parentNode, !measuring {
+                if parentPiece >= 0 { pieces[Int(parentPiece)].tail = visible.tail }
+                var chain: [UInt32] = []
+                var link = visible.tail
+                while link != parentNode, link != 0 {
+                    chain.append(link)
+                    link = nodes[Int(link)].parent
+                }
+                for link in chain.reversed() { kidsKey = Self.key(tree, link, in: kidsKey) }
+            }
         } else {
             // Free space closes the circle, right after what's hidden.
             // While a scan is running, the big groups keep their places instead of swapping as they fill up.
@@ -413,20 +474,29 @@ struct RingLayout {
                 smallerCount += 1
                 continue
             }
-            let index = Int32(pieces.count)
             let n = nodes[Int(id)]
+            if measuring {
+                add(sweep, toRing: ring)
+                if n.firstChild != 0, ring + 2 < edges.count {
+                    place(tree, parentNode: id, parentPiece: -1, parentKey: 0, a0: angle, a1: angle + sweep, ring: ring + 1, edges: edges, colorer: colorer)
+                }
+                angle += sweep
+                continue
+            }
+            let index = Int32(pieces.count)
             let seed = Self.seed(id)
             let color = colorer(id)
-            var style: Float = 0
-            if n.has(NodeFlag.free) { style = 1 }
-            else if n.has(NodeFlag.hidden) || n.has(NodeFlag.locked) { style = 2 }
-            else if !n.has(NodeFlag.directory) && !n.has(NodeFlag.synthetic) { style = 4 }
-            pieces.append(Piece(node: id, tail: id, key: Self.pathKey(tree, id), a0: angle, a1: angle + sweep, r0: r0, r1: r1,
+            var style = PieceStyle.folder
+            if n.has(NodeFlag.free) { style = .free }
+            else if n.has(NodeFlag.hidden) || n.has(NodeFlag.locked) { style = .hidden }
+            else if !n.has(NodeFlag.directory) && !n.has(NodeFlag.synthetic) { style = .file }
+            let key = Self.key(tree, id, in: kidsKey)
+            pieces.append(Piece(node: id, tail: id, key: key, a0: angle, a1: angle + sweep, r0: r0, r1: r1,
                                 ring: Int32(ring), parent: parentPiece, end: index + 1, isSmaller: false, smallerCount: 0,
                                 color: color, style: style, seed: seed, bytes: bytes, planned: plannerNow?(id) == true ? 1 : 0))
             if n.firstChild != 0 {
                 if ring + 2 < edges.count {
-                    place(tree, parentNode: id, parentPiece: index, a0: angle, a1: angle + sweep, ring: ring + 1, edges: edges, colorer: colorer)
+                    place(tree, parentNode: id, parentPiece: index, parentKey: key, a0: angle, a1: angle + sweep, ring: ring + 1, edges: edges, colorer: colorer)
                     pieces[Int(index)].end = Int32(pieces.count)
                 } else if marksDeeper {
                     pieces[Int(index)].deeper = Self.folderShare(tree, of: id, after: after)
@@ -439,15 +509,22 @@ struct RingLayout {
         let rest = smallerBytes &+ (parentNode == 0 ? 0 : ownBytes)
         if rest > 0 && parentNode != 0 {
             let sweep = a1 - angle
-            if sweep * midArc > 0.6 {
+            if sweep * midArc > 0.6, measuring {
+                add(sweep, toRing: ring)
+            } else if sweep * midArc > 0.6 {
                 let seed = Self.seed(parentNode &* 31 &+ 7)
                 let color = colorer(parentNode)
                 let index = Int32(pieces.count)
-                pieces.append(Piece(node: parentNode, tail: parentNode, key: Self.pathKey(tree, parentNode) ^ 0x5555_5555_5555, a0: angle, a1: a1, r0: r0, r1: r1,
+                pieces.append(Piece(node: parentNode, tail: parentNode, key: parentKey ^ 0x5555_5555_5555, a0: angle, a1: a1, r0: r0, r1: r1,
                                     ring: Int32(ring), parent: parentPiece, end: index + 1, isSmaller: true, smallerCount: smallerCount,
-                                    color: color, style: 3, seed: seed, bytes: rest, planned: plannerNow?(parentNode) == true ? 1 : 0))
+                                    color: color, style: .smaller, seed: seed, bytes: rest, planned: plannerNow?(parentNode) == true ? 1 : 0))
             }
         }
+    }
+
+    private mutating func add(_ sweep: Float, toRing ring: Int) {
+        if ring >= around!.count { around! += [Float](repeating: 0, count: ring + 1 - around!.count) }
+        around![ring] += sweep
     }
 
     @inline(__always) static func seed(_ id: UInt32) -> Float {

@@ -53,6 +53,13 @@ struct Lab {
 }
 
 enum Palette {
+    /// What has to be noticed before going on: a warning's text and tint.
+    static let amber = Color(red: 1, green: 0.74, blue: 0.42)
+    /// What you get back.
+    static let gain = Color(red: 0.5, green: 0.98, blue: 0.7)
+    /// Behind everything, in every window.
+    static let window = Color(red: 0.03, green: 0.03, blue: 0.042)
+
     /// One colour per Kind. Hues are spread so that neighbours stay apart, and what you can remove runs hot.
     static let kinds: [Lab] = [
         Lab(lch: 0.45, 0.028, 285),     // other: muted lilac grey

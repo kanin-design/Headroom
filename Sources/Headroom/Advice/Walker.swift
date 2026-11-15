@@ -16,6 +16,8 @@ enum Walker {
         /// The newest date on anything, in seconds.
         var newest: Int = 0
         var seen = 0
+        /// False when the look stopped at its limit with folders still unread: what it says is then only about what it saw.
+        var complete = true
 
         fileprivate mutating func add(_ other: Look) {
             size &+= other.size
@@ -23,15 +25,19 @@ enum Walker {
             linkedBytes &+= other.linkedBytes
             newest = max(newest, other.newest)
             seen += other.seen
+            if !other.complete { complete = false }
         }
 
         var newestDate: Date { Date(timeIntervalSince1970: TimeInterval(newest)) }
     }
 
+    /// The most a look ever reads: enough for any folder a person would move or throw away in one go.
+    static let most = 2_000_000
+    /// As far as a look goes while you're only ticking things: a few hundredths of a second.
+    static let quick = 40_000
+
     static func newestChange(in path: String, limit: Int) -> Date { look(at: path, limit: limit).newestDate }
-    static func size(of path: String) -> UInt64 { look(at: path, limit: 2_000_000).size }
-    static func linkedBytes(in path: String) -> UInt64 { look(at: path, limit: 40_000).linkedBytes }
-    static func largestFile(in path: String) -> UInt64 { look(at: path, limit: 200_000).largestFile }
+    static func size(of path: String) -> UInt64 { look(at: path, limit: most).size }
 
     /// Beyond this many threads the disk can't give any more.
     private static let threads = min(ProcessInfo.processInfo.activeProcessorCount, 6)
@@ -68,7 +74,8 @@ enum Walker {
         memoLock.lock()
         let known = memo[path]
         memoLock.unlock()
-        if let known, known.limit >= limit, -known.at.timeIntervalSinceNow < maxAge { return known.look }
+        // A look that reached the end is as good as one with any higher limit.
+        if let known, known.limit >= limit || known.look.complete, -known.at.timeIntervalSinceNow < maxAge { return known.look }
         let fresh = look(at: path, limit: limit)
         memoLock.lock()
         if memo.count > 5000 { memo.removeAll() }
@@ -120,7 +127,12 @@ enum Walker {
         private func finished(_ look: Look, _ found: [String]) {
             condition.lock()
             total.add(look)
-            if total.seen < limit { folders.append(contentsOf: found) } else { folders.removeAll() }
+            if total.seen < limit {
+                folders.append(contentsOf: found)
+            } else {
+                if !found.isEmpty || !folders.isEmpty { total.complete = false }
+                folders.removeAll()
+            }
             reading -= 1
             condition.broadcast()
             condition.unlock()

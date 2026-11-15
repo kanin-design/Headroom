@@ -127,6 +127,25 @@ final class ScannerTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(Accounting.reclaimable([shared, links], in: tree), each)
     }
 
+    /// How many things a folder holds is known from its parent's listing before the folder is read, and may be out of date
+    /// by then. Reading goes on until the folder itself says there's no more, so nothing added since is left off the map.
+    func testAFolderIsReadToItsEndWhateverItWasListedWith() throws {
+        // Far more than one call returns, so stopping early would leave most of them out.
+        for at in 0..<2000 { try write(String(format: "added-later-%04d.txt", at), bytes: 16) }
+        let plain = newScan()
+        XCTAssertTrue(finishes(plain, mode: .full, threads: 2))
+        let all = plain.scanner.filesSoFar
+        XCTAssertGreaterThanOrEqual(all, 2000)
+
+        let scan = newScan()
+        let top = try XCTUnwrap(scan.tree.anchors.first?.id)
+        // As if it had been listed when it held ten things.
+        scan.tree.nodes[Int(top)].fileCount = 10
+        XCTAssertTrue(finishes(scan, mode: .full, threads: 2))
+        XCTAssertEqual(scan.scanner.filesSoFar, all, "every file is on the map, though the folder was listed with ten")
+        XCTAssertEqual(scan.tree.totalFiles[Int(top)], plain.tree.totalFiles[Int(top)])
+    }
+
     /// A folder that couldn't be opened because too many files were open isn't one you may not read. It used to be written
     /// off as denied, and a whole scan could quietly lose thousands of folders.
     func testRunningOutOfOpenFilesDoesntLoseFolders() throws {

@@ -33,11 +33,11 @@ struct CopiesPanel: View {
                         .padding(.vertical, 6)
                 }
                 if !once.isEmpty {
-                    Folded(model: model, title: "Hardlinks and clones", groups: once, total: once.reduce(UInt64(0)) { $0 &+ $1.size })
+                    Folded(model: model, id: "links", title: "Hardlinks and clones", groups: once, total: once.reduce(UInt64(0)) { $0 &+ $1.size })
                         .padding(.top, 8)
                 }
                 if !aliases.isEmpty {
-                    Folded(model: model, title: "Symlinks", groups: aliases, total: nil)
+                    Folded(model: model, id: "symlinks", title: "Symlinks", groups: aliases, total: nil)
                         .padding(.top, once.isEmpty ? 8 : 2)
                 }
             }
@@ -144,7 +144,7 @@ private struct CopySetRow: View {
             head(state, colour, isLit)
             if isOpen { inside(colour) }
         }
-        .background(RoundedRectangle(cornerRadius: 15, style: .continuous).fill(background(colour, state, isLit || isOpen)))
+        .background(RoundedRectangle(cornerRadius: 15, style: .continuous).fill(state.rowFill(colour, isLit: isLit || isOpen)))
         .animation(.easeOut(duration: 0.14), value: isLit)
     }
 
@@ -284,13 +284,6 @@ private struct CopySetRow: View {
         .frame(height: 5)
     }
 
-    private func background(_ colour: Color, _ state: TickState, _ isLit: Bool) -> Color {
-        switch state {
-        case .all: colour.opacity(isLit ? 0.2 : 0.14)
-        case .some: colour.opacity(isLit ? 0.13 : 0.07)
-        case .none: .white.opacity(isLit ? 0.07 : 0)
-        }
-    }
 }
 
 /// One copy in an open set: where it is, its name there, when it changed and its size. Pointing at it makes it stand out on
@@ -375,7 +368,7 @@ private struct CopyLine: View {
             let bytes = files.reduce(UInt64(0)) { $0 &+ tree.nodes[Int($1)].bytes }
             return ("\(files.count) files", " · \(formatBytes(bytes))")
         }
-        let when = Date(timeIntervalSince1970: TimeInterval(n.modTime)).formatted(.dateTime.day().month(.abbreviated).year())
+        let when = Date(timeIntervalSince1970: TimeInterval(n.modTime)).formatted(.dateTime.day().month(.abbreviated).year().locale(Titles.locale))
         return (tree.name(node), " · \(when) · \(formatBytes(n.bytes))")
     }
 }
@@ -384,16 +377,18 @@ private struct CopyLine: View {
 /// extra space.
 private struct Folded: View {
     let model: AppModel
+    /// What it's remembered as while it's open. Not its title, which may be reworded.
+    let id: String
     let title: String
     let groups: [CopyGroup]
     let total: UInt64?
-    private var isOpen: Bool { model.copiesOpen.contains(title) }
+    private var isOpen: Bool { model.copiesOpen.contains(id) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Button {
                 Motion.animate(.snappy(duration: 0.22)) {
-                    if isOpen { model.copiesOpen.remove(title) } else { model.copiesOpen.insert(title) }
+                    if isOpen { model.copiesOpen.remove(id) } else { model.copiesOpen.insert(id) }
                 }
             } label: {
                 HStack(spacing: 6) {
@@ -453,15 +448,7 @@ private struct Folded: View {
     }
 
     private func open(_ g: CopyGroup) {
-        guard let tree = model.tree else { return }
-        let node = g.home != 0 && g.kind != .broken ? g.home : g.others[0]
-        let n = tree.nodes[Int(node)]
-        if n.has(NodeFlag.directory) && n.firstChild != 0 {
-            model.zoom(into: RingLayout.chainTail(tree: tree, node))
-        } else {
-            model.zoom(into: n.parent)
-            model.selected = node
-        }
+        model.openFromList(g.home != 0 && g.kind != .broken ? g.home : g.others[0])
     }
 }
 

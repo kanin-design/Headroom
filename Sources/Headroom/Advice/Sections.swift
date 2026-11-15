@@ -117,7 +117,8 @@ enum Sections {
             return count == 1 ? "1 file" : "\(count) files"
         }
         add(.trash, "Trash", Palette.Box.trash, detail: names)
-        add(.caches, "Caches", Palette.Box.quick, detail: names)
+        // Under a heading that says Caches, each is named for what it's a cache of.
+        add(.caches, "Caches", Palette.Box.quick, detail: { names($0, dropping: " cache") })
         add(.junk, "Junk", Palette.Box.junk, detail: names)
         add(.developer, "Developer", Palette.Box.android, detail: names)
         add(.models, "AI models", Palette.Box.models, detail: counted("model", "models"))
@@ -154,7 +155,7 @@ enum Sections {
             let n = nodes[i]
             guard n.flags & (NodeFlag.directory | NodeFlag.synthetic | NodeFlag.alias | NodeFlag.gone) == 0, n.rule == 0, tree.totals[i] >= largeFile else { continue }
             // On the startup disk, only your own folders. On any other disk, anything that isn't inside a package.
-            if tree.home != 0 ? !nodes[Int(n.parent)].has(NodeFlag.projects) : isInsidePackage(UInt32(i), tree: tree) { continue }
+            if tree.isBoot ? !nodes[Int(n.parent)].has(NodeFlag.projects) : tree.isInsidePackage(UInt32(i), byName: true) { continue }
             if taken.contains(UInt32(i)) { continue }
             big.append(UInt32(i))
         }
@@ -177,27 +178,15 @@ enum Sections {
         }
     }
 
-    /// Whether a file sits inside something macOS shows as one thing: an app, a library, a project bundle.
-    private static func isInsidePackage(_ node: UInt32, tree: DiskTree) -> Bool {
-        var a = tree.nodes[Int(node)].parent
-        while a != 0 {
-            let n = tree.nodes[Int(a)]
-            if n.has(NodeFlag.anchor) || n.has(NodeFlag.synthetic) { return false }
-            if packageEndings.contains((tree.name(a) as NSString).pathExtension.lowercased()) { return true }
-            a = n.parent
-        }
-        return false
-    }
-
-    private static let packageEndings: Set<String> = ["app", "bundle", "framework", "plugin", "kext", "photoslibrary", "musiclibrary", "tvlibrary", "imovielibrary", "fcpbundle",
-                                                      "logicx", "band", "sparsebundle", "backupbundle", "xcarchive", "pkg", "vmwarevm", "pvm", "utm"]
-
     private static func biggestFirst(_ rows: [WinRow]) -> [WinRow] { rows.sorted { $0.gain > $1.gain } }
 
     /// The biggest few by name, then how many more: "Spotify, Chrome +14". A cache is named for its app.
-    private static func names(_ rows: [WinRow]) -> String {
+    private static func names(_ rows: [WinRow]) -> String { names(rows, dropping: "") }
+
+    /// `dropping` is the heading's own word, which a name under it needn't repeat.
+    private static func names(_ rows: [WinRow], dropping ending: String) -> String {
         let sorted = biggestFirst(rows)
-        let first = sorted.prefix(3).map { $0.title.hasSuffix(" cache") ? String($0.title.dropLast(6)) : $0.title }.joined(separator: ", ")
+        let first = sorted.prefix(3).map { !ending.isEmpty && $0.title.hasSuffix(ending) ? String($0.title.dropLast(ending.count)) : $0.title }.joined(separator: ", ")
         return sorted.count > 3 ? "\(first) +\(sorted.count - 3)" : first
     }
 
@@ -206,9 +195,7 @@ enum Sections {
     private static func modelRow(_ row: WinRow, tree: DiskTree) -> WinRow {
         var copy = row
         copy.title = row.title.split(separator: "/").last.map(String.init) ?? row.title
-        let bits = row.subtitle.components(separatedBy: " · ")
-        var when = bits.last { $0.hasPrefix("Downloaded") } ?? ""
-        if when.hasSuffix(".") { when.removeLast() }
+        var when = row.arrived.map { "Downloaded " + Titles.dayText($0) } ?? ""
         if when.isEmpty, let node = row.nodes.first, tree.nodes[Int(node)].modTime != 0 {
             when = "Changed " + Titles.dayText(Date(timeIntervalSince1970: TimeInterval(tree.nodes[Int(node)].modTime)))
         }

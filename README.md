@@ -46,6 +46,7 @@ Measured on an M5 MacBook Air with 2.1 million files on a 494 GB disk:
   is always a separate step.
 - **Checks before anything moves.** Each item must still exist and not be in use, and anything that doesn't rebuild
   itself must be unchanged since you selected it. If an app is using it, Headroom names the app and lets you decide.
+- **Nothing is selected for you.** Nothing is ticked until you tick it or press Select recommended.
 - **Protected locations.** macOS folders, your home folder's standard folders such as Documents and Library, and your
   keychains and mail can't be deleted.
 - **Verified moves.** Moving an item to another disk copies it, compares every byte, and only then moves the original to
@@ -121,6 +122,16 @@ inspector too.
 
 Double-click a file on the ring to open it. Right-click anything to copy its name or path, open it, show it in Finder,
 open it in Terminal or move it to the Trash.
+
+### Agents
+
+An AI agent such as Claude Code can look through your disk with its own tools and select what it thinks can go in
+Headroom, so you see it on the map and decide. Add Headroom to the agent as an MCP server, with the command shown under
+**Headroom → Agents…**. The first time an agent connects, Headroom asks you: **Allow**, **Look Only** or **Don't Allow**.
+
+What an agent selects is listed in Free Up under its name, largest first, with its reason beside each item. It's told
+what removing each thing really frees, and which other copies a hardlinked file has. An agent can't delete anything: it
+has no command that removes, empties the Trash or presses Clean. Cleaning is always your click.
 
 ## Get started
 

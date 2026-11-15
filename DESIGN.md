@@ -108,7 +108,7 @@ sunburst in the reference:
   listing of the folders screenshots are saved to. Old means 14 days for an installer and 7 for a
   download that stopped.
 
-  **Select recommended** ticks caches not in use and junk, and nothing is ticked before it's pressed except the Trash.
+  **Select recommended** ticks caches not in use and junk, and nothing is ticked before it's pressed, the Trash included.
   Pointing at it shows what it would take. A tick on a box skips what's in use. **Largest files** is a shortlist under
   the boxes: the 20 biggest files over 1 GB in your own folders that no box covers. It has no tick of its own and no
   total, and it's never recommended.
@@ -182,7 +182,9 @@ without the dot, the message says so, and Undo brings it back under its own name
 **Undo is real.** Everything keeps its place in the Trash on record, even across a restart, so Undo puts it all back
 and brings the list back too, ready to fix and run again. Quitting halfway through a clean, or through emptying the
 Trash, stops it at the next thing and writes down where it got to, and putting a clean back always finishes before
-Headroom quits.
+Headroom quits. The record says which file each thing is, not only what it's called: going to the Trash is a rename, so a
+file is the same file there. Headroom notes which file it is before the move, finds it by that if the move doesn't say
+where it went, and never puts back or deletes something in the Trash that it can't tell is the one it moved.
 
 ### How it knows
 
@@ -239,6 +241,41 @@ seconds a folder, and it rated a folder of finished films as the likeliest thing
 - An app goes to the Trash through the Finder, because macOS keeps apps to itself and only the Finder can move all of them.
   macOS asks once whether Headroom may ask the Finder, and the Finder asks for your password when an app isn't yours to
   move. The inspector says so first. Whatever doesn't go stays on the list with the reason and a Try again button.
+
+## Agents
+
+Headroom is where you and an AI agent look at the same thing. The agent works the way agents do, with commands on the
+file system, and Headroom is where it marks what it found, so you see it on the map and decide. It isn't the agent's way
+of looking at the disk: there are no tools for browsing.
+
+It speaks the Model Context Protocol, which most agents do. The agent starts `Headroom --mcp`, a helper that carries
+lines between the agent and the running app over a socket file in Headroom's own folder. Only you can open that file,
+and nothing listens on the network.
+
+- **Quiet until wanted.** Agents start every server they know with every session, so the helper answers the hello and
+  lists the tools by itself. Only a tool call reaches for the app, opening it if it's closed, and only then are you
+  asked about the agent. When the app quits or a new build takes its place, the next call reaches for it again.
+- **You allow each agent.** Headroom asks, naming the agent, the program that started it and who signed that program.
+  The name is the agent's own word; the program and its signature are read from the system. You answer Allow, Look
+  Only or Don't Allow. What you allowed is remembered by all three, and Agents in the app menu lists it with its access
+  and a Remove button. Until you answer, the agent gets no answers.
+- **It shows.** While an agent is connected, the map says so, and Agents lists what each one asked for.
+- **Selecting.** The agent selects by path with a short reason. That is the same as a click on the ring: one path, to
+  the Trash when you clean, by the same rules for what may go. What it found is what's on the disk, so a file newer
+  than the map is taken at its word when it's there, and the disk is read again so it shows. Its picks are striped on
+  the ring and listed in Free Up in a box under the agent's name, each with its reason. It can tick Headroom's own
+  suggestions by id, which is the tick you'd make. It can take back its own picks, never yours.
+- **What it's told.** Before or as it selects, what Headroom knows about a path: whether it's protected, what it is,
+  and what removing it really frees. A hardlinked or cloned file frees nothing while its other copies stay, so the
+  answer names them, and the copy selected last is the one that frees the file.
+- **The window.** It can bring Headroom forward on what it selected, and have it show another disk.
+- **Cleaning is yours, always.** Deleting is destructive, so the click that does it is never an agent's. This isn't a
+  rule the agent is asked to keep: the server has no command that deletes, empties the Trash, undoes a clean or presses
+  Clean, and the agents' code calls nothing in the app that does. A test reads that code and fails if it ever does, or
+  if a tool is added without being named there. You look over what the agent selected and clean in Headroom, with the
+  checks and the undo that every clean has. At most, and only in special cases, an agent might one day ask Headroom to
+  put its own confirmation in front of you: the answer would still be your click. The agent can wait for your clean:
+  its call returns when it's over, with what went to the Trash and what couldn't.
 
 ## Truthful accounting
 
@@ -318,6 +355,11 @@ Underneath:
 - What only the scan needs lives in mapped tables too, so it goes back the moment the scan ends, where a heap allocation
   would stay with the app. While a scan runs, a picture is a copy of the whole tree, so there's never a second one waiting
   behind one nobody has looked at yet.
+- The map on screen is never changed where it is. Hovering, the suggestions, the checks and Copies all read it on other
+  threads, so when something goes to the Trash or comes back, the change is made to a copy with the same folder numbers,
+  and the copy takes the map's place in one step, at most ten times a second during a clean. A copy of a map of 300,000
+  folders and files takes about a millisecond. A map read from the disk before such a change is out of date when it
+  arrives: it's dropped, and the disk is read again.
 - Git is only asked about a project that could be suggested. One worked on in the last month isn't, whatever git would
   say, and the first answer that rules a project out saves asking the rest, with the slowest question last. Here that's 4
   projects out of 20, and 0.3 s instead of 12 s. At launch, other apps' records are read once: the second pass, after the

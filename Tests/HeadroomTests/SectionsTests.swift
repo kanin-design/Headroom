@@ -102,6 +102,8 @@ final class SectionsTests: XCTestCase {
         var one = row("model:google/gemma", d, "/Volumes/Fake/LLM/hub/m", tier: .redownload)
         one.title = "google/gemma"
         one.subtitle = "Re-downloadable from Hugging Face · Downloaded Oct 9"
+        // The finder says when it arrived, as a date. Nothing reads it back out of the words.
+        one.arrived = Calendar.current.date(from: DateComponents(year: Calendar.current.component(.year, from: Date()), month: 10, day: 9, hour: 12))
         one.box = .models
         let models = try XCTUnwrap(Sections.build(from: [one], tree: d.tree).sections.first { $0.id == "models" })
         XCTAssertEqual(models.rows.first?.title, "gemma")

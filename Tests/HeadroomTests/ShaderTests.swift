@@ -37,11 +37,62 @@ final class ShaderTests: XCTestCase {
             "restSaturation": MemoryLayout<UniformsGPU>.offset(of: \.restSaturation), "glowAtRest": MemoryLayout<UniformsGPU>.offset(of: \.glowAtRest),
             "previewShare": MemoryLayout<UniformsGPU>.offset(of: \.previewShare), "ghostCount": MemoryLayout<UniformsGPU>.offset(of: \.ghostCount),
             "freeOuter": MemoryLayout<UniformsGPU>.offset(of: \.freeOuter), "minLit": MemoryLayout<UniformsGPU>.offset(of: \.minLit),
+            "layer": MemoryLayout<UniformsGPU>.offset(of: \.layer), "litAbove": MemoryLayout<UniformsGPU>.offset(of: \.litAbove),
+            "top": MemoryLayout<UniformsGPU>.offset(of: \.top),
             "previewColor": MemoryLayout<UniformsGPU>.offset(of: \.previewColor), "tint": MemoryLayout<UniformsGPU>.offset(of: \.tint),
             "ghostSlices": MemoryLayout<UniformsGPU>.offset(of: \.ghostSlices),
         ]
         XCTAssertEqual(members.count, swift.count, "the same numbers on both sides")
         for m in members { XCTAssertEqual(swift[m.name] ?? nil, m.offset, "\(m.name) is where the shaders read it") }
         XCTAssertEqual(binding.bufferDataSize, MemoryLayout<UniformsGPU>.size, "and the whole is the same size")
+        // The colours of what's planned are the last thing in it: as many as the engine hands over, on both sides.
+        let slices = try XCTUnwrap(MemoryLayout<UniformsGPU>.offset(of: \.ghostSlices))
+        XCTAssertEqual(MemoryLayout<UniformsGPU>.size - slices, MapEngine.ghostSliceLimit * MemoryLayout<SIMD4<Float>>.stride)
+    }
+
+    /// A folder and one of the folders in it, the outer one just left by the pointer and still lifted, the inner one
+    /// pointed at now and growing out over it. Draws them and gives the colour where the inner one has grown to.
+    private func colourWhereTheInnerOneGrows(top: Int?) throws -> SIMD4<Float> {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice(), "no GPU here")
+        try XCTSkipUnless(device.hasUnifiedMemory, "reads the picture straight from the GPU's memory")
+        let renderer = try XCTUnwrap(MapRenderer(device: device, shaders: source))
+        let red = SIMD4<Float>(1, 0, 0, 1), blue = SIMD4<Float>(0, 0, 1, 1)
+        let inner = SIMD4<Float>(0.5, 1.5, 0.3, 0.5), outer = SIMD4<Float>(0.5, 1.5, 0.5, 0.7)
+        renderer.setInstances([SegmentGPU(from: inner, to: inner, colorFrom: red, colorTo: red, params: .zero),
+                               SegmentGPU(from: outer, to: outer, colorFrom: blue, colorTo: blue, params: .zero)])
+        renderer.writeEmphasis([1.5, 1.5], top: top)
+
+        let side = 400
+        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: MapRenderer.outputFormat, width: side, height: side, mipmapped: false)
+        d.usage = [.renderTarget, .shaderRead]
+        d.storageMode = .shared
+        let target = try XCTUnwrap(device.makeTexture(descriptor: d))
+        var u = UniformsGPU()
+        u.viewport = SIMD2(Float(side), Float(side))
+        u.center = SIMD2(200, 200)
+        u.radius = 180
+        u.scale = 1
+        u.liftPixels = 20
+        u.bloom = 0
+        u.hideScale = 1
+        let commands = try XCTUnwrap(renderer.commandQueue.makeCommandBuffer())
+        renderer.encode(into: commands, target: target, uniforms: u)
+        commands.commit()
+        commands.waitUntilCompleted()
+
+        // The inner one ends 90 pixels out and is lifted 10 more. Halfway into that, in the middle of its arc.
+        let x = 200 + Int((sin(Float(1)) * 95).rounded()), y = 200 - Int((cos(Float(1)) * 95).rounded())
+        var pixel = [Float16](repeating: 0, count: 4)
+        target.getBytes(&pixel, bytesPerRow: 4 * MemoryLayout<Float16>.stride, from: MTLRegionMake2D(x, y, 1, 1), mipmapLevel: 0)
+        return SIMD4(Float(pixel[0]), Float(pixel[1]), Float(pixel[2]), Float(pixel[3]))
+    }
+
+    func testThePiecePointedAtLiesOverOneThePointerJustLeft() throws {
+        let pointedAt = try colourWhereTheInnerOneGrows(top: 0)
+        XCTAssertGreaterThan(pointedAt.x, 0.1, "the folder pointed at is drawn where it has grown to")
+        XCTAssertGreaterThan(pointedAt.x, pointedAt.z * 4, "and over the folder in it that's still settling back")
+        // Without knowing which one is pointed at, the later piece wins: what this is here to prevent.
+        let neither = try colourWhereTheInnerOneGrows(top: nil)
+        XCTAssertGreaterThan(neither.z, neither.x * 4, "the check can tell the two apart")
     }
 }

@@ -4,13 +4,8 @@ import SwiftUI
 /// About Headroom, in the app menu: the icon, the logo, and which version and build this is.
 struct AboutView: View {
     @Environment(\.openWindow) private var openWindow
-    private var version: String {
-        let number = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
-        // macOS wants the number to be only a number, so "beta" is kept apart from it.
-        guard let stage = Bundle.main.object(forInfoDictionaryKey: "HeadroomStage") as? String else { return number }
-        return number + " " + stage
-    }
-    private var build: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?" }
+    private var version: String { Updater.currentShown }
+    private var build: String { String(Updater.currentBuild) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -30,7 +25,7 @@ struct AboutView: View {
         .padding(.top, 4)
         .padding(.bottom, 28)
         .frame(width: 320)
-        .containerBackground(Color(red: 0.03, green: 0.03, blue: 0.042), for: .window)
+        .containerBackground(Palette.window, for: .window)
     }
 
     /// A newer version, once one has been found, or a way to look.

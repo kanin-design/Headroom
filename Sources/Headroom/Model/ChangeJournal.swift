@@ -35,11 +35,9 @@ enum ChangeJournal {
 
     /// The journal names folders the way you see them, so the Data volume's own paths lose their prefix to ask about them,
     /// and get it back in what comes back.
-    static let dataPrefix = "/System/Volumes/Data"
-    static func visible(_ path: String) -> String { path.hasPrefix(dataPrefix + "/") ? String(path.dropFirst(dataPrefix.count)) : path }
 
     /// The folders to watch for a map: the ones its scan started from.
-    static func roots(of tree: DiskTree) -> [String] { tree.anchors.map { visible($0.path) }.sorted() }
+    static func roots(of tree: DiskTree) -> [String] { tree.anchors.map { PathMath.visible($0.path) }.sorted() }
 
     /// Collects what changes on a disk from a place onwards, for as long as it runs: first what the journal already holds
     /// since then, then each change as it happens. A refresh takes what has been collected, and collecting carries on from

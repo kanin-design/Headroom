@@ -38,7 +38,7 @@ enum Duplicates {
     /// other packages. Hard links and clones counted somewhere else are left out: they already take no room.
     static func work(in tree: DiskTree, rules: RuleBook) -> [Work] {
         let nodes = tree.nodes
-        let onBoot = tree.home != 0
+        let onBoot = tree.isBoot
         var bySize: [UInt64: [UInt32]] = [:]
         let skip = NodeFlag.directory | NodeFlag.synthetic | NodeFlag.alias | NodeFlag.gone | NodeFlag.hidden
         for i in 1..<max(tree.count, 1) {
@@ -64,15 +64,10 @@ enum Duplicates {
     }
 
     static func isInsidePackage(_ node: UInt32, tree: DiskTree, rules: RuleBook) -> Bool {
-        let nodes = tree.nodes
-        var a = nodes[Int(node)].parent
-        while a != 0 {
-            let n = nodes[Int(a)]
-            if n.has(NodeFlag.anchor) || n.has(NodeFlag.synthetic) { return false }
-            if rules.isPackage(UnsafePointer(tree.names + Int(n.nameOffset)), Int(n.nameLength)) { return true }
-            a = n.parent
-        }
-        return false
+        tree.isInsidePackage(node, isPackage: { folder in
+            let n = tree.nodes[Int(folder)]
+            return rules.isPackage(UnsafePointer(tree.names + Int(n.nameOffset)), Int(n.nameLength))
+        })
     }
 
     /// How far a search has got, for the panel. Written by the reading threads, read by anyone.
@@ -183,17 +178,47 @@ enum Duplicates {
         defer { for k in kinds { k.bytes.deallocate() } }
         var spare = UnsafeMutableRawPointer.allocate(byteCount: piece.length, alignment: 16)
         defer { spare.deallocate() }
+        // Nearly every group is two or three files, which are simply compared. A big group of different files of one size
+        // would compare each with every kind before it: past a handful of kinds, they're found by a sum of their bytes.
+        var byHash: [UInt64: [Int]]?
         for at in group {
             guard read(&handles[at], piece, into: spare, keepOpen: keepOpen) else { continue }
             progress.bytesRead.add(UInt64(piece.length), ordering: .relaxed)
-            if let same = kinds.firstIndex(where: { memcmp($0.bytes, spare, piece.length) == 0 }) {
+            if byHash == nil, kinds.count > manyKinds {
+                var made: [UInt64: [Int]] = [:]
+                for (index, kind) in kinds.enumerated() { made[quickHash(kind.bytes, piece.length), default: []].append(index) }
+                byHash = made
+            }
+            let hash = byHash == nil ? 0 : quickHash(spare, piece.length)
+            let candidates = byHash.map { $0[hash] ?? [] } ?? Array(kinds.indices)
+            if let same = candidates.first(where: { memcmp(kinds[$0].bytes, spare, piece.length) == 0 }) {
                 kinds[same].members.append(at)
             } else {
+                byHash?[hash, default: []].append(kinds.count)
                 kinds.append((spare, [at]))
                 spare = UnsafeMutableRawPointer.allocate(byteCount: piece.length, alignment: 16)
             }
         }
         return kinds.filter { $0.members.count >= 2 }.map(\.members)
+    }
+
+    /// How many different kinds a group can have before they're looked up rather than gone through.
+    static let manyKinds = 8
+
+    /// A quick sum of some bytes, only ever used to pick which pieces to compare in full.
+    static func quickHash(_ bytes: UnsafeRawPointer, _ count: Int) -> UInt64 {
+        var h: UInt64 = 0xCBF2_9CE4_8422_2325
+        var at = 0
+        while at + 8 <= count {
+            h = (h ^ bytes.loadUnaligned(fromByteOffset: at, as: UInt64.self)) &* 0x9E37_79B9_7F4A_7C15
+            h ^= h >> 29
+            at += 8
+        }
+        while at < count {
+            h = (h ^ UInt64(bytes.load(fromByteOffset: at, as: UInt8.self))) &* 0x0000_0100_0000_01B3
+            at += 1
+        }
+        return h
     }
 
     /// One piece of one file. It has to be the same file as at the first look: same disk, same inode, same size and date.
@@ -284,9 +309,7 @@ final class DuplicateMemory: @unchecked Sendable {
         let copy = entries
         lock.unlock()
         guard let file else { return }
-        DispatchQueue.global(qos: .utility).async {
-            if let data = try? JSONEncoder().encode(copy) { try? data.write(to: file, options: .atomic) }
-        }
+        Saves.write(copy, to: file)
     }
 
     var count: Int {

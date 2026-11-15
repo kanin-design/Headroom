@@ -68,7 +68,10 @@ final class DiskTree: @unchecked Sendable {
     /// Fields per node in `stats`: bytes per Kind, then recency, all in units of 16 KiB. Recency is what changed in the last
     /// so many days: 1, 7, 30 and 14, then three months and a year, which say by what's left what's gone untouched. Last, how
     /// many symbolic links there are, which take no room but say where things point: Copies opens only folders that hold one.
-    static let statStride = 19
+    static let statStride = Kind.count + 8
+    /// What one of those units is, in bytes, and back: rounded to the nearest, and held at the most a field can say.
+    @inline(__always) static func bytes(units: UInt32) -> UInt64 { UInt64(units) << 14 }
+    @inline(__always) static func units(bytes: UInt64) -> UInt32 { UInt32(truncatingIfNeeded: min((bytes &+ 8191) >> 14, UInt64(UInt32.max))) }
     static let statRecent1 = Kind.count, statRecent7 = Kind.count + 1, statRecent30 = Kind.count + 2, statRecent14 = Kind.count + 3
     static let statRecent91 = Kind.count + 4, statRecent365 = Kind.count + 5
     static let statSymlinks = Kind.count + 6
@@ -94,6 +97,8 @@ final class DiskTree: @unchecked Sendable {
     private(set) var names: UnsafeMutablePointer<UInt8>
     /// Links and clones inside a folder that are counted somewhere else.
     let aliasTotals: UnsafeMutablePointer<UInt64>
+    /// The newest date on anything inside, at any depth, in seconds: when it last changed.
+    let newest: UnsafeMutablePointer<UInt32>
 
     /// Number of nodes in use. Written by the scanner.
     var count = 0
@@ -123,7 +128,10 @@ final class DiskTree: @unchecked Sendable {
     private(set) var nameBytes = 0
 
     // Well-known nodes.
+    /// Your home folder, on the startup disk. No other disk has one.
     var home: UInt32 = 0
+    /// Whether this is a map of the startup disk.
+    var isBoot: Bool { home != 0 }
     var free: UInt32 = 0
     var hidden: UInt32 = 0
     var volumeName = ""
@@ -131,9 +139,10 @@ final class DiskTree: @unchecked Sendable {
     var freeBytes: UInt64 = 0
     var rootPath = ""
 
-    init(sharingNamesWith owner: DiskTree? = nil) {
+    /// `statRows` for a copy of a tree whose rows are already packed, which needs no more room than they have.
+    init(sharingNamesWith owner: DiskTree? = nil, statRows: Int = DiskTree.capacity) {
         nodes = vmAlloc(Node.self, Self.capacity)
-        statTable = vmAlloc(UInt32.self, Self.capacity * Self.statStride)
+        statTable = vmAlloc(UInt32.self, statRows * Self.statStride)
         totals = vmAlloc(UInt64.self, Self.capacity)
         totalFiles = vmAlloc(UInt32.self, Self.capacity)
         dfsIn = vmAlloc(UInt32.self, Self.capacity)
@@ -141,6 +150,7 @@ final class DiskTree: @unchecked Sendable {
         nameStore = owner?.nameStore ?? NameStore(capacity: Self.namesCapacity)
         names = nameStore.pointer
         aliasTotals = vmAlloc(UInt64.self, Self.capacity)
+        newest = vmAlloc(UInt32.self, Self.capacity)
     }
 
     deinit {
@@ -156,25 +166,85 @@ final class DiskTree: @unchecked Sendable {
         vmFree(dfsIn, Self.capacity)
         vmFree(dfsSize, Self.capacity)
         vmFree(aliasTotals, Self.capacity)
+        vmFree(newest, Self.capacity)
     }
 
     /// A copy of where a running scan has got to. The interface only ever reads copies like this one, so everything in it
-    /// (hovering, zooming, the panels) works during a scan, while the workers keep writing to the original.
-    func picture() -> DiskTree {
+    /// (hovering, zooming, the panels) works during a scan, while the workers keep writing to the original. `upTo` is how
+    /// many nodes the scan has handed out, when it's still running.
+    func picture(upTo handedOut: Int? = nil) -> DiskTree {
         let copy = DiskTree(sharingNamesWith: self)
-        let n = count
+        let n = handedOut ?? count
         memcpy(copy.nodes, nodes, n * MemoryLayout<Node>.stride)
         memcpy(copy.statTable, statTable, n * Self.statStride * MemoryLayout<UInt32>.stride)
-        // A folder finishing during the copy can already point at children past the end of it. And until a folder is read,
-        // its file count is really how many entries it has.
+        // Workers write while this copies. A worker links a folder to what's inside it only after all of that is written,
+        // but the copy may have passed one of those nodes before it was, and would then hold a folder with no name, whose
+        // path is some other folder's. So every node is read once more: by now, whatever a link in the copy points at was
+        // written before that link was read. The links themselves stay as first read: a newer one could point at nodes
+        // this copy read too early, or doesn't have.
         for i in 0..<n {
-            if copy.nodes[i].firstChild >= n { copy.nodes[i].firstChild = 0 }
-            if copy.nodes[i].flags & NodeFlag.unread != 0 { copy.nodes[i].fileCount = 0 }
+            let linked = copy.nodes[i].firstChild
+            var node = nodes[i]
+            // It was read while this was being copied: the copy has it without its contents, which are still to come.
+            if node.firstChild != linked { node.flags |= NodeFlag.incomplete }
+            // A folder finishing during the copy can point at children past the end of it.
+            node.firstChild = linked < n ? linked : 0
+            if node.nextSibling >= n { node.nextSibling = 0 }
+            // Until a folder is read, its file count is really how many entries it has.
+            if node.flags & NodeFlag.unread != 0 { node.fileCount = 0 }
+            copy.nodes[i] = node
         }
         copy.count = n
         copy.isPartial = true
         copy.scanID = scanID
         copy.displayNames = displayNames
+        copy.home = home
+        copy.free = free
+        copy.hidden = hidden
+        copy.volumeName = volumeName
+        copy.capacityBytes = capacityBytes
+        copy.freeBytes = freeBytes
+        copy.rootPath = rootPath
+        return copy
+    }
+
+    /// A copy of a finished tree, to change while this one goes on being read as it is. Its folders keep their numbers, so
+    /// a number means the same folder in both. The tree on screen is never changed where it is: whatever reads it, on any
+    /// thread, reads something that stays put, and a change is made to a copy that takes its place in one step.
+    func copy() -> DiskTree {
+        let n = count
+        let copy = DiskTree(sharingNamesWith: self, statRows: statIndex == nil ? Self.capacity : statRowCapacity)
+        copy.nodes.update(from: nodes, count: n)
+        if let statIndex {
+            copy.statTable.update(from: statTable, count: Int(nextStatRow) * Self.statStride)
+            let index = vmAlloc(UInt32.self, statIndexCount)
+            index.update(from: statIndex, count: statIndexCount)
+            copy.statIndex = index
+            copy.statRowCapacity = statRowCapacity
+            copy.statIndexCount = statIndexCount
+            copy.nextStatRow = nextStatRow
+        } else {
+            copy.statTable.update(from: statTable, count: n * Self.statStride)
+        }
+        copy.totals.update(from: totals, count: n)
+        copy.totalFiles.update(from: totalFiles, count: n)
+        copy.dfsIn.update(from: dfsIn, count: n)
+        copy.dfsSize.update(from: dfsSize, count: n)
+        copy.aliasTotals.update(from: aliasTotals, count: n)
+        copy.newest.update(from: newest, count: n)
+        copy.nameBytes = nameBytes
+        copy.count = n
+        copy.isPartial = isPartial
+        copy.scanID = scanID
+        copy.displayNames = displayNames
+        copy.links = links
+        copy.singleLinks = singleLinks
+        copy.finishedAt = finishedAt
+        copy.scanSeconds = scanSeconds
+        copy.isWhole = isWhole
+        copy.readGuarded = readGuarded
+        copy.journal = journal
+        copy.fullReadAt = fullReadAt
         copy.home = home
         copy.free = free
         copy.hidden = hidden
@@ -305,19 +375,40 @@ final class DiskTree: @unchecked Sendable {
             }
         }
         guard var at = best else { return nil }
-        let rest = path.dropFirst(bestLength).split(separator: "/")
-        for part in rest {
-            var c = nodes[Int(at)].firstChild
-            var found: UInt32?
-            while c != 0 {
-                // The name on disk: a path says that, even when made-up names are being shown.
-                if rawName(c) == part { found = c; break }
-                c = nodes[Int(c)].nextSibling
-            }
-            guard let found else { return nil }
+        for part in path.dropFirst(bestLength).split(separator: "/") {
+            guard let found = child(of: at, named: String(part)) else { return nil }
             at = found
         }
         return at
+    }
+
+    /// The folder or file directly inside a folder with this name on disk, whatever name is being shown for it.
+    func child(of parent: UInt32, named name: String) -> UInt32? {
+        var name = name
+        // The same bytes, nearly always, and comparing those makes no String for each thing in the folder.
+        let exact: UInt32? = name.withUTF8 { wanted in
+            var c = nodes[Int(parent)].firstChild
+            while c != 0 {
+                let n = nodes[Int(c)]
+                if Int(n.nameLength) == wanted.count, memcmp(names + Int(n.nameOffset), wanted.baseAddress, wanted.count) == 0 { return c }
+                c = n.nextSibling
+            }
+            return nil
+        }
+        if exact != nil || name.utf8.allSatisfy({ $0 < 0x80 }) { return exact }
+        // An accented name can be written two ways that are the same name, and a path from another app may use the other.
+        var c = nodes[Int(parent)].firstChild
+        while c != 0 {
+            if rawName(c) == name { return c }
+            c = nodes[Int(c)].nextSibling
+        }
+        return nil
+    }
+
+    /// Finds a node by its path as you'd write it, whichever way this map keeps it: the startup disk's folders are under
+    /// the data volume, and another disk's are where they say.
+    func find(visible path: String) -> UInt32? {
+        find(path: PathMath.dataVolume + path) ?? find(path: path)
     }
 
     // MARK: Reading
@@ -358,10 +449,10 @@ final class DiskTree: @unchecked Sendable {
         var p = HiddenNames.isOn ? HiddenNames.madeUp(path: path) : path
         if let demo = Demo.home, p == demo || p.hasPrefix(demo + "/") { return "~" + p.dropFirst(demo.count) }
         let home = NSHomeDirectory()
-        let dataHome = "/System/Volumes/Data" + home
+        let dataHome = PathMath.dataVolume + home
         if PathMath.isInside(p, dataHome) { p = "~" + p.dropFirst(dataHome.count) }
         else if PathMath.isInside(p, home) { p = "~" + p.dropFirst(home.count) }
-        else if p.hasPrefix("/System/Volumes/Data/") { p = String(p.dropFirst("/System/Volumes/Data".count)) }
+        else { p = PathMath.visible(p) }
         return p
     }
 
@@ -375,13 +466,26 @@ final class DiskTree: @unchecked Sendable {
         return out
     }
 
+    /// Whether a file or folder sits inside something macOS shows as one thing: an app, a library, a project bundle.
+    /// `isPackage` says it of one folder: by the rule book, for the scan's own speed, or by name.
+    func isInsidePackage(_ node: UInt32, isPackage: (UInt32) -> Bool = { _ in false }, byName: Bool = false) -> Bool {
+        var a = nodes[Int(node)].parent
+        while a != 0 {
+            let n = nodes[Int(a)]
+            if n.has(NodeFlag.anchor) || n.has(NodeFlag.synthetic) { return false }
+            if byName ? RuleBook.isPackage(name: rawName(a)) : isPackage(a) { return true }
+            a = n.parent
+        }
+        return false
+    }
+
     @inline(__always) func isInside(_ id: UInt32, _ ancestor: UInt32) -> Bool {
         dfsIn[Int(id)] &- dfsIn[Int(ancestor)] < dfsSize[Int(ancestor)]
     }
 
     func kindBytes(_ id: UInt32) -> [UInt64] {
         let s = statRow(id)
-        return (0..<Kind.count).map { UInt64(s[$0]) << 14 }
+        return (0..<Kind.count).map { Self.bytes(units: s[$0]) }
     }
 
     func dominantKind(_ id: UInt32) -> Kind {
@@ -426,12 +530,14 @@ final class DiskTree: @unchecked Sendable {
         for i in 0..<n {
             totalFiles[i] = nodes[i].fileCount
             aliasTotals[i] = nodes[i].has(NodeFlag.directory) ? nodes[i].aliasBytes : 0
+            newest[i] = nodes[i].modTime
         }
         var i = n - 1
         while i > 0 {
             let p = Int(nodes[i].parent)
             totalFiles[p] &+= totalFiles[i]
             aliasTotals[p] &+= aliasTotals[i]
+            if newest[i] > newest[p] { newest[p] = newest[i] }
             if nodes[i].flags & (NodeFlag.unread | NodeFlag.incomplete) != 0 { nodes[p].flags |= NodeFlag.incomplete }
             let from = statTable + i * stride, to = statTable + p * stride
             for f in 0..<stride { to[f] &+= from[f] }
@@ -591,12 +697,14 @@ final class DiskTree: @unchecked Sendable {
         for i in 0..<n {
             totalFiles[i] = nodes[i].fileCount
             aliasTotals[i] = nodes[i].has(NodeFlag.directory) ? nodes[i].aliasBytes : 0
+            newest[i] = nodes[i].modTime
         }
         var i = n - 1
         while i > 0 {
             let p = Int(nodes[i].parent)
             totalFiles[p] &+= totalFiles[i]
             aliasTotals[p] &+= aliasTotals[i]
+            if newest[i] > newest[p] { newest[p] = newest[i] }
             i -= 1
         }
         numberSubtrees()
@@ -655,14 +763,31 @@ struct NodeSet {
         }
     }
 
-    @inline(__always) func contains(_ node: UInt32) -> Bool {
+    @inline(__always) func contains(_ node: UInt32) -> Bool { top(containing: node) != nil }
+
+    /// Which of the set's folders holds this node, or is it.
+    @inline(__always) func top(containing node: UInt32) -> UInt32? {
         let position = tree.dfsIn[Int(node)]
         var low = 0, high = tops.count
         while low < high {
             let mid = (low + high) / 2
             if tree.dfsIn[Int(tops[mid])] <= position { low = mid + 1 } else { high = mid }
         }
-        return low > 0 && tree.isInside(node, tops[low - 1])
+        return low > 0 && tree.isInside(node, tops[low - 1]) ? tops[low - 1] : nil
+    }
+}
+
+extension NodeSet {
+    /// Whether any folder in the set sits inside this node.
+    func hasAny(inside node: UInt32) -> Bool {
+        let start = tree.dfsIn[Int(node)], size = tree.dfsSize[Int(node)]
+        var low = 0, high = tops.count
+        while low < high {
+            let middle = (low + high) / 2
+            if tree.dfsIn[Int(tops[middle])] <= start { low = middle + 1 } else { high = middle }
+        }
+        guard low < tops.count else { return false }
+        return tree.dfsIn[Int(tops[low])] &- start < size
     }
 }
 

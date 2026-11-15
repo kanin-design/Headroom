@@ -47,7 +47,7 @@ struct AccessGuideView: View {
         .padding(.top, 6)
         .padding(.bottom, 24)
         .frame(width: 440)
-        .containerBackground(Color(red: 0.03, green: 0.03, blue: 0.042), for: .window)
+        .containerBackground(Palette.window, for: .window)
         .onAppear { model.accessGuideShowing = true }
         .onDisappear {
             model.accessGuideShowing = false

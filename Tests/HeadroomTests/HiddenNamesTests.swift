@@ -13,6 +13,20 @@ final class HiddenNamesTests: XCTestCase {
         return disk
     }
 
+    /// What something is called on the disk decides what it is, whatever name is being shown for it.
+    func testWhatsFoundByNameIsStillFoundWithNamesHidden() throws {
+        let disk = FakeDisk()
+        let old = UInt32(Date().timeIntervalSince1970 - 30 * 86_400)
+        let file = disk.file("/Volumes/Fake/Downloads/private film.mkv.crdownload", 700_000_000, modTime: old)
+        disk.finish()
+        disk.tree.home = disk.node("/Volumes/Fake")
+        HiddenNames.apply(to: disk.tree)
+        XCTAssertNotEqual(disk.tree.name(file), disk.tree.rawName(file), "the name on screen is made up")
+        let rows = Wins.build(tree: disk.tree, rules: RuleBook(homePath: "/Volumes/Fake"))
+        XCTAssertEqual(rows.first { $0.id == "junk:unfinished" }?.nodes, [file])
+        XCTAssertFalse(rows.contains { $0.title.contains("private") || $0.subtitle.contains("private") }, "and no row shows the real one")
+    }
+
     func testAPathSaysWhatTheRingSays() {
         let disk = disk()
         let file = disk.node("/Volumes/Fake/Media/Secret Show/Season 13/secret.episode.mkv")

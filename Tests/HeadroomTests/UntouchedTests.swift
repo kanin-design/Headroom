@@ -43,7 +43,7 @@ final class UntouchedTests: XCTestCase {
         disk.file("/Volumes/Fake/Media/film.mkv", 8 * gigabyte, kind: .video, modTime: daysAgo(800))
         disk.finish()
         var facts = Facts()
-        facts.apps = [AppFact(path: "/Volumes/Fake/Applications/Old.app", name: "Old", bundleID: "com.example.old", fromAppStore: false, addedAt: nil,
+        facts.apps = [AppFact(path: "/Volumes/Fake/Applications/Old.app", name: "Old", bundleID: "com.example.old", fromAppStore: false,
                               newestSign: Date().addingTimeInterval(-3 * 86_400), signCount: 1, isRunning: false, makerNote: nil, settings: [], data: [])]
         facts.plexFiles["/Volumes/Fake/Media/film.mkv"] = Facts.PlexFile(views: 1, lastViewed: Date().addingTimeInterval(-20 * 86_400))
         let used = ChangeMap.usedRecently(facts, in: disk.tree, days: 365)

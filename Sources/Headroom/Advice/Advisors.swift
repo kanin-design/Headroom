@@ -30,7 +30,9 @@ enum Advisors {
         var new: [WinRow] = []
         new += boxed(.apps, apps(tree: tree, facts: facts, now: now))
         new += boxed(.games, games(tree: tree, facts: facts, now: now))
-        new += boxed(.models, models(tree: tree, facts: facts, rows: &rows))
+        let modelRows = models(tree: tree, facts: facts)
+        leaveOut(modelRows.flatMap(\.nodes), from: &rows, tree: tree)
+        new += boxed(.models, modelRows)
         new += boxed(.developer, projects(tree: tree, facts: facts, now: now))
         new += boxed(.leftovers, frames(tree: tree, facts: facts))
         new += boxed(.removedApps, leftBehind(tree: tree, facts: facts))
@@ -44,17 +46,16 @@ enum Advisors {
         }
         rows += new
         if !tree.isPartial { markInUse(&rows, tree: tree, facts: facts) }
-        groupAndroid(&rows)
+        group(.androidTools, in: &rows)
     }
 
     /// Versions of the same tools are one decision until you look inside.
-    private static func groupAndroid(_ rows: inout [WinRow]) {
-        let parts = rows.filter { $0.tier == .redownload && $0.isPlannable && $0.title.hasPrefix("Android ") }
+    private static func group(_ family: RuleFamily, in rows: inout [WinRow]) {
+        let parts = rows.filter { $0.family == family && $0.isPlannable }
         guard parts.count >= 2 else { return }
         let ids = Set(parts.map(\.id))
         rows.removeAll { ids.contains($0.id) }
-        var group = WinRow(id: "group:android", title: "Android tools", subtitle: "\(parts.count) SDK versions and system images",
-                           detail: "Android SDK tools and emulator system images. Android Studio re-downloads them when needed.",
+        var group = WinRow(id: family.id, title: family.title, subtitle: family.subtitle(parts.count), detail: family.detail,
                            tier: .redownload, nodes: parts.flatMap(\.nodes), bytes: parts.reduce(0) { $0 &+ $1.bytes }, paperBytes: parts.reduce(0) { $0 &+ $1.paperBytes }, action: .trash, command: nil, bundleID: nil)
         group.parts = parts.sorted { $0.bytes > $1.bytes }
         group.inUse = parts.compactMap(\.inUse).first
@@ -66,13 +67,13 @@ enum Advisors {
     private static func markInUse(_ rows: inout [WinRow], tree: DiskTree, facts: Facts) {
         let home = NSHomeDirectory()
         var androidBusy = facts.androidRunning
-        if !androidBusy, let avd = tree.find(path: "/System/Volumes/Data" + home + "/.android/avd") {
+        if !androidBusy, let avd = tree.find(visible: home + "/.android/avd") {
             androidBusy = tree.statRow(avd)[DiskTree.statRecent14] > 0
         }
         func mark(_ row: inout WinRow) {
             guard row.inUse == nil, row.tier >= .redownload, row.isPlannable, row.action != .emptyTrash else { return }
-            // A series or an app says what it knows in its own words. A recent download isn't a sign of use.
-            if row.id.hasPrefix("series:") || row.id.hasPrefix("film:") || row.id.hasPrefix("app:") || row.id.hasPrefix("group:quiet-apps") { return }
+            // An app, a film or a series says what it knows in its own words. A recent download isn't a sign of use.
+            if row.box == .apps || row.box == .media { return }
             if androidBusy, row.nodes.contains(where: { (tree.path($0) ?? "").contains("/Android/") || (tree.path($0) ?? "").contains("/.android/") }) {
                 row.inUse = facts.androidRunning ? "Android tools are running" : "Emulator used in the last 2 weeks"
             } else if row.parts.isEmpty, row.nodes.contains(where: { tree.statRow($0)[DiskTree.statRecent14] > 0 }) {
@@ -168,7 +169,7 @@ enum Advisors {
             if shows.count >= 3, median > 0, each / median >= bigEpisodeRatio, each >= Double(bigEpisodeBytes) {
                 bits[0] += ", \(Titles.timesText(each / median)) your other series"
             }
-            let paths = show.counted.compactMap { tree.path($0.node).map(Facts.visible) }
+            let paths = show.counted.compactMap { tree.path($0.node).map(PathMath.visible) }
             if let opened = paths.compactMap({ facts.lastOpened[$0] }).max() { bits.append("Opened \(Titles.dayText(opened, now: now))") }
             let plex = paths.compactMap { facts.plexFiles[$0] }
             if !plex.isEmpty {
@@ -229,7 +230,7 @@ enum Advisors {
             let wholeFolder = isTheFilm && !Titles.isGeneralFolder(tree.name(parent)) && Double(bytes) >= Double(holds) * 0.9 && tree.path(parent).map(Safety.canTrash) == true
             let node = wholeFolder ? parent : film
             let title = wholeFolder ? tree.name(parent) : (fileName as NSString).deletingPathExtension
-            guard let path = tree.path(film).map(Facts.visible) else { continue }
+            guard let path = tree.path(film).map(PathMath.visible) else { continue }
             let isLibrary = facts.plexFiles[path] != nil || path.split(separator: "/").contains { ["Movies", "Films", "Media", "TV", "Downloads", "Torrents"].contains(String($0)) }
             guard isLibrary else { continue }
             var bits: [String] = []
@@ -261,7 +262,7 @@ enum Advisors {
         row.otherCopies = found.folders
         let paths = found.folders.compactMap { tree.path($0) }
         row.otherCopiesPath = paths.first.map(PathMath.visible)
-        let torrents = paths.compactMap { facts.torrent(holding: Facts.visible($0)) }
+        let torrents = paths.compactMap { facts.torrent(holding: PathMath.visible($0)) }
         if !torrents.isEmpty {
             row.otherCopiesIsTorrent = true
             row.otherCopiesTitle = found.folders.count > 1 ? "Include the \(found.folders.count) torrent copies" : "Include the torrent copy"
@@ -304,12 +305,11 @@ enum Advisors {
         guard !app.isRunning, let newest = app.newestSign, app.signCount > 0 else { return nil }
         let day: TimeInterval = 86_400
         guard now.timeIntervalSince(newest) >= TimeInterval(appQuietDays) * day else { return nil }
-        let data = "/System/Volumes/Data"
-        guard let appNode = tree.find(path: data + app.path) ?? tree.find(path: app.path) else { return nil }
+        guard let appNode = tree.find(visible: app.path) else { return nil }
         var nodes = [appNode]
         var extras: [String] = []
         for path in app.settings {
-            if let node = tree.find(path: data + path) ?? tree.find(path: path), tree.nodes[Int(node)].has(NodeFlag.synthetic) == false {
+            if let node = tree.find(visible: path), tree.nodes[Int(node)].has(NodeFlag.synthetic) == false {
                 nodes.append(node)
             } else {
                 extras.append(path)
@@ -317,12 +317,12 @@ enum Advisors {
         }
         var dataNodes: [UInt32] = []
         for path in app.data {
-            if let node = tree.find(path: data + path) ?? tree.find(path: path) { dataNodes.append(node) }
+            if let node = tree.find(visible: path) { dataNodes.append(node) }
         }
         let bytes = nodes.reduce(UInt64(0)) { $0 &+ tree.totals[Int($1)] }
         var bits = ["No sign of use for \(Titles.monthsText(since: newest, now: now))"]
         if app.fromAppStore { bits.append("Re-downloadable from the App Store") }
-        if let note = app.makerNote { bits.append(String(note.dropLast())) }
+        if let note = app.makerNote { bits.append(note) }
         var row = WinRow(id: "app:" + app.bundleID, title: app.name, subtitle: sentence(bits),
                          detail: "Uninstall moves the app, its settings and caches to the Trash. Apps that only run in the background may show no sign of use.",
                          tier: .yourCall, nodes: nodes, bytes: bytes, paperBytes: bytes, action: .uninstall, command: nil, bundleID: app.bundleID)
@@ -342,7 +342,7 @@ enum Advisors {
     static func games(tree: DiskTree, facts: Facts, now: Date) -> [WinRow] {
         var out: [WinRow] = []
         for game in facts.games {
-            guard let node = tree.find(path: "/System/Volumes/Data" + game.folder) ?? tree.find(path: game.folder) else { continue }
+            guard let node = tree.find(visible: game.folder) else { continue }
             var bits: [String] = []
             if let played = game.lastPlayed { bits.append("Last played \(Titles.dayText(played, now: now))") }
             bits.append("Re-downloadable from Steam")
@@ -362,7 +362,7 @@ enum Advisors {
     // MARK: AI models
 
     /// Each model in a Hugging Face cache is a decision of its own. A cache's folders are named `models--org--name`.
-    static func models(tree: DiskTree, facts: Facts, rows: inout [WinRow]) -> [WinRow] {
+    static func models(tree: DiskTree, facts: Facts) -> [WinRow] {
         var parts: [WinRow] = []
         for model in facts.models {
             guard Safety.canTrash(model.folder), !model.name.isEmpty else { continue }
@@ -370,7 +370,7 @@ enum Advisors {
             var extras: [String] = []
             if let folder = tree.find(path: model.folder) { nodes.append(folder) } else { extras.append(model.folder) }
             for blob in model.blobs {
-                if let node = tree.find(path: "/System/Volumes/Data" + blob) ?? tree.find(path: blob) { nodes.append(node) } else { extras.append(blob) }
+                if let node = tree.find(visible: blob) { nodes.append(node) } else { extras.append(blob) }
             }
             let onTheMap = nodes.reduce(UInt64(0)) { $0 &+ tree.totals[Int($1)] }
             let bytes = max(onTheMap, model.blobBytes)
@@ -380,21 +380,46 @@ enum Advisors {
             var row = WinRow(id: "model:" + model.name, title: model.name, subtitle: sentence(bits), detail: "AI model weights. Re-downloaded on next use.",
                              tier: .redownload, nodes: nodes, bytes: bytes, paperBytes: bytes, action: .trash, command: nil, bundleID: nil)
             row.extraPaths = extras
+            row.arrived = model.changed
             parts.append(row)
         }
         guard !parts.isEmpty else { return [] }
         parts.sort { $0.bytes > $1.bytes }
         let taken = parts.flatMap(\.nodes)
-        // A rule's one row for the whole cache gives way to one row per model.
-        rows.removeAll { row in
-            row.isPlannable && row.tier == .redownload && row.nodes.count == 1 && taken.contains { tree.isInside($0, row.nodes[0]) }
-        }
         if parts.count == 1 { return parts }
         var group = WinRow(id: "group:models", title: "\(parts.count) AI models", subtitle: parts.prefix(3).map { $0.title.split(separator: "/").last.map(String.init) ?? $0.title }.joined(separator: ", ") + (parts.count > 3 ? " and \(parts.count - 3) more" : ""),
                            detail: "AI model weights from Hugging Face. Each is re-downloaded on next use.", tier: .redownload, nodes: taken,
                            bytes: parts.reduce(0) { $0 &+ $1.bytes }, paperBytes: parts.reduce(0) { $0 &+ $1.paperBytes }, action: .trash, command: nil, bundleID: nil)
         group.parts = parts
         return [group]
+    }
+
+    /// A rule's one row for a whole folder gives way to the rows for the things in it that are listed one by one, such as a
+    /// cache's models: it keeps the rest of what the folder holds, and goes when that's next to nothing. Small files directly
+    /// in a folder that has to be opened up for this aren't on the map, and stay.
+    static func leaveOut(_ listed: [UInt32], from rows: inout [WinRow], tree: DiskTree, least: UInt64 = 50_000_000) {
+        guard !listed.isEmpty else { return }
+        let set = NodeSet(listed, in: tree)
+        rows = rows.compactMap { row in
+            guard row.isPlannable, row.tier == .redownload, row.nodes.count == 1, row.parts.isEmpty, set.hasAny(inside: row.nodes[0]) else { return row }
+            var rest: [UInt32] = []
+            func gather(_ node: UInt32) {
+                if set.contains(node) { return }
+                guard set.hasAny(inside: node) else {
+                    if tree.totals[Int(node)] > 0 { rest.append(node) }
+                    return
+                }
+                tree.children(node).forEach(gather)
+            }
+            tree.children(row.nodes[0]).forEach(gather)
+            let bytes = rest.reduce(UInt64(0)) { $0 &+ tree.totals[Int($1)] }
+            guard bytes >= least else { return nil }
+            var row = row
+            row.nodes = rest
+            row.bytes = bytes
+            row.paperBytes = bytes
+            return row
+        }
     }
 
     // MARK: Projects
@@ -464,15 +489,17 @@ enum Advisors {
     /// Screenshots and screen recordings, a row for each folder they're in, newest first. Most are too small to be on the map,
     /// so they go by path.
     static func screenshots(tree: DiskTree, facts: Facts, now: Date) -> [WinRow] {
-        guard tree.home != 0 else { return [] }
+        guard tree.isBoot else { return [] }
         var byFolder: [String: [Facts.Screenshot]] = [:]
         for shot in facts.screenshots.sorted(by: { $0.changed > $1.changed }) where Safety.canTrash(shot.path) {
             byFolder[(shot.path as NSString).deletingLastPathComponent, default: []].append(shot)
         }
         return byFolder.map { folder, shots in
             var nodes: [UInt32] = [], small: [String] = []
+            // The folder is found once. Most of what's in it is too small to be on the map.
+            let onMap = tree.find(visible: folder)
             for shot in shots {
-                if let node = tree.find(path: "/System/Volumes/Data" + shot.path) ?? tree.find(path: shot.path) { nodes.append(node) } else { small.append(shot.path) }
+                if let onMap, let node = tree.child(of: onMap, named: (shot.path as NSString).lastPathComponent) { nodes.append(node) } else { small.append(shot.path) }
             }
             let bytes = shots.reduce(UInt64(0)) { $0 &+ $1.bytes }
             var row = WinRow(id: "screenshots:" + folder, title: DiskTree.friendly(folder),
@@ -486,7 +513,7 @@ enum Advisors {
     }
 
     static func handOffs(tree: DiskTree) -> [WinRow] {
-        guard tree.home != 0 else { return [] }
+        guard tree.isBoot else { return [] }
         struct HandOff { var path: String; var id: String; var title: String; var app: String; var detail: String }
         let list = [
             HandOff(path: "Pictures/Photos Library.photoslibrary", id: "com.apple.Photos", title: "Photos library", app: "Photos",
@@ -500,7 +527,7 @@ enum Advisors {
         ]
         var out: [WinRow] = []
         for thing in list {
-            guard let node = tree.find(path: "/System/Volumes/Data" + NSHomeDirectory() + "/" + thing.path), tree.totals[Int(node)] >= 1_000_000_000 else { continue }
+            guard let node = tree.find(visible: NSHomeDirectory() + "/" + thing.path), tree.totals[Int(node)] >= 1_000_000_000 else { continue }
             var row = WinRow(id: "handoff:" + thing.id, title: thing.title, subtitle: "Managed by \(thing.app)", detail: thing.detail, tier: .handsOff, nodes: [node],
                              bytes: tree.totals[Int(node)], paperBytes: tree.totals[Int(node)], action: .openApp, command: nil, bundleID: thing.id)
             row.openAppName = thing.app
@@ -514,7 +541,7 @@ enum Advisors {
     static func leftBehind(tree: DiskTree, facts: Facts) -> [WinRow] {
         var parts: [WinRow] = []
         for thing in facts.leftBehind {
-            guard let node = tree.find(path: "/System/Volumes/Data" + thing.path) ?? tree.find(path: thing.path), tree.totals[Int(node)] >= 50_000_000, Safety.canTrash(thing.path) else { continue }
+            guard let node = tree.find(visible: thing.path), tree.totals[Int(node)] >= 50_000_000, Safety.canTrash(thing.path) else { continue }
             let bytes = tree.totals[Int(node)]
             parts.append(WinRow(id: "left:" + thing.path, title: Wins.appName(forFolder: thing.bundleID), subtitle: "\(thing.bundleID) · \(thing.place)",
                                 detail: "App data with no matching app. The app may have been deleted, or be on a disk that isn't connected.", tier: .yourCall, nodes: [node], bytes: bytes, paperBytes: bytes,

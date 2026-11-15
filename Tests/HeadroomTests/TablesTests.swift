@@ -179,4 +179,13 @@ final class GitStopsEarlyTests: XCTestCase {
     func testAFolderThatIsntAProjectSaysNothing() throws {
         XCTAssertNil(Git.read(root))
     }
+
+    /// A folder's sums are kept per kind while it's read, and per node after. Both have to have room for every kind there is.
+    func testThereIsRoomForEveryKind() {
+        XCTAssertLessThanOrEqual(Kind.count, Scanner.kindSlots)
+        XCTAssertEqual(Scanner.kindSlots & (Scanner.kindSlots - 1), 0, "a power of two, so a kind's number can be masked into it")
+        XCTAssertLessThan(DiskTree.statSymlinks, DiskTree.statStride)
+        XCTAssertEqual(Set(DiskTree.recency.map(\.field) + [DiskTree.statSymlinks]).count, 7, "no two numbers share a field")
+        XCTAssertTrue((DiskTree.recency.map(\.field) + [DiskTree.statSymlinks]).allSatisfy { $0 >= Kind.count })
+    }
 }

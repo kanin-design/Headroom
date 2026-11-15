@@ -96,7 +96,7 @@ enum HiddenNames {
         var at: UInt32?
         var root = ""
         var rest = Substring()
-        for whole in [path, "/System/Volumes/Data" + path] where at == nil {
+        for whole in [path, PathMath.dataVolume + path] where at == nil {
             for i in 0..<min(tree.count, 64) where tree.nodes[i].has(NodeFlag.anchor) {
                 let raw = tree.rawName(UInt32(i))
                 if whole == raw || whole.hasPrefix(raw + "/"), raw.count > root.count {

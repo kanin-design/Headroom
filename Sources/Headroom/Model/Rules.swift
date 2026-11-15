@@ -45,6 +45,16 @@ enum BoxKind: String, CaseIterable {
     case other
 }
 
+/// Rules whose things are versions of the same tools. Two or more of them in Free Up are one row until you look inside.
+enum RuleFamily: Equatable {
+    case androidTools
+
+    var title: String { "Android tools" }
+    var detail: String { "Android SDK tools and emulator system images. Android Studio re-downloads them when needed." }
+    func subtitle(_ count: Int) -> String { "\(count) SDK versions and system images" }
+    var id: String { "group:android" }
+}
+
 struct Rule {
     var title: String
     var detail: String
@@ -78,6 +88,8 @@ struct Rule {
     var askFirst = false
     /// Where it's listed in Free Up.
     var box: BoxKind = .other
+    /// Versions of the same tools: see `RuleFamily`.
+    var family: RuleFamily? = nil
 }
 
 /// A fixed set of names the scanner can ask about from any thread, with no String and no reference counting.
@@ -143,10 +155,17 @@ final class RuleBook: @unchecked Sendable {
 
     private var stateCount = 1
 
-    // Folder extensions that make a folder one thing to the Finder. What's inside isn't yours to pick apart.
-    private let packages = NameTable(["app", "appex", "bundle", "framework", "kext", "xcframework", "plugin", "pkg",
-                                      "photoslibrary", "aplibrary", "fcpbundle", "imovielibrary", "tvlibrary", "musiclibrary",
-                                      "logicx", "band", "xcarchive", "sparsebundle", "dtbase2", "lrlibrary", "rtfd"])
+    /// Folder extensions that make a folder one thing to the Finder. What's inside isn't yours to pick apart. The one list
+    /// of them: the scan asks it of a name's bytes, everything else of a name.
+    static let packageEndings = ["app", "appex", "bundle", "framework", "kext", "xcframework", "plugin", "pkg",
+                                 "photoslibrary", "aplibrary", "fcpbundle", "imovielibrary", "tvlibrary", "musiclibrary",
+                                 "logicx", "band", "xcarchive", "sparsebundle", "backupbundle", "dtbase2", "lrlibrary", "rtfd",
+                                 "vmwarevm", "pvm", "utm"]
+    private static let packageSet = Set(packageEndings)
+    private let packages = NameTable(RuleBook.packageEndings)
+
+    /// Whether a folder with this name is a package.
+    static func isPackage(name: String) -> Bool { packageSet.contains((name as NSString).pathExtension.lowercased()) }
     // Folders that are nearly all tiny files: about half the reading on a typical disk, for under a tenth of the bytes.
     private let slowFolders = NameTable(["node_modules", ".venv", "venv", "__pycache__", "site-packages", ".git", "Pods", ".build",
                                          "DerivedData", ".gradle", ".cargo", ".npm", ".pnpm", "Caches", ".cache"])
@@ -299,8 +318,9 @@ final class RuleBook: @unchecked Sendable {
     }
 
     /// Follows the path table one folder down. Returns the next state and the rule found there, if any.
-    @inline(__always) func step(state: UInt8, name: UnsafePointer<UInt8>, length: Int) -> (state: UInt8, rule: UInt16) {
-        if state == 0 && !isRootStep { return (0, 0) }
+    /// State 0 is both the top and "no match", so only a step that says it's from the very top of the scan may leave it.
+    @inline(__always) func step(state: UInt8, name: UnsafePointer<UInt8>, length: Int, fromRoot: Bool = false) -> (state: UInt8, rule: UInt16) {
+        if state == 0 && !fromRoot { return (0, 0) }
         let key = Self.key(state: Int(state), hash: Self.hash(name, length))
         var slot = Int(truncatingIfNeeded: key &* 0x9E37_79B9_7F4A_7C15 >> 40) & (Self.transitionSlots - 1)
         while transitionKeys[slot] != 0 {
@@ -314,14 +334,9 @@ final class RuleBook: @unchecked Sendable {
         return wild == 0 ? (0, 0) : (wild, stateRule[Int(wild)])
     }
 
-    /// State 0 is both the root and "no match", so only the very top of the scan may step from it.
-    var isRootStep = false
-
     func stepFromRoot(_ name: String) -> (state: UInt8, rule: UInt16) {
         let bytes = Array(name.utf8)
-        isRootStep = true
-        defer { isRootStep = false }
-        return bytes.withUnsafeBufferPointer { step(state: 0, name: $0.baseAddress!, length: $0.count) }
+        return bytes.withUnsafeBufferPointer { step(state: 0, name: $0.baseAddress!, length: $0.count, fromRoot: true) }
     }
 
     @inline(__always) func ruleForName(_ p: UnsafePointer<UInt8>, _ n: Int) -> UInt16 {
@@ -453,8 +468,8 @@ final class RuleBook: @unchecked Sendable {
         ("~/.lmstudio/models", model("LM Studio models", "AI model weights. Download them again from LM Studio.")),
         ("~/LLM/*", { var rule = named(model("Local AI models", "AI model weights. Re-downloadable if you know where they came from.")); rule.askFirst = true; return rule }()),
         ("~/LLM/huggingface", huggingFace),
-        ("~/Library/Android/sdk/system-images", Rule(title: "Android system images", detail: "Emulator system images. Android Studio re-downloads them when needed.", tier: .redownload, kind: .app, box: .developer)),
-        ("~/Library/Android/sdk/ndk/*", named(Rule(title: "Android NDK", detail: "A version of the native build tools. A project that asks for it downloads it again.", tier: .redownload, kind: .app, box: .developer))),
+        ("~/Library/Android/sdk/system-images", Rule(title: "Android system images", detail: "Emulator system images. Android Studio re-downloads them when needed.", tier: .redownload, kind: .app, box: .developer, family: .androidTools)),
+        ("~/Library/Android/sdk/ndk/*", named(Rule(title: "Android NDK", detail: "A version of the native build tools. A project that asks for it downloads it again.", tier: .redownload, kind: .app, box: .developer, family: .androidTools))),
         ("~/.rustup/toolchains", Rule(title: "Rust toolchains", detail: "Versions of the Rust compiler. rustup installs them again.", tier: .redownload, kind: .app, box: .developer)),
         ("~/Library/Application Support/com.apple.wallpaper", Rule(title: "Aerial wallpapers", detail: "Video wallpapers. macOS downloads them again when you pick one.", tier: .redownload, kind: .video, notTrashable: true)),
 

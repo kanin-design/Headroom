@@ -14,8 +14,8 @@ struct LookCard: View {
     @State private var footerHeight: CGFloat = 0
 
     var body: some View {
+        // A map whose numbers change is a new map, so reading it is enough to follow them.
         if let tree = model.tree {
-            let _ = model.treeVersion
             VStack(alignment: .leading, spacing: 0) {
                 header(tree)
                     .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { _, height in headerHeight = height }
@@ -53,7 +53,7 @@ struct LookCard: View {
                 .help("Back")
             }
             if !HiddenNames.isOn, let real = model.realPath(of: node) {
-                Image(nsImage: NSWorkspace.shared.icon(forFile: real))
+                Image(nsImage: FileIcons.icon(for: real))
                     .resizable()
                     .frame(width: 40, height: 40)
             }
@@ -75,7 +75,7 @@ struct LookCard: View {
                 if node != 0, let links = Accounting.hoverLine(node, bytes: bytes, in: tree) {
                     Text(links)
                         .font(.system(size: 11.5, weight: .semibold))
-                        .foregroundStyle(Color(red: 1, green: 0.74, blue: 0.42))
+                        .foregroundStyle(Palette.amber)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -174,7 +174,7 @@ private struct LookFolder: View {
             let top = Array(rows.prefix(300))
             let biggest = Double(max(top.first.map { tree.totals[Int($0)] } ?? 1, 1))
             let own = node == 0 ? 0 : tree.nodes[Int(RingLayout.chainTail(tree: tree, node))].bytes
-            let pictures = HiddenNames.isOn ? [] : LookContents.media(in: node, tree: tree)
+            let pictures = model.lookMedia(of: node)
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(spacing: 8) {

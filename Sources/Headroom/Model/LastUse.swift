@@ -16,7 +16,7 @@ enum LastUse {
     /// Without `orChange`, only what says it was used: the card already gives the date it changed.
     static func line(_ node: UInt32, in tree: DiskTree, now: Date = Date(), home: String = NSHomeDirectory(), orChange: Bool = true) -> String? {
         guard let full = tree.path(node) else { return nil }
-        let path = Facts.visible(full)
+        let path = PathMath.visible(full)
         let isFolder = tree.nodes[Int(node)].has(NodeFlag.directory)
         if let watched = plexWatched(path, database: home + plexDatabase, now: now) { return watched }
         if let played = steamPlayed(path, library: home + "/Library/Application Support/Steam/steamapps") {
@@ -24,7 +24,7 @@ enum LastUse {
         }
         if isFolder, hasGit(node, in: tree), let commit = lastCommit(in: full) { return "Last commit " + ago(commit, now: now) }
         if !isFolder || path.hasSuffix(".app"), let opened = openedBySpotlight(path) { return "Opened " + ago(opened, now: now) }
-        let newest = newestChange(node, in: tree)
+        let newest = tree.newest[Int(node)]
         guard orChange, newest > 0, !Task.isCancelled else { return nil }
         return "Changed " + ago(Date(timeIntervalSince1970: TimeInterval(newest)), now: now)
     }
@@ -137,7 +137,7 @@ enum LastUse {
         var child = tree.nodes[Int(node)].firstChild
         while child != 0 {
             let n = tree.nodes[Int(child)]
-            if n.nameLength == 4, n.has(NodeFlag.directory), tree.name(child) == ".git" { return true }
+            if n.nameLength == 4, n.has(NodeFlag.directory), tree.rawName(child) == ".git" { return true }
             child = n.nextSibling
         }
         return false
@@ -189,31 +189,12 @@ enum LastUse {
         return MDItemCopyAttribute(item, kMDItemLastUsedDate) as? Date
     }
 
-    /// The newest file date anywhere inside, from the scan, so it costs no disk reads. It stops early once the pointer has
-    /// moved on.
-    static func newestChange(_ node: UInt32, in tree: DiskTree) -> UInt32 {
-        var newest = tree.nodes[Int(node)].modTime
-        var folders = [node]
-        var seen = 0
-        while let folder = folders.popLast() {
-            var child = tree.nodes[Int(folder)].firstChild
-            while child != 0 {
-                seen &+= 1
-                if seen & 8_191 == 0, Task.isCancelled { return 0 }
-                let n = tree.nodes[Int(child)]
-                newest = max(newest, n.modTime)
-                if n.firstChild != 0 { folders.append(child) }
-                child = n.nextSibling
-            }
-        }
-        return newest
-    }
-
     // MARK: Words
 
+    /// The one place a time gone by is put into words, in the language of everything around it.
     nonisolated(unsafe) private static let relative: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
-        formatter.locale = Locale(identifier: "en_US")
+        formatter.locale = Titles.locale
         formatter.unitsStyle = .full
         formatter.dateTimeStyle = .named
         return formatter

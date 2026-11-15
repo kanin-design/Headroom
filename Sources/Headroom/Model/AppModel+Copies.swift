@@ -58,9 +58,13 @@ extension AppModel {
             }
             // The panel and the ring follow along, a few times a second.
             var shown = 0
+            var looks = 0
             while true {
                 let done = finished.value
-                if !done { try? await Task.sleep(for: .milliseconds(300)) }
+                // Quickly at first, so the first sets are there at once, then once a second: each look makes the whole
+                // map of copies again.
+                if !done { try? await Task.sleep(for: .milliseconds(looks < 3 ? 300 : 1000)) }
+                looks += 1
                 guard !stop.value, self.tree?.scanID == scanID else { self.copiesEnded(stop); return }
                 self.copiesBytesRead = progress.bytesRead.load(ordering: .relaxed)
                 self.copiesGroupsDone = progress.groupsDone.load(ordering: .relaxed)
@@ -139,25 +143,15 @@ extension AppModel {
     func copyPieces(_ nodes: [UInt32]) -> (related: [Range<Int>], ancestors: [Int]) {
         guard let tree else { return ([], []) }
         let layout = engine.layout
-        var pieceOf = [UInt32: Int](minimumCapacity: layout.pieces.count)
-        var smallerOf: [Int: Int] = [:]
-        for (at, p) in layout.pieces.enumerated() {
-            if p.isSmaller {
-                if p.parent >= 0 { smallerOf[Int(p.parent)] = at }
-            } else if p.style != 1 && p.style != 2 {
-                if pieceOf[p.node] == nil { pieceOf[p.node] = at }
-                if pieceOf[p.tail] == nil { pieceOf[p.tail] = at }
-            }
-        }
         var related: [Range<Int>] = []
         var ancestors = Set<Int>()
         for node in nodes where node != 0 {
             if layout.focus != 0, !tree.isInside(node, layout.focus) { continue }
             var a = node
             while true {
-                if let at = pieceOf[a] {
+                if let at = layout.piece(of: a) {
                     let own = a == node
-                    let target = own ? at : (smallerOf[at] ?? at)
+                    let target = own ? at : (layout.smallerPiece(in: at) ?? at)
                     let end = own && tree.nodes[Int(node)].has(NodeFlag.directory) ? max(Int(layout.pieces[target].end), target + 1) : target + 1
                     related.append(target..<end)
                     var up = layout.pieces[target].parent
@@ -186,7 +180,7 @@ extension AppModel {
     func copyLight(for index: Int) -> (full: [Range<Int>], holding: [Int], tint: SIMD3<Float>?) {
         guard lens == .copies, let tree, let copies, copies.scanID == tree.scanID, index < engine.layout.pieces.count else { return ([], [], nil) }
         let p = engine.layout.pieces[index]
-        guard !p.isSmaller, p.style != 1, p.style != 2, let set = copies.set(of: p.node) else {
+        guard !p.isSmaller, p.style != .free, p.style != .hidden, let set = copies.set(of: p.node) else {
             hotCopyGroup = nil
             return ([], [], nil)
         }
@@ -257,9 +251,7 @@ extension AppModel {
 
     static func saveKeptCopies(_ paths: Set<String>) {
         let list = Array(paths).sorted(), file = keptCopiesFile
-        DispatchQueue.global(qos: .utility).async {
-            if let data = try? JSONEncoder().encode(list) { try? data.write(to: file, options: .atomic) }
-        }
+        Saves.write(list, to: file)
     }
 
     // MARK: Taking the extra copies
@@ -271,9 +263,6 @@ extension AppModel {
     }
 
     func duplicateTick(_ group: CopyGroup) -> TickState {
-        // Read so a row redraws the moment its tick changes, not when the pointer next moves.
-        _ = planVersion
-        _ = afterClean
         let extras = group.extras
         guard !extras.isEmpty else { return .none }
         let planned = extras.filter { isPlanned($0) }.count
@@ -283,7 +272,7 @@ extension AppModel {
     /// Ticks or unticks a duplicates row: its extra copies go into the plan as things picked by hand, each saying which copy
     /// stays. The one button does the rest, as for anything else, so they go to the Trash, and Undo brings them back.
     func toggleDuplicate(_ group: CopyGroup) {
-        guard let tree, canEditPlan, group.kind == .duplicate else { return }
+        guard let tree, mayEditPlan(), group.kind == .duplicate else { return }
         let extras = extraPaths(of: group)
         if duplicateTick(group) == .all {
             for e in extras { plan.takeBack(e.path) }
@@ -292,7 +281,7 @@ extension AppModel {
         }
         for e in extras where !isPlanned(e.node) {
             guard Safety.canTrash(e.path), let keeper = group.keeper(of: e.node) else { continue }
-            plan.add(PlanItem(id: "path:" + e.path, title: tree.name(e.node), note: "Duplicate of \(tree.friendlyPath(keeper))", tierRaw: Tier.yourCall.rawValue,
+            plan.add(PlanItem(id: PlanItem.id(pickedByHand: e.path), title: tree.name(e.node), note: "Duplicate of \(tree.friendlyPath(keeper))", tierRaw: Tier.yourCall.rawValue,
                               paths: [e.path], byHand: true, lastKnownBytes: tree.totals[Int(e.node)], diskID: Cleaner.diskID(of: e.path)))
         }
         planChanged()

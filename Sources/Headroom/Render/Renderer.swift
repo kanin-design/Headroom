@@ -31,6 +31,9 @@ struct UniformsGPU {
     var ghostCount: Float = 0       // how many colours it has
     var freeOuter: Float = 1        // how far out the free wedge reaches, as a share of the radius
     var minLit: Float = 0           // points: the least a lit piece is drawn across while a tint shows
+    var layer: Float = 0            // which pieces this pass draws: 0 the ones at rest, 1 the lit, 2 the lifted, 3 the one on top
+    var litAbove: Float = 1         // how lit a piece has to be to count as lit, for that
+    var top: Float = -1             // the piece pointed at, which lies over all the others; -1 when there's none
     var previewColor: SIMD4<Float> = .zero
     var tint: SIMD4<Float> = .zero  // the colour lit pieces take on, and in w how much
     // Each colour's RGB, and in w where it ends, as a share of the whole. As long as `MapEngine.ghostSliceLimit`.
@@ -69,8 +72,6 @@ final class MapRenderer {
     private var emphasisSlot = 0
     private var emphasisOffset = 0
     /// Pieces that stand out past their place: the one you're pointing at, and one still settling back after it. They're
-    /// drawn after all the rest, the furthest out last, or the pieces drawn after them would cover what stands out.
-    private var lifted: [Int] = []
 
     private var piecesTexture: MTLTexture?
     private var glowTexture: MTLTexture?
@@ -150,23 +151,31 @@ final class MapRenderer {
         instanceCount = instances.count
     }
 
-    func writeEmphasis(_ values: [Float]) {
+    /// How lit each piece is now, and which one is pointed at, if any.
+    func writeEmphasis(_ values: [Float], top: Int? = nil) {
+        self.top = top
         guard !values.isEmpty else { return }
         let bytes = values.count * MemoryLayout<Float>.stride
-        let slot = (emphasisSlot + 1) % 3
+        // The buffer is three places of the same size, used in turn, so the frames the GPU is still drawing keep reading
+        // theirs whole, also when the number of pieces has just changed.
+        let place = emphasisBuffer.length / 3 / MemoryLayout<Float>.stride * MemoryLayout<Float>.stride
         // A buffer that couldn't grow keeps the emphasis it last held, rather than one the GPU would read past its end.
-        guard (slot + 1) * bytes <= emphasisBuffer.length else { return }
-        emphasisSlot = slot
-        emphasisOffset = slot * bytes
+        guard bytes <= place else { return }
+        emphasisSlot = (emphasisSlot + 1) % 3
+        emphasisOffset = emphasisSlot * place
         values.withUnsafeBytes { raw in
             (emphasisBuffer.contents() + emphasisOffset).copyMemory(from: raw.baseAddress!, byteCount: bytes)
         }
-        // Past 1, emphasis lifts a piece outward: see the segment shader. While a tint shows, what's lit is drawn over its
-        // neighbours too, since it may be drawn wider than its place; when that's a great many pieces, only the lifted ones.
-        let over = liftLit ? values.indices.filter { values[$0] > 0.9 } : []
-        let onTop = !over.isEmpty && over.count <= 256 ? over : values.indices.filter { values[$0] > 1 }
-        lifted = onTop.sorted { values[$0] < values[$1] }
+        mostLit = values.max() ?? 0
     }
+
+    /// How lit the most lit piece is, as last written: whether there's anything for the passes after the first to draw.
+    private var mostLit: Float = 0
+    /// The piece pointed at. It's drawn last, however lit it is yet: a piece the pointer just left is still as lit, or
+    /// more, for a moment, and would lie over this one growing into its place.
+    private var top: Int?
+    /// How lit a piece has to be to be drawn over its neighbours while a tint shows.
+    private static let litAbove: Float = 0.9
 
     /// Whether lit pieces are drawn over the others: while a tint shows.
     var liftLit = false
@@ -248,17 +257,27 @@ final class MapRenderer {
             e.setVertexBuffer(emphasisBuffer, offset: emphasisOffset, index: 2)
             e.setFragmentBytes(&u, length: MemoryLayout<UniformsGPU>.stride, index: 1)
             if instanceCount > 0 {
-                let onTop = lifted.filter { $0 < instanceCount }
-                // Everything else in its order, in as few draws as the lifted pieces leave gaps for.
-                var start = 0
-                for at in onTop.sorted() {
-                    if at > start { e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: at - start, baseInstance: start) }
-                    start = at + 1
+                // Past 1, emphasis lifts a piece outward, and while a tint shows a lit piece may be drawn wider than its
+                // place: both have to lie over their neighbours. So every piece is in one of three layers by how lit it
+                // is, and each pass draws all the pieces with the shader leaving out the ones that aren't in its layer.
+                // The piece pointed at is a layer of its own, over those. One draw while nothing is lit, four at most,
+                // however many pieces are.
+                u.litAbove = liftLit ? Self.litAbove : 1
+                let top = top.flatMap { $0 < instanceCount ? $0 : nil }
+                u.top = top.map(Float.init) ?? -1
+                var layers: [Float] = [0]
+                if mostLit > u.litAbove, u.litAbove < 1 { layers.append(1) }
+                if mostLit > 1 { layers.append(2) }
+                for layer in layers {
+                    u.layer = layer
+                    e.setVertexBytes(&u, length: MemoryLayout<UniformsGPU>.stride, index: 1)
+                    e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: instanceCount)
                 }
-                if start < instanceCount {
-                    e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: instanceCount - start, baseInstance: start)
+                if let top {
+                    u.layer = 3
+                    e.setVertexBytes(&u, length: MemoryLayout<UniformsGPU>.stride, index: 1)
+                    e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: 1, baseInstance: top)
                 }
-                for at in onTop { e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: 1, baseInstance: at) }
             }
         }
 

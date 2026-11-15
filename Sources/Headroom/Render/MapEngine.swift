@@ -168,7 +168,7 @@ final class MapEngine: @unchecked Sendable {
                 from = m.apply(to)
             }
             newIndex[p.key] = index
-            out.append(SegmentGPU(from: from, to: to, colorFrom: colorFrom, colorTo: colorTo, params: SIMD4(p.style, p.seed, p.calm, p.deeper),
+            out.append(SegmentGPU(from: from, to: to, colorFrom: colorFrom, colorTo: colorTo, params: SIMD4(p.style.rawValue, p.seed, p.calm, p.deeper),
                                   plan: SIMD4(plannedFrom, p.planned, 0, 0)))
             outKeys.append(p.key)
             outParents.append(p.parent)
@@ -234,7 +234,7 @@ final class MapEngine: @unchecked Sendable {
         renderer?.setInstances(instances)
         emphasisNow = nextNow
         emphasisGoal = nextGoal
-        renderer?.writeEmphasis(emphasisNow)
+        emphasisChangedSinceDrawn = true
 
         // Every piece now starts from where it is, with less far to go. Scaling the speed up to match keeps anything still
         // heading the same way moving at the same pace, so new numbers arriving many times a second don't make it stutter.
@@ -337,7 +337,13 @@ final class MapEngine: @unchecked Sendable {
         return changed
     }
 
+    /// For a check: how many pieces are lit, or on their way to being.
+    var litPieces: Int { lock.withLock { emphasisGoal.filter { $0 > 0.5 }.count } }
+
     // MARK: Frames
+
+    /// How lit each piece is has changed since the renderer was last given it.
+    private var emphasisChangedSinceDrawn = false
 
     /// One frame, on the ring's thread: everything moves on by `dt` seconds, and `encode` gets what the shaders need to draw
     /// it, while nothing else can change it. Returns true while anything is still moving.
@@ -345,6 +351,12 @@ final class MapEngine: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         let moving = advance(dt: dt)
+        // Once a frame at most, and only for a frame that's drawn: each write takes the next of three places in a buffer
+        // the GPU may still be reading the last two frames from.
+        if emphasisChangedSinceDrawn, encode != nil {
+            renderer?.writeEmphasis(emphasisNow, top: emphasisGoal.firstIndex { $0 > 1 })
+            emphasisChangedSinceDrawn = false
+        }
         encode?(uniforms(viewport: viewport, scale: scale, headroom: headroom))
         return moving
     }
@@ -392,7 +404,7 @@ final class MapEngine: @unchecked Sendable {
                 emphasisNow.removeLast(emphasisNow.count - pieceCount)
                 emphasisGoal.removeLast(emphasisGoal.count - pieceCount)
                 renderer?.setInstances(instances)
-                renderer?.writeEmphasis(emphasisNow)
+                emphasisChangedSinceDrawn = true
             }
             moving = true
         }
@@ -410,7 +422,7 @@ final class MapEngine: @unchecked Sendable {
             }
         }
         if emphasisChanged {
-            renderer?.writeEmphasis(emphasisNow)
+            emphasisChangedSinceDrawn = true
             moving = true
         }
 
@@ -494,7 +506,7 @@ final class MapEngine: @unchecked Sendable {
         u.restSaturation = 1 - calmNow * (1 - Self.colourAtRest)
         u.glowAtRest = 1 - calmNow * (1 - Self.glowAtRest)
         u.headroom = Float(headroom)
-        if let free = layout.pieces.first(where: { $0.style == 1 }) {
+        if let free = layout.freePiece.map({ layout.pieces[$0] }) {
             u.ghost = ghostNow
             u.freeStart = free.a0
             u.freeOuter = free.r1

@@ -35,6 +35,10 @@ private let optionExtended: UInt64 = 0x20
 /// Every worker asks for whole directories' metadata in one system call (`getattrlistbulk`), adds small files to their
 /// folder without making a String, and keeps a node only for folders and for files of at least `promoteBytes`.
 final class Scanner: @unchecked Sendable {
+    /// How many kinds a folder's sums have room for while it's read. A power of two, so a kind's number can be held inside
+    /// it without a check, and at least `Kind.count`, which a test makes sure of.
+    static let kindSlots = 16
+
     /// A Mac app may only hold 256 open files unless it asks for more, and a scan's workers alone can keep nearly that many
     /// folders open. Whatever else was open at launch would tip it over.
     static func askForEnoughOpenFiles() {
@@ -486,6 +490,9 @@ final class Scanner: @unchecked Sendable {
                     pthread_cond_broadcast(wake)
                     break
                 }
+                // Nothing to do, for now: it doesn't sit on open folders while others may be short of them. A worker that
+                // slept holding its two dozen could leave one that's working unable to open anything at all.
+                opened.closeAll()
                 sleepers += 1
                 pthread_cond_wait(wake, lock)
                 sleepers -= 1
@@ -687,8 +694,6 @@ final class Scanner: @unchecked Sendable {
         list.forkattr = attrExtCloneID | attrExtFlags
 
         let parent = nodes[Int(id)]
-        let expected = parent.fileCount        // the parent's listing left the entry count here, when it knew it
-        var entriesRead: UInt32 = 0
         let parentRule = parent.rule
         let parentState = parent.ruleState
         let forcedKind: UInt8? = parentRule == 0 ? nil : rules.forcedKind(parentRule)
@@ -702,7 +707,8 @@ final class Scanner: @unchecked Sendable {
         var symlinks: UInt32 = 0
         var newest: UInt32 = 0
         var firstChild = parent.firstChild
-        var kindBytes = (UInt64(0), UInt64(0), UInt64(0), UInt64(0), UInt64(0), UInt64(0), UInt64(0), UInt64(0), UInt64(0), UInt64(0), UInt64(0))
+        // Room for more kinds than there are, and never written past: see `kindSlots`.
+        var kindBytes = InlineArray<16, UInt64>(repeating: 0)
         var recent1: UInt64 = 0, recent7: UInt64 = 0, recent14: UInt64 = 0, recent30: UInt64 = 0
         var recent91: UInt64 = 0, recent365: UInt64 = 0
         let day: UInt32 = 86_400
@@ -715,7 +721,6 @@ final class Scanner: @unchecked Sendable {
                 if count < 0 { nodes[Int(id)].flags |= NodeFlag.denied }
                 break
             }
-            entriesRead &+= UInt32(count)
             var entry = UnsafeRawPointer(buffer)
             for _ in 0..<count {
                 let length = entry.loadUnaligned(as: UInt32.self)
@@ -897,7 +902,7 @@ final class Scanner: @unchecked Sendable {
 
                 if share != 0 {
                     found &+= share
-                    withUnsafeMutableBytes(of: &kindBytes) { $0.assumingMemoryBound(to: UInt64.self)[Int(kind)] &+= share }
+                    kindBytes[Int(kind) & (Self.kindSlots - 1)] &+= share
                     if mod >= cut365 {
                         recent365 &+= share
                         if mod >= cut91 { recent91 &+= share }
@@ -912,17 +917,15 @@ final class Scanner: @unchecked Sendable {
                     }
                 }
             }
-            if expected != 0 && entriesRead >= expected { break }
+            // Read until the folder says there's no more. Stopping at the number of entries its parent's listing gave would
+            // miss whatever was added since, and the call that says "no more" costs nothing that can be measured.
         }
 
         filesSeen.add(UInt64(fileCount), ordering: .relaxed)
         bytesSeen.add(found, ordering: .relaxed)
 
         let s = tree.statTable + Int(id) * DiskTree.statStride
-        withUnsafeBytes(of: &kindBytes) { raw in
-            let k = raw.bindMemory(to: UInt64.self)
-            for i in 0..<Kind.count { s[i] = Self.units(k[i]) }
-        }
+        for i in 0..<min(Kind.count, Self.kindSlots) { s[i] = Self.units(kindBytes[i]) }
         s[DiskTree.statRecent1] = Self.units(recent1)
         s[DiskTree.statRecent7] = Self.units(recent7)
         s[DiskTree.statRecent30] = Self.units(recent30)
@@ -937,7 +940,6 @@ final class Scanner: @unchecked Sendable {
         nodes[Int(id)].firstChild = firstChild
         nodes[Int(id)].bytes = bytes
         nodes[Int(id)].flags &= ~NodeFlag.unread
-        tree.count = max(tree.count, nodesSoFar)
     }
 
     // MARK: Refreshing
@@ -1077,11 +1079,10 @@ final class Scanner: @unchecked Sendable {
         nodes[Int(id)].flags &= ~(NodeFlag.unread | NodeFlag.denied)
         filesSeen.add(UInt64(source.fileCount), ordering: .relaxed)
         bytesSeen.add(found, ordering: .relaxed)
-        tree.count = max(tree.count, nodesSoFar)
     }
 
     @inline(__always) private static func units(_ bytes: UInt64) -> UInt32 {
-        UInt32(truncatingIfNeeded: min((bytes &+ 8191) >> 14, UInt64(UInt32.max)))
+        DiskTree.units(bytes: bytes)
     }
 
     private func nameHash(_ id: UInt32) -> UInt64 {

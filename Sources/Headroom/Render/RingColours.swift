@@ -24,9 +24,7 @@ final class ColourMemory {
         guard unsaved else { return }
         unsaved = false
         let copy = views, target = file
-        DispatchQueue.global(qos: .utility).async {
-            if let data = try? JSONEncoder().encode(copy) { try? data.write(to: target, options: .atomic) }
-        }
+        Saves.write(copy, to: target)
     }
 }
 
@@ -60,7 +58,7 @@ struct RingColours {
             // On the whole disk, the things you recognise are one level down, in your files. The system stays quiet slate,
             // because none of it is yours to look through.
             for child in tree.children(0) where child != tree.free && child != tree.hidden {
-                if child == tree.home || (tree.home == 0 && tree.nodes[Int(child)].has(NodeFlag.directory)) {
+                if child == tree.home || (!tree.isBoot && tree.nodes[Int(child)].has(NodeFlag.directory)) {
                     colors[child] = Lab(lch: 0.50, 0.035, 285)
                     items += tree.children(child)
                 } else if tree.nodes[Int(child)].has(NodeFlag.synthetic) {

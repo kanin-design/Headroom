@@ -98,6 +98,29 @@ final class CopiesTests: XCTestCase {
         XCTAssertEqual(found.first?.size, UInt64(3 * megabyte))
     }
 
+    /// Many different files of one size, with a few real copies among them: more kinds than are compared one by one.
+    func testCopiesAreFoundAmongManyDifferentFilesOfOneSize() throws {
+        let size = megabyte + megabyte / 2
+        XCTAssertGreaterThan(24, Duplicates.manyKinds)
+        for n in 0..<24 { try write("many/different-\(n).bin", random(size)) }
+        let twice = random(size), thrice = random(size)
+        try write("many/twice-a.bin", twice)
+        try write("many/z/twice-b.bin", twice)
+        for name in ["many/thrice-a.bin", "many/y/thrice-b.bin", "many/x/thrice-c.bin"] { try write(name, thrice) }
+        // The same but for its last byte, where a sum over whole words alone would miss it.
+        var nearly = thrice
+        nearly[size - 1] ^= 1
+        try write("many/nearly.bin", nearly)
+        let (tree, rules) = scanned()
+        let found = duplicates(tree, rules).filter { $0.size == UInt64(size) }
+        XCTAssertEqual(Set(found.map { Set($0.nodes) }), [
+            Set(["many/twice-a.bin", "many/z/twice-b.bin"].map { node(tree, $0) }),
+            Set(["many/thrice-a.bin", "many/y/thrice-b.bin", "many/x/thrice-c.bin"].map { node(tree, $0) }),
+        ])
+        let a = [UInt8](repeating: 7, count: 21), b = a.dropLast() + [8]
+        XCTAssertNotEqual(a.withUnsafeBytes { Duplicates.quickHash($0.baseAddress!, 21) }, Array(b).withUnsafeBytes { Duplicates.quickHash($0.baseAddress!, 21) })
+    }
+
     func testCountsAliasesAndReadsWhereTheyPoint() {
         let (tree, rules) = scanned()
         let anchor = tree.anchors.first!.id
@@ -426,7 +449,7 @@ final class LinkingTests: XCTestCase {
     private func pretendTrash(_ path: String) throws -> (place: String, identity: String?) {
         let place = root + "/Trash/" + UUID().uuidString + "-" + (path as NSString).lastPathComponent
         try FileManager.default.moveItem(atPath: path, toPath: place)
-        return (place, nil)
+        return (place, Cleaner.identity(of: place))
     }
 
     func testEveryByteIsCompared() throws {
@@ -443,11 +466,11 @@ final class LinkingTests: XCTestCase {
     func testLinkingMakesOneFileAndUndoMakesTwo() throws {
         let data = random(3 << 20)
         let kept = try write("Films/trip.mov", data), copy = try write("Downloads/trip.mov", data)
-        let moved = try Cleaner.link(copy, to: kept, trashing: pretendTrash)
+        let moved = try Cleaner.replaceCopy(copy, of: kept, with: .hardlink, trashing: pretendTrash)
         XCTAssertTrue(Cleaner.isSameFile(copy, kept), "the copy's path is now the same file as the one that stays")
         XCTAssertTrue(try Cleaner.sameBytes(moved.place, kept), "the copy itself waits in the Trash, whole")
 
-        var thing = CleanedThing(itemID: "linked:" + copy, title: "trip.mov", original: copy, inTrash: moved.place, bytes: 0)
+        var thing = CleanedThing(itemID: "linked:" + copy, title: "trip.mov", original: copy, inTrash: moved.place, bytes: 0, identity: moved.identity)
         thing.linkedTo = kept
         try Cleaner.putBack(thing)
         XCTAssertFalse(Cleaner.isSameFile(copy, kept), "its own file again")
@@ -460,7 +483,7 @@ final class LinkingTests: XCTestCase {
         var other = data
         other[1 << 20] ^= 1
         let kept = try write("a.bin", data), copy = try write("b.bin", other)
-        XCTAssertThrowsError(try Cleaner.link(copy, to: kept, trashing: pretendTrash))
+        XCTAssertThrowsError(try Cleaner.replaceCopy(copy, of: kept, with: .hardlink, trashing: pretendTrash))
         XCTAssertFalse(Cleaner.isSameFile(copy, kept))
         XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: copy)), other, "left exactly as it was")
     }
@@ -471,7 +494,7 @@ final class LinkingTests: XCTestCase {
         let moved = try Cleaner.replaceCopy(copy, of: kept, with: .symlink, trashing: pretendTrash)
         XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: copy), kept, "the copy's path points to the one kept")
         XCTAssertTrue(Cleaner.isLink(copy, to: kept))
-        var thing = CleanedThing(itemID: "symlink:" + copy, title: "trip.mov", original: copy, inTrash: moved.place, bytes: 0)
+        var thing = CleanedThing(itemID: "symlink:" + copy, title: "trip.mov", original: copy, inTrash: moved.place, bytes: 0, identity: moved.identity)
         thing.linkedTo = kept
         try Cleaner.putBack(thing)
         XCTAssertNil(try? FileManager.default.destinationOfSymbolicLink(atPath: copy), "a file again, not a symlink")
@@ -489,8 +512,42 @@ final class LinkingTests: XCTestCase {
         XCTAssertTrue(try Cleaner.sameBytes(moved.place, kept))
         XCTAssertThrowsError(try Cleaner.replaceCopy(edited, of: kept, with: .nothing, trashing: pretendTrash), "changed since it was compared")
         XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: edited)), changed, "left as it was")
-        try Cleaner.putBack(CleanedThing(itemID: "delete:" + copy, title: "b.bin", original: copy, inTrash: moved.place, bytes: 0))
+        try Cleaner.putBack(CleanedThing(itemID: "delete:" + copy, title: "b.bin", original: copy, inTrash: moved.place, bytes: 0, identity: moved.identity))
         XCTAssertTrue(try Cleaner.sameBytes(copy, kept), "Undo puts it back")
+    }
+
+    /// The link can't be made, and the copy goes straight back where it was.
+    func testACopyComesBackWhenTheLinkCantBeMade() throws {
+        let data = random(1 << 20)
+        let kept = try write("Films/a.bin", data), copy = try write("Downloads/a.bin", data)
+        let losingTheKept: (String) throws -> (place: String, identity: String?) = { path in
+            let moved = try self.pretendTrash(path)
+            try FileManager.default.removeItem(atPath: kept)
+            return moved
+        }
+        XCTAssertThrowsError(try Cleaner.replaceCopy(copy, of: kept, with: .hardlink, trashing: losingTheKept)) { error in
+            guard case Cleaner.Failure.linkFailed(let left) = error else { return XCTFail("\(error)") }
+            XCTAssertNil(left, "nothing is left in the Trash")
+        }
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: copy)), data)
+    }
+
+    /// It can't come back either, because something took its name meanwhile: the error says where in the Trash it is, so it
+    /// goes on record and Undo can still reach it.
+    func testACopyThatCantComeBackSaysWhereItIs() throws {
+        let data = random(1 << 20)
+        let kept = try write("Films/a.bin", data), copy = try write("Downloads/a.bin", data)
+        let takingItsName: (String) throws -> (place: String, identity: String?) = { path in
+            let moved = try self.pretendTrash(path)
+            try Data("something new".utf8).write(to: URL(fileURLWithPath: path))
+            return moved
+        }
+        XCTAssertThrowsError(try Cleaner.replaceCopy(copy, of: kept, with: .symlink, trashing: takingItsName)) { error in
+            guard case Cleaner.Failure.linkFailed(let left?) = error else { return XCTFail("\(error)") }
+            XCTAssertEqual(try? Data(contentsOf: URL(fileURLWithPath: left.place)), data, "the copy, whole, where the error says")
+            XCTAssertNotNil(left.identity)
+        }
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: copy)), Data("something new".utf8), "what took its name is untouched")
     }
 
     func testUndoNeverRemovesWhatElseTookTheName() throws {
@@ -498,7 +555,7 @@ final class LinkingTests: XCTestCase {
         let kept = try write("a.bin", data)
         let trashed = try write("Trash/b.bin", data)
         let somethingNew = try write("b.bin", Data("something new".utf8))
-        var thing = CleanedThing(itemID: "x", title: "b.bin", original: somethingNew, inTrash: trashed, bytes: 0)
+        var thing = CleanedThing(itemID: "x", title: "b.bin", original: somethingNew, inTrash: trashed, bytes: 0, identity: Cleaner.identity(of: trashed))
         thing.linkedTo = kept
         XCTAssertThrowsError(try Cleaner.putBack(thing), "it isn't the link any more, so it stays")
         XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: somethingNew)), Data("something new".utf8))

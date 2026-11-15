@@ -44,7 +44,7 @@ final class WalkerTests: XCTestCase {
         XCTAssertEqual(look.size, 21_304)
         XCTAssertEqual(Walker.size(of: root), 21_304)
         XCTAssertEqual(look.largestFile, 20_000)
-        XCTAssertEqual(Walker.largestFile(in: root), 20_000)
+        XCTAssertEqual(Walker.look(at: root, limit: 200_000).largestFile, 20_000)
         let byHand = sizeByHand(root)
         XCTAssertEqual(look.size, byHand.size)
         XCTAssertEqual(look.seen, byHand.files)
@@ -77,9 +77,9 @@ final class WalkerTests: XCTestCase {
     func testAHardLinkIsCountedAsLinked() throws {
         try write("/a/first.bin", bytes: 64_000)
         try FileManager.default.linkItem(atPath: root + "/a/first.bin", toPath: root + "/empty/second.bin")
-        XCTAssertGreaterThanOrEqual(Walker.linkedBytes(in: root + "/a"), 64_000)
+        XCTAssertGreaterThanOrEqual(Walker.look(at: root + "/a", limit: 40_000).linkedBytes, 64_000)
         try write("/a/b/alone.bin", bytes: 64_000)
-        XCTAssertEqual(Walker.linkedBytes(in: root + "/a/b"), 0)
+        XCTAssertEqual(Walker.look(at: root + "/a/b", limit: 40_000).linkedBytes, 0)
     }
 
     func testTheNewestDateIsFoundAnywhere() throws {
@@ -115,6 +115,12 @@ final class WalkerTests: XCTestCase {
         let look = Walker.look(at: root, limit: 50)
         XCTAssertGreaterThanOrEqual(look.seen, 50)
         XCTAssertLessThan(look.seen, 840, "Nowhere near all of it")
+        XCTAssertFalse(look.complete, "and it says so, so nobody takes its answer for the whole folder's")
+        XCTAssertTrue(Walker.look(at: root, limit: 5000).complete)
+        // A look that saw everything answers for any limit. One that didn't only answers for its own.
+        XCTAssertFalse(Walker.recentLook(at: root, limit: 50, maxAge: 60).complete)
+        XCTAssertTrue(Walker.recentLook(at: root, limit: 5000, maxAge: 60).complete)
+        XCTAssertTrue(Walker.recentLook(at: root, limit: 100_000, maxAge: 60).complete)
     }
 
     func testAFolderItCantReadIsLeftOut() throws {
@@ -133,6 +139,6 @@ final class WalkerTests: XCTestCase {
         XCTAssertEqual(Walker.recentLook(at: path, limit: 100, maxAge: 60).size, 100, "A moment ago is good enough")
         XCTAssertEqual(Walker.recentLook(at: path, limit: 100, maxAge: 0).size, 150, "Asked to look again")
         try write("/a/three.bin", bytes: 5)
-        XCTAssertEqual(Walker.recentLook(at: path, limit: 500, maxAge: 60).size, 155, "A wider look than the one remembered")
+        XCTAssertEqual(Walker.recentLook(at: path, limit: 500, maxAge: 60).size, 150, "It saw everything, so a wider look would see no more")
     }
 }

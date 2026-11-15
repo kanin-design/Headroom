@@ -53,10 +53,6 @@ extension KeyboardShortcut {
 
 /// The words that get copied.
 enum ThingText {
-    /// The path as macOS shows it, without the data volume your home folder really sits on.
-    static func visible(_ path: String) -> String {
-        path.hasPrefix("/System/Volumes/Data/") ? String(path.dropFirst("/System/Volumes/Data".count)) : path
-    }
 
     /// The name on disk, which can be plainer than what the ring calls it.
     static func name(ofPath path: String) -> String { (path as NSString).lastPathComponent }
@@ -93,12 +89,12 @@ extension AppModel {
     func realName(of node: UInt32) -> String {
         if node == 0 { return volume?.shownName ?? "Disk" }
         guard !HiddenNames.isOn, let path = tree?.path(node) else { return displayName(node) }
-        return ThingText.name(ofPath: ThingText.visible(path))
+        return ThingText.name(ofPath: PathMath.visible(path))
     }
 
     func realPath(of node: UInt32) -> String? {
         if node == 0 { return volume?.mountPath }
-        return tree?.path(node).map(ThingText.visible)
+        return tree?.path(node).map(PathMath.visible)
     }
 
     // MARK: The list
@@ -133,7 +129,7 @@ extension AppModel {
             add("Find Others With This Name", "magnifyingglass") { self.findOthers(named: name) }
         }
         if node != 0, !tree.links.isEmpty {
-            for place in Accounting.story(node, in: tree).placesWorthNaming(size: tree.totals[Int(node)]) {
+            for place in storyForMenu(node, in: tree).placesWorthNaming(size: tree.totals[Int(node)]) {
                 add("Go to \(place.path)", "arrow.right") { self.goToPlace(place.node) }
             }
         }
@@ -177,11 +173,20 @@ extension AppModel {
     private func freesText(_ node: UInt32, in tree: DiskTree) -> String {
         let size = tree.totals[Int(node)]
         guard !tree.links.isEmpty else { return "Frees \(formatBytes(size)) once the Trash is emptied" }
-        let story = Accounting.story(node, in: tree)
+        let story = storyForMenu(node, in: tree)
         if Double(story.reclaim) < Double(size) * 0.9, let place = story.sharedPlace {
             return "Frees \(formatBytes(story.reclaim)): hardlinked or cloned with \(place)"
         }
         return "Frees \(formatBytes(story.reclaim)) once the Trash is emptied"
+    }
+
+    /// What a menu says about a thing's hard links and clones takes a pass over every link on the disk, and one menu asks
+    /// twice: for what it frees, and for where its other copies are.
+    private func storyForMenu(_ node: UInt32, in tree: DiskTree) -> LinkStory {
+        if let known = menuStory, known.node == node, known.version == treeVersion { return known.story }
+        let story = Accounting.story(node, in: tree)
+        menuStory = (node, treeVersion, story)
+        return story
     }
 
     /// The map can change while a menu is open, and node numbers only mean something in the scan they came from.
@@ -303,13 +308,36 @@ extension AppModel {
         return tree.children(RingLayout.chainTail(tree: tree, focus)).filter { tree.totals[Int($0)] > 0 }
     }
 
-    func flatTop(_ tree: DiskTree) -> [UInt32] {
+    /// A row in one of the inspector's lists was clicked. A folder with something in it is gone into. Anything else is
+    /// selected, in the folder it's in: a list that reaches beyond the folder in view goes there first.
+    func openFromList(_ node: UInt32, goingToItsFolder: Bool = true) {
+        guard let tree else { return }
+        let n = tree.nodes[Int(node)]
+        if n.has(NodeFlag.directory) && n.firstChild != 0 {
+            zoom(into: RingLayout.chainTail(tree: tree, node))
+        } else {
+            if goingToItsFolder { zoom(into: n.parent) }
+            selected = node
+        }
+    }
+
+    /// What the whole disk's list shows: what's at the top, with your home folder and macOS's groups opened up.
+    private func topThings(_ tree: DiskTree) -> [UInt32] {
         var all: [UInt32] = []
         for top in tree.children(0) where top != tree.free && top != tree.hidden {
             let n = tree.nodes[Int(top)]
             if top == tree.home || n.has(NodeFlag.synthetic) { all += tree.children(top) } else { all.append(top) }
         }
-        return all.filter { tree.totals[Int($0)] > 0 }.sorted { tree.totals[Int($0)] > tree.totals[Int($1)] }
+        return all.filter { tree.totals[Int($0)] > 0 }
+    }
+
+    func flatTop(_ tree: DiskTree) -> [UInt32] {
+        topThings(tree).sorted { tree.totals[Int($0)] > tree.totals[Int($1)] }
+    }
+
+    /// The biggest of them, without putting the rest in order.
+    func biggestAtTop(_ tree: DiskTree) -> UInt32? {
+        topThings(tree).max { tree.totals[Int($0)] < tree.totals[Int($1)] }
     }
 
     // MARK: Handing things over

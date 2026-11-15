@@ -105,9 +105,13 @@ struct CopiesMap {
     /// For the ring: each copy's set, and for a folder, the set most of it belongs to and how much of it that is.
     private var setOf: [UInt32: Int] = [:]
     private var mostly: [UInt32: (set: Int, bytes: UInt64)] = [:]
-    /// Which colour each set of duplicates wears, by its first path, which stays put across scans. A set keeps its colour when
-    /// others come and go, as a folder does in Map.
-    private(set) var colourOf: [String: Int] = [:]
+    /// For what the middle says about one file: the copy an extra copy is a duplicate of, and how many a kept copy has.
+    private var keeperOf: [UInt32: UInt32] = [:]
+    private var duplicatesOf: [UInt32: Int] = [:]
+    /// Which colour each set of duplicates wears, by the key of one of its paths, which stays put across scans. A set keeps
+    /// its colour when others come and go, as a folder does in Map. The key is a number made from the names on the way to
+    /// a file (`RingLayout.pathKey`), so finding it makes no path for every copy each time the map of copies is made.
+    private(set) var colourOf: [UInt64: Int] = [:]
 
     init(scanID: UUID) { self.scanID = scanID }
 
@@ -115,7 +119,7 @@ struct CopiesMap {
     static let mergeAt = 2
 
     static func build(tree: DiskTree, duplicates: [Duplicates.Found], aliases: [Aliases.Found], duplicatesDone: Bool,
-                      kept: Set<String> = [], colours: [String: Int] = [:]) -> CopiesMap {
+                      kept: Set<String> = [], colours: [UInt64: Int] = [:]) -> CopiesMap {
         var map = CopiesMap(scanID: tree.scanID)
         map.duplicatesDone = duplicatesDone
         let nodes = tree.nodes
@@ -248,6 +252,12 @@ struct CopiesMap {
             if wa != wb { return wa > wb }
             return a.title < b.title
         }
+        for group in map.groups where group.kind == .duplicate {
+            for set in group.sets {
+                map.duplicatesOf[set.keeper] = set.extras.count
+                for extra in set.extras { map.keeperOf[extra] = set.keeper }
+            }
+        }
         map.paint(tree, remembered: colours)
         return map
     }
@@ -255,16 +265,16 @@ struct CopiesMap {
     /// Each set of duplicates gets a colour of its own, biggest first, from the same wheel as Free Up's boxes, and every copy
     /// wears it. What has other names or clones takes no extra room, so it wears the quiet colour of what's done another way.
     /// A folder wears a set's colour when most of it is that set, so a folder that's all copies reads as one.
-    private mutating func paint(_ tree: DiskTree, remembered: [String: Int]) {
+    private mutating func paint(_ tree: DiskTree, remembered: [UInt64: Int]) {
         let nodes = tree.nodes
         let spread = Palette.Box.spread
         // A set that had a colour keeps it. New ones, biggest first, take the colours no set here wears.
         colourOf = remembered
         var used = Set<Int>()
-        var fresh: [(at: Int, key: String)] = []
+        var fresh: [(at: Int, key: UInt64)] = []
         for at in groups.indices where groups[at].kind == .duplicate {
             let g = groups[at]
-            let key = (g.keepers + g.extras).compactMap { tree.path($0) }.min() ?? g.id
+            let key = (g.keepers + g.extras).map { RingLayout.pathKey(tree, $0) }.min() ?? 0
             if let c = remembered[key], !used.contains(c) {
                 groups[at].colour = spread[c % spread.count]
                 used.insert(c)
@@ -440,13 +450,8 @@ struct CopiesMap {
         guard e > 0 || h > 0 else { return nil }
         let isFile = !tree.nodes[Int(node)].has(NodeFlag.directory)
         if isFile {
-            if let g = groups.first(where: { $0.kind == .duplicate && $0.extras.contains(node) }), let keeper = g.keeper(of: node) {
-                return "Duplicate of \(tree.friendlyPath(keeper))"
-            }
-            if let g = groups.first(where: { $0.kind == .duplicate && $0.keepers.contains(node) }) {
-                let count = g.sets.first { $0.keeper == node }?.extras.count ?? 0
-                return "Keep · \(count) \(count == 1 ? "duplicate" : "duplicates")"
-            }
+            if let keeper = keeperOf[node] { return "Duplicate of \(tree.friendlyPath(keeper))" }
+            if let count = duplicatesOf[node] { return "Keep · \(count) \(count == 1 ? "duplicate" : "duplicates")" }
             return "Hardlinked or cloned"
         }
         if e > 0 { return "\(formatBytes(e)) in duplicates" }

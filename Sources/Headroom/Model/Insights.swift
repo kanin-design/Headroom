@@ -58,6 +58,14 @@ struct WinRow: Identifiable, Equatable {
     var askFirst = false
     /// Where it's listed in Free Up.
     var box: BoxKind = .other
+    /// One row for many folders of the same kind, wherever they are. Its second line says how many, and what of.
+    var counts: String? = nil
+    /// Nothing to rebuild these from was found next to them.
+    var lacksRecipe = false
+    /// Versions of the same tools, which are grouped when there are several.
+    var family: RuleFamily? = nil
+    /// When it arrived on this Mac, when that's known.
+    var arrived: Date? = nil
 
     /// What Select recommended takes: safe without a second thought, and not in use right now.
     var isRecommended: Bool { isQuick && inUse == nil && isPlannable }
@@ -107,6 +115,42 @@ final class ReclaimMap: @unchecked Sendable {
     }
 }
 
+/// A yes or no about the disk, good for a couple of minutes. What could go is worked out again every few seconds during a
+/// scan and after everything that moves, and asks the same things of the same hundreds of folders each time.
+enum JustLooked {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var known: [String: (answer: Bool, at: Date)] = [:]
+    static let goodFor: TimeInterval = 120
+
+    static func answer(_ question: String, now: Date = Date(), _ look: () -> Bool) -> Bool {
+        lock.lock()
+        let found = known[question]
+        lock.unlock()
+        if let found, now >= found.at, now.timeIntervalSince(found.at) < goodFor { return found.answer }
+        let answer = look()
+        lock.lock()
+        if known.count > 20_000 { known.removeAll() }
+        known[question] = (answer, now)
+        lock.unlock()
+        return answer
+    }
+}
+
+/// The names in a few folders, listed once and kept for as long as `JustLooked` keeps an answer.
+enum JustListed {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var known: [[String]: (names: [String], at: Date)] = [:]
+
+    static func names(in folders: [String], now: Date = Date()) -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        if let found = known[folders], now >= found.at, now.timeIntervalSince(found.at) < JustLooked.goodFor { return found.names }
+        let names = folders.flatMap { (try? FileManager.default.contentsOfDirectory(atPath: $0)) ?? [] }
+        known[folders] = (names, now)
+        return names
+    }
+}
+
 enum Wins {
     static let smallestRow: UInt64 = 50_000_000
     /// Junk shows from this little: clearing it is about tidying as much as space.
@@ -118,7 +162,7 @@ enum Wins {
 
     static func appName(forFolder name: String) -> String {
         if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: name) {
-            return FileManager.default.displayName(atPath: url.path).replacingOccurrences(of: ".app", with: "")
+            return Titles.withoutAppEnding(FileManager.default.displayName(atPath: url.path))
         }
         let parts = name.split(separator: ".")
         if parts.count >= 3, let last = parts.last {
@@ -142,8 +186,13 @@ enum Wins {
     /// by parts of the system that can't be asked to quit, and some can't be moved at all.
     private static let macOSCaches: Set<String> = ["Animoji", "CloudKit", "FamilyCircle", "familycircled", "GameKit", "GameStoreKit", "GeoServices", "Maps", "Metadata", "PassKit", "reviewtrace", "SiriEntityCache"]
 
-    /// Whether what it's rebuilt from is there.
+    /// Whether what it's rebuilt from is there, as last looked.
     static func hasRecipe(in folder: String, _ recipe: [String]) -> Bool {
+        JustLooked.answer(folder + "\n" + recipe.joined(separator: "\n")) { recipeIsThere(in: folder, recipe) }
+    }
+
+    /// The same, looked at now.
+    static func recipeIsThere(in folder: String, _ recipe: [String]) -> Bool {
         let names = (try? FileManager.default.contentsOfDirectory(atPath: folder)) ?? []
         return names.contains { name in
             recipe.contains { $0.hasSuffix("*") ? name.hasPrefix($0.dropLast()) : name == $0 }
@@ -167,22 +216,14 @@ enum Wins {
             let rule = rules.rule(n.rule)
             guard rule.tier != .none, rule.tier != .handsOff, !rule.thingByThing else { continue }
             if rule.restartClears { restartExtras.append(id); continue }
-            if rule.title == "Trash" { trashNode = id; continue }
+            if rule.box == .trash { trashNode = id; continue }
             // macOS's own caches can be in use by parts of the system that can't be asked to quit.
-            if rule.namedByBundleID && (tree.name(id).hasPrefix("com.apple.") || macOSCaches.contains(tree.name(id))) { continue }
+            if rule.namedByBundleID && (tree.rawName(id).hasPrefix("com.apple.") || macOSCaches.contains(tree.rawName(id))) { continue }
             // Named like a project's environment, but it isn't one: Python itself has a folder called venv.
-            if let marker = rule.marker, let path = tree.path(id), !FileManager.default.fileExists(atPath: path + "/" + marker) { continue }
+            if let marker = rule.marker, let path = tree.path(id), !JustLooked.answer(path + "/" + marker, { FileManager.default.fileExists(atPath: path + "/" + marker) }) { continue }
 
             if rule.box == .junk {
-                // What's in the folder goes; the folder itself stays, since apps expect it.
-                let inside = tree.children(id).filter { !nodes[Int($0)].has(NodeFlag.gone) && tree.path($0).map(Safety.canTrash) == true }
-                let sum = inside.reduce(UInt64(0)) { $0 &+ tree.totals[Int($1)] }
-                guard sum >= smallestJunk else { continue }
-                var row = WinRow(id: tree.friendlyPath(id), title: rule.title, subtitle: DiskTree.friendly(parentPath(tree, id)), detail: rule.detail, tier: rule.tier,
-                                 nodes: inside, bytes: 0, paperBytes: sum, action: .trash, command: nil, bundleID: nil)
-                row.isQuick = true
-                row.box = .junk
-                rows.append(row)
+                if let row = junkRow(id, rule, in: tree) { rows.append(row) }
                 continue
             }
             if rule.groups {
@@ -197,90 +238,35 @@ enum Wins {
                     rows[at].paperBytes &+= total
                 } else {
                     groupIndex[key] = rows.count
-                    var row = WinRow(id: "group:" + rule.title + (noRecipe ? ":no-recipe" : (active ? ":active" : "")), title: rule.title, subtitle: "",
-                                     detail: noRecipe ? "No manifest next to these, so it's unclear what to reinstall." : rule.detail,
-                                     tier: noRecipe ? .yourCall : rule.tier, nodes: [id], bytes: 0, paperBytes: total, action: .trash, command: noRecipe ? nil : rule.command, bundleID: rule.appBundleID)
-                    row.isQuick = !active && !noRecipe
-                    row.inUse = active && !noRecipe ? "Changed in the last 2 weeks" : nil
-                    row.box = rule.box
-                    rows.append(row)
+                    rows.append(groupRow(id, rule, total: total, active: active, noRecipe: noRecipe))
                 }
                 continue
             }
             if rule.namedByBundleID && total < 100_000_000 {
                 // Only what can be tied to an app, while that app is closed. A bare name could be part of anything, and these are
                 // too small to be worth finding out.
-                if tree.name(id).contains("."), !isOpen(folder: tree.name(id), running: running) { smallCaches.append(id) }
+                if tree.rawName(id).contains("."), !isOpen(folder: tree.rawName(id), running: running) { smallCaches.append(id) }
                 continue
             }
             if total < smallestRow { continue }
-            let folder = tree.name(id)
-            var title = rule.title
-            var subtitle = DiskTree.friendly(parentPath(tree, id))
-            var bundle = rule.appBundleID
-            if rule.namedByBundleID {
-                title = appName(forFolder: folder) + " cache"
-                if folder.contains(".") { bundle = folder }
-            } else if rule.usesFolderName {
-                // A bare version number means nothing on its own.
-                let isVersion = folder.first?.isNumber ?? false
-                title = isVersion ? "\(rule.title) \(folder)" : folder
-                subtitle = isVersion ? DiskTree.friendly(parentPath(tree, id)) : rule.title
-            }
-            // Some of these can't be moved without an administrator, so they're explained and not offered.
-            let movable = !rule.notTrashable && tree.path(id).map(Safety.canTrash) == true
-            let action: WinAction = rule.commandOnly ? .command : (movable ? .trash : .info)
-            var row = WinRow(id: tree.friendlyPath(id), title: title, subtitle: subtitle, detail: rule.detail, tier: rule.tier,
-                             nodes: [id], bytes: 0, paperBytes: total, action: action, command: rule.command, bundleID: bundle)
-            row.askFirst = rule.askFirst
-            row.box = rule.box
-            if rule.tier == .rebuilds, action == .trash {
-                if rule.namedByBundleID || bundle != nil {
-                    // An app's cache is safe to clear unless the app is open right now.
-                    if let bundle, running.contains(bundle) {
-                        row.inUse = "\(appName(forFolder: bundle)) is open"
-                    } else if rule.namedByBundleID, isOpen(folder: folder, running: running) {
-                        row.inUse = "\(appName(forFolder: folder)) is open"
-                    } else {
-                        row.isQuick = true
-                    }
-                } else if let known = rule.knownNames, !known.contains(folder) {
-                    // Kept where caches go, but nothing says what's in it or how it comes back. It's not for the one click or the slider.
-                    row.tier = .redownload
-                    row.askFirst = true
-                    row.detail = "Unknown tool. It may hold more than a cache, such as a model."
-                } else if tree.statRow(i)[DiskTree.statRecent14] > 0 {
-                    // A tool's cache costs a download or a slower build next time, so one you're using isn't part of the one click.
-                    row.inUse = "Used in the last 2 weeks"
-                } else {
-                    row.isQuick = true
-                }
-            }
-            rows.append(row)
+            rows.append(ownRow(id, rule, total: total, in: tree, running: running))
         }
 
-        if !smallCaches.isEmpty {
-            let sum = smallCaches.reduce(UInt64(0)) { $0 &+ tree.totals[Int($1)] }
-            if sum >= smallestRow {
-                var row = WinRow(id: smallerCachesID, title: "Smaller app caches", subtitle: "", detail: "App caches under 100 MB each. Rebuilt as you use the apps.",
-                                 tier: .rebuilds, nodes: smallCaches, bytes: 0, paperBytes: sum, action: .trash, command: nil, bundleID: nil)
-                row.isQuick = true
-                row.box = .caches
-                rows.append(row)
-            }
-        }
+        if let row = smallerCachesRow(smallCaches, in: tree) { rows.append(row) }
 
         // Groups say how many places they span.
-        for at in rows.indices where rows[at].id.hasPrefix("group:") {
+        for at in rows.indices {
+            guard let what = rows[at].counts else { continue }
             let count = rows[at].nodes.count
-            rows[at].subtitle = rows[at].id == smallerCachesID ? "\(count) apps" : (count == 1 ? tree.friendlyPath(rows[at].nodes[0]) : "\(count) folders")
-            if rows[at].id.hasSuffix(":no-recipe") { rows[at].subtitle += " · No manifest" }
+            // One folder is better named than counted. Apps are always counted: their caches all sit in the same place.
+            rows[at].subtitle = count == 1 && what == "folders" ? tree.friendlyPath(rows[at].nodes[0]) : "\(count) \(what)"
+            if rows[at].lacksRecipe { rows[at].subtitle += " · No manifest" }
         }
 
         // On any other disk the Trash is a folder at the top of the disk.
-        if trashNode == nil, tree.home == 0 {
+        if trashNode == nil, !tree.isBoot {
             for top in tree.children(0) where tree.nodes[Int(top)].has(NodeFlag.anchor) {
-                for child in tree.children(top) where tree.name(child) == ".Trashes" { trashNode = child }
+                for child in tree.children(top) where tree.rawName(child) == ".Trashes" { trashNode = child }
             }
         }
         // Junk is worth listing however little there is of it.
@@ -295,6 +281,96 @@ enum Wins {
             return a.gain > b.gain
         }
         return rows.filter { $0.gain > 0 || $0.action == .emptyTrash }
+    }
+
+    // MARK: The rows a rule makes
+
+    /// What's in a junk folder goes. The folder itself stays, since apps expect it.
+    private static func junkRow(_ id: UInt32, _ rule: Rule, in tree: DiskTree) -> WinRow? {
+        let inside = tree.children(id).filter { !tree.nodes[Int($0)].has(NodeFlag.gone) && tree.path($0).map(Safety.canTrash) == true }
+        let sum = inside.reduce(UInt64(0)) { $0 &+ tree.totals[Int($1)] }
+        guard sum >= smallestJunk else { return nil }
+        var row = WinRow(id: tree.friendlyPath(id), title: rule.title, subtitle: DiskTree.friendly(parentPath(tree, id)), detail: rule.detail, tier: rule.tier,
+                         nodes: inside, bytes: 0, paperBytes: sum, action: .trash, command: nil, bundleID: nil)
+        row.isQuick = true
+        row.box = .junk
+        return row
+    }
+
+    /// The first of many folders of one kind, wherever they are: every node_modules that can be rebuilt, say. The ones in
+    /// projects you're working on, and the ones with nothing to rebuild them from, are rows of their own.
+    private static func groupRow(_ id: UInt32, _ rule: Rule, total: UInt64, active: Bool, noRecipe: Bool) -> WinRow {
+        var row = WinRow(id: "group:" + rule.title + (noRecipe ? ":no-recipe" : (active ? ":active" : "")), title: rule.title, subtitle: "",
+                         detail: noRecipe ? "No manifest next to these, so it's unclear what to reinstall." : rule.detail,
+                         tier: noRecipe ? .yourCall : rule.tier, nodes: [id], bytes: 0, paperBytes: total, action: .trash, command: noRecipe ? nil : rule.command, bundleID: rule.appBundleID)
+        row.isQuick = !active && !noRecipe
+        row.counts = "folders"
+        row.lacksRecipe = noRecipe
+        row.inUse = active && !noRecipe ? "Changed in the last 2 weeks" : nil
+        row.box = rule.box
+        return row
+    }
+
+    /// One folder a rule is about: a cache, a tool's downloads, a set of models.
+    private static func ownRow(_ id: UInt32, _ rule: Rule, total: UInt64, in tree: DiskTree, running: Set<String>) -> WinRow {
+        // What it's called on the disk decides what it is. What it's called on screen, which may be made up, is all
+        // that's ever shown.
+        let folder = tree.rawName(id), shown = tree.name(id)
+        var title = rule.title
+        var subtitle = DiskTree.friendly(parentPath(tree, id))
+        var bundle = rule.appBundleID
+        if rule.namedByBundleID {
+            title = appName(forFolder: shown) + " cache"
+            if folder.contains(".") { bundle = folder }
+        } else if rule.usesFolderName {
+            // A bare version number means nothing on its own.
+            let isVersion = folder.first?.isNumber ?? false
+            title = isVersion ? "\(rule.title) \(shown)" : shown
+            subtitle = isVersion ? DiskTree.friendly(parentPath(tree, id)) : rule.title
+        }
+        // Some of these can't be moved without an administrator, so they're explained and not offered.
+        let movable = !rule.notTrashable && tree.path(id).map(Safety.canTrash) == true
+        let action: WinAction = rule.commandOnly ? .command : (movable ? .trash : .info)
+        var row = WinRow(id: tree.friendlyPath(id), title: title, subtitle: subtitle, detail: rule.detail, tier: rule.tier,
+                         nodes: [id], bytes: 0, paperBytes: total, action: action, command: rule.command, bundleID: bundle)
+        row.askFirst = rule.askFirst
+        row.box = rule.box
+        row.family = rule.family
+        if rule.tier == .rebuilds, action == .trash {
+            if rule.namedByBundleID || bundle != nil {
+                // An app's cache is safe to clear unless the app is open right now.
+                if let bundle, running.contains(bundle) {
+                    row.inUse = "\(appName(forFolder: bundle)) is open"
+                } else if rule.namedByBundleID, isOpen(folder: folder, running: running) {
+                    row.inUse = "\(appName(forFolder: shown)) is open"
+                } else {
+                    row.isQuick = true
+                }
+            } else if let known = rule.knownNames, !known.contains(folder) {
+                // Kept where caches go, but nothing says what's in it or how it comes back. It's not for the one click or the slider.
+                row.tier = .redownload
+                row.askFirst = true
+                row.detail = "Unknown tool. It may hold more than a cache, such as a model."
+            } else if tree.statRow(id)[DiskTree.statRecent14] > 0 {
+                // A tool's cache costs a download or a slower build next time, so one you're using isn't part of the one click.
+                row.inUse = "Used in the last 2 weeks"
+            } else {
+                row.isQuick = true
+            }
+        }
+        return row
+    }
+
+    /// App caches too small to list one by one, as one row.
+    private static func smallerCachesRow(_ caches: [UInt32], in tree: DiskTree) -> WinRow? {
+        let sum = caches.reduce(UInt64(0)) { $0 &+ tree.totals[Int($1)] }
+        guard !caches.isEmpty, sum >= smallestRow else { return nil }
+        var row = WinRow(id: smallerCachesID, title: "Smaller app caches", subtitle: "", detail: "App caches under 100 MB each. Rebuilt as you use the apps.",
+                         tier: .rebuilds, nodes: caches, bytes: 0, paperBytes: sum, action: .trash, command: nil, bundleID: nil)
+        row.isQuick = true
+        row.counts = "apps"
+        row.box = .caches
+        return row
     }
 
     private static func parentPath(_ tree: DiskTree, _ id: UInt32) -> String {
@@ -352,7 +428,7 @@ enum Wins {
         var downloads: UInt32 = 0
         var c = nodes[Int(tree.home)].firstChild
         while c != 0 {
-            if tree.name(c) == "Downloads" { downloads = c; break }
+            if tree.rawName(c) == "Downloads" { downloads = c; break }
             c = nodes[Int(c)].nextSibling
         }
         guard downloads != 0 else { return }
@@ -363,7 +439,7 @@ enum Wins {
             for child in tree.children(folder) {
                 let n = nodes[Int(child)]
                 guard n.flags & (NodeFlag.synthetic | NodeFlag.alias | NodeFlag.gone) == 0, n.rule == 0 else { continue }
-                let ending = (tree.name(child) as NSString).pathExtension.lowercased()
+                let ending = (tree.rawName(child) as NSString).pathExtension.lowercased()
                 if unfinishedEndings.contains(ending) {
                     if n.modTime != 0, n.modTime < cutoff, tree.path(child).map(Safety.canTrash) == true { unfinished.append(child) }
                 } else if deeper, n.has(NodeFlag.directory) {
@@ -393,7 +469,7 @@ enum Wins {
         let nodes = tree.nodes
         if let trash, tree.totals[Int(trash)] > 1_000_000 {
             let items = Int(tree.totalFiles[Int(trash)])
-            var row = WinRow(id: "trash", title: "Trash", subtitle: items == 1 ? "1 item" : "\(items.formatted()) items", detail: "Freed when the Trash is emptied, always the last step.",
+            var row = WinRow(id: PlanItem.trashID, title: "Trash", subtitle: items == 1 ? "1 item" : "\(items.formatted()) items", detail: "Freed when the Trash is emptied, always the last step.",
                              tier: .noLoss, nodes: [trash], bytes: Accounting.reclaimable([trash], in: tree), paperBytes: 0, action: .emptyTrash, command: nil, bundleID: nil)
             row.isQuick = true
             row.box = .trash
@@ -535,7 +611,7 @@ final class ChangeMap: @unchecked Sendable {
                 if nodes[i].has(NodeFlag.directory) {
                     // Left alone where nothing changed, so that part of the table never takes up memory.
                     let units = tree.statRow(i)[field]
-                    if units != 0 { values[i] = Int64(units) << 14 }
+                    if units != 0 { values[i] = Int64(DiskTree.bytes(units: units)) }
                 } else if !nodes[i].has(NodeFlag.synthetic), nodes[i].modTime >= cut {
                     values[i] = Int64(bitPattern: tree.totals[i])
                 }
@@ -578,6 +654,7 @@ final class ChangeMap: @unchecked Sendable {
         }
         countGrowthAndShrinkage(tree)
         let formatter = DateFormatter()
+        formatter.locale = Titles.locale
         formatter.doesRelativeDateFormatting = true
         formatter.dateStyle = .medium
         formatter.timeStyle = .short
@@ -634,7 +711,7 @@ final class ChangeMap: @unchecked Sendable {
         for i in 0..<n {
             let total = tree.totals[i]
             if nodes[i].has(NodeFlag.directory) {
-                let recent = UInt64(tree.statRow(i)[field]) << 14
+                let recent = DiskTree.bytes(units: tree.statRow(i)[field])
                 if total > recent { values[i] = Int64(bitPattern: total - recent) }
             } else if nodes[i].modTime < cut {
                 values[i] = Int64(bitPattern: total)
@@ -690,7 +767,7 @@ final class ChangeMap: @unchecked Sendable {
         for game in facts.games where (game.lastPlayed ?? .distantPast) >= since { paths.append(game.folder) }
         for (path, opened) in facts.lastOpened where opened >= since { paths.append(path) }
         // The tree keeps the data volume's own paths, which is what a path from another app may leave out.
-        return paths.compactMap { tree.find(path: $0) ?? (tree.find(path: "/System/Volumes/Data" + $0)) }
+        return paths.compactMap { tree.find(visible: $0) }
     }
 
     /// During a scan this map can be one picture behind, so a folder found since then has nothing to say yet.
@@ -738,7 +815,7 @@ final class ChangeMap: @unchecked Sendable {
         func walk(_ id: UInt32, _ depth: Int) {
             let d = changed(id)
             guard d >= minimum, !isNoise(id) else { return }
-            let name = tree.name(id)
+            let name = tree.rawName(id)
             if bundles.contains(where: { name.hasSuffix($0) }) { emit(id); return }
             var big: [UInt32] = []
             var top: Int64 = 0

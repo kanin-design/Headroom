@@ -56,10 +56,9 @@ final class Updater {
     static let current = parse(currentNumber)
     /// This copy's build number. It goes up with every build, so it tells two copies of one version apart.
     static let currentBuild = Int(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "") ?? 0
-    static var currentShown: String {
-        let number = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
-        return number + ((Bundle.main.object(forInfoDictionaryKey: "HeadroomStage") as? String).map { " " + $0 } ?? "")
-    }
+    /// This copy's version as it reads: the number, and "beta" when it is one. macOS wants the number to be only a number,
+    /// so the stage is kept apart from it.
+    static let currentShown = currentNumber + ((Bundle.main.object(forInfoDictionaryKey: "HeadroomStage") as? String).map { " " + $0 } ?? "")
 
     private static let skippedKey = "skippedUpdate"
     private static let releases = URL(string: "https://api.github.com/repos/kanin-design/Headroom/releases?per_page=20")!
@@ -319,6 +318,8 @@ final class Updater {
         private var continuation: CheckedContinuation<URL, Error>?
         private let progress: @Sendable (Int64) -> Void
         private let lock = NSLock()
+        /// The network reports every few kilobytes, and the window only needs to hear about it a few times a second.
+        private let pace = Pace()
 
         init(_ continuation: CheckedContinuation<URL, Error>, progress: @escaping @Sendable (Int64) -> Void) {
             self.continuation = continuation
@@ -335,7 +336,7 @@ final class Updater {
 
         func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData _: Int64, totalBytesWritten: Int64,
                         totalBytesExpectedToWrite _: Int64) {
-            progress(totalBytesWritten)
+            if pace.isDue() { progress(totalBytesWritten) }
         }
 
         func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {

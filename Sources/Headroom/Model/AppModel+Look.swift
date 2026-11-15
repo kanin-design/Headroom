@@ -76,7 +76,7 @@ enum LookContents {
                 let n = tree.nodes[Int(child)]
                 if n.has(NodeFlag.directory) {
                     folders.append(child)
-                } else if canDraw(tree.name(child), kind: n.kind) {
+                } else if canDraw(tree.rawName(child), kind: n.kind) {
                     found.append((child, max(n.bytes, n.aliasBytes)))
                 }
                 child = n.nextSibling
@@ -100,36 +100,16 @@ enum LookContents {
             let files = tree.totalFiles[Int(node)]
             if files > 0 { bits.append("\(files.formatted()) \(files == 1 ? "file" : "files")") }
         } else {
-            let type = (tree.name(node) as NSString).pathExtension
+            let type = (tree.rawName(node) as NSString).pathExtension
             if !type.isEmpty, let words = UTType(filenameExtension: type)?.localizedDescription {
                 bits.append(words.prefix(1).uppercased() + words.dropFirst())
             }
         }
-        let newest = newestChange(of: node, in: tree)
+        let newest = tree.newest[Int(node)]
         if newest > 0 {
-            let formatter = RelativeDateTimeFormatter()
-            formatter.unitsStyle = .full
-            bits.append("changed " + formatter.localizedString(for: Date(timeIntervalSince1970: TimeInterval(newest)), relativeTo: Date()))
+            bits.append("changed " + LastUse.ago(Date(timeIntervalSince1970: TimeInterval(newest)), now: Date()))
         }
         return bits.isEmpty ? nil : bits.joined(separator: " · ")
-    }
-
-    private static func newestChange(of node: UInt32, in tree: DiskTree) -> UInt32 {
-        var newest = tree.nodes[Int(node)].modTime
-        guard isFolder(node, in: tree) else { return newest }
-        var folders = [node]
-        var seen = 0
-        while let folder = folders.popLast(), seen < 300_000 {
-            var child = tree.nodes[Int(folder)].firstChild
-            while child != 0 {
-                seen += 1
-                let n = tree.nodes[Int(child)]
-                newest = max(newest, n.modTime)
-                if n.has(NodeFlag.directory) { folders.append(child) }
-                child = n.nextSibling
-            }
-        }
-        return newest
     }
 }
 
@@ -148,9 +128,7 @@ extension AppModel {
         guard tree != nil else { return }
         // On the far side of the ring from the piece it's about.
         var onLeft = true
-        if let piece = engine.layout.pieces.first(where: { $0.node == node && !$0.isSmaller }), node != focus {
-            onLeft = sin(piece.midAngle) >= 0
-        }
+        if node != focus, let at = engine.layout.piece(of: node) { onLeft = sin(engine.layout.pieces[at].midAngle) >= 0 }
         lookCursor = nil
         Motion.animate(.spring(response: 0.32, dampingFraction: 0.86)) { look = Look(node: node, onLeft: keptSide ?? onLeft) }
         LookPanel.shared.show(for: self)
@@ -235,8 +213,17 @@ extension AppModel {
         guard !rows.isEmpty else { return false }
         let at = min(max(lookCursor.map { $0 + step } ?? (step > 0 ? 0 : rows.count - 1), 0), rows.count - 1)
         lookCursor = at
-        setHover(engine.layout.pieces.firstIndex { $0.node == rows[at] && !$0.isSmaller })
+        setHover(engine.layout.piece(of: rows[at]))
         return true
+    }
+
+    /// The biggest photos and videos in a folder that's mostly those, for the card.
+    func lookMedia(of node: UInt32) -> [UInt32] {
+        guard let tree, !HiddenNames.isOn else { return [] }
+        if let known = lookMediaKnown, known.node == node, known.version == treeVersion { return known.files }
+        let files = LookContents.media(in: node, tree: tree)
+        lookMediaKnown = (node, treeVersion, files)
+        return files
     }
 
     func lookRows(of node: UInt32, in tree: DiskTree) -> [UInt32] {
@@ -278,13 +265,7 @@ extension AppModel {
     /// The piece to keep lit while the card is open. Something too small to draw lights what holds it.
     var lookPieceIndex: Int? {
         guard let look, let tree else { return nil }
-        let pieces = engine.layout.pieces
-        var target = look.node
-        while target != focus, target != 0 {
-            if let at = pieces.firstIndex(where: { $0.node == target && !$0.isSmaller }) { return at }
-            target = tree.nodes[Int(target)].parent
-        }
-        return nil
+        return engine.layout.nearestPiece(to: look.node, tree: tree)
     }
 
     // MARK: Keys and clicks

@@ -241,7 +241,7 @@ final class MediaAdviceTests: XCTestCase {
     func testAFreshTorrentIsCalledOut() throws {
         let disk = library()
         var facts = Facts()
-        facts.torrents = [Facts.Torrent(path: "/Volumes/Fake/Downloads/Torrents/Big.Show.S01", name: "Big.Show.S01", finished: now.addingTimeInterval(-86_400 * 2), uploaded: 0, isPaused: false)]
+        facts.torrents = [Facts.Torrent(path: "/Volumes/Fake/Downloads/Torrents/Big.Show.S01", name: "Big.Show.S01", finished: now.addingTimeInterval(-86_400 * 2))]
         let big = try XCTUnwrap(Advisors.media(tree: disk.tree, facts: facts, now: now).first { $0.title == "Big Show" })
         XCTAssertEqual(big.otherCopiesTitle, "Include the torrent copy")
         XCTAssertTrue(big.otherCopiesNote?.contains("may still be seeding") == true, big.otherCopiesNote ?? "")
@@ -251,7 +251,7 @@ final class MediaAdviceTests: XCTestCase {
     func testAnOldTorrentJustSaysWhatHappens() throws {
         let disk = library()
         var facts = Facts()
-        facts.torrents = [Facts.Torrent(path: "/Volumes/Fake/Downloads/Torrents/Big.Show.S01", name: "Big.Show.S01", finished: now.addingTimeInterval(-86_400 * 30), uploaded: 0, isPaused: false)]
+        facts.torrents = [Facts.Torrent(path: "/Volumes/Fake/Downloads/Torrents/Big.Show.S01", name: "Big.Show.S01", finished: now.addingTimeInterval(-86_400 * 30))]
         let big = try XCTUnwrap(Advisors.media(tree: disk.tree, facts: facts, now: now).first { $0.title == "Big Show" })
         XCTAssertTrue(big.otherCopiesNote?.contains("stops seeding") == true, big.otherCopiesNote ?? "")
         XCTAssertNil(big.otherCopiesCaution)
@@ -298,7 +298,7 @@ final class AppAdviceTests: XCTestCase {
     private let day: TimeInterval = 86_400
 
     private func fact(newest: Date?, running: Bool = false, signs: Int = 3, maker: String? = nil) -> AppFact {
-        AppFact(path: "/Volumes/Fake/Applications/Thing.app", name: "Thing", bundleID: "com.maker.thing", fromAppStore: false, addedAt: nil, newestSign: newest, signCount: signs, isRunning: running, makerNote: maker,
+        AppFact(path: "/Volumes/Fake/Applications/Thing.app", name: "Thing", bundleID: "com.maker.thing", fromAppStore: false, newestSign: newest, signCount: signs, isRunning: running, makerNote: maker,
                 settings: ["/Volumes/Fake/Library/Caches/com.maker.thing", "/Volumes/Fake/Library/Preferences/com.maker.thing.plist"], data: ["/Volumes/Fake/Library/Application Support/Thing"])
     }
 
@@ -549,11 +549,24 @@ final class WinsTests: XCTestCase {
         try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(atPath: folder) }
         let python = ["requirements*", "pyproject.toml"]
-        XCTAssertFalse(Wins.hasRecipe(in: folder, python))
+        XCTAssertFalse(Wins.recipeIsThere(in: folder, python))
         FileManager.default.createFile(atPath: folder + "/requirements.lock.txt", contents: Data())
-        XCTAssertTrue(Wins.hasRecipe(in: folder, python))
-        XCTAssertFalse(Wins.hasRecipe(in: folder, ["package.json"]))
-        XCTAssertFalse(Wins.hasRecipe(in: folder + "/nowhere", python))
+        XCTAssertTrue(Wins.recipeIsThere(in: folder, python))
+        XCTAssertFalse(Wins.recipeIsThere(in: folder, ["package.json"]))
+        XCTAssertFalse(Wins.recipeIsThere(in: folder + "/nowhere", python))
+    }
+
+    /// The same question about the disk isn't asked of it again for a couple of minutes.
+    func testAnAnswerAboutTheDiskIsRememberedForAWhile() {
+        let question = "test-" + UUID().uuidString
+        let start = Date()
+        var looks = 0
+        func ask(at now: Date, _ answer: Bool) -> Bool { JustLooked.answer(question, now: now) { looks += 1; return answer } }
+        XCTAssertFalse(ask(at: start, false))
+        XCTAssertFalse(ask(at: start.addingTimeInterval(60), true), "still the answer from a minute ago")
+        XCTAssertEqual(looks, 1)
+        XCTAssertTrue(ask(at: start.addingTimeInterval(JustLooked.goodFor + 1), true), "old enough to look again")
+        XCTAssertEqual(looks, 2)
     }
 
     func testAnOpenAppsCacheIsntAQuickWin() throws {
@@ -724,14 +737,16 @@ final class CleanerTests: XCTestCase {
         XCTAssertThrowsError(try Cleaner.deleteForGood(CleanedThing(itemID: "a", title: "a", original: root + "/a", inTrash: root + "/plain/file", bytes: 0)))
         XCTAssertTrue(FileManager.default.fileExists(atPath: root + "/plain/file"))
         try write(root + "/.Trash/gone")
-        try Cleaner.deleteForGood(CleanedThing(itemID: "a", title: "a", original: root + "/a", inTrash: root + "/.Trash/gone", bytes: 0))
+        try Cleaner.deleteForGood(CleanedThing(itemID: "a", title: "a", original: root + "/a", inTrash: root + "/.Trash/gone", bytes: 0,
+                                               identity: Cleaner.identity(of: root + "/.Trash/gone")))
         XCTAssertFalse(FileManager.default.fileExists(atPath: root + "/.Trash/gone"))
     }
 
     func testPuttingBackNeverReplacesAnything() throws {
         try write(root + "/.Trash/thing", "old")
         try write(root + "/thing", "new")
-        let thing = CleanedThing(itemID: "a", title: "a", original: root + "/thing", inTrash: root + "/.Trash/thing", bytes: 0)
+        let thing = CleanedThing(itemID: "a", title: "a", original: root + "/thing", inTrash: root + "/.Trash/thing", bytes: 0,
+                                 identity: Cleaner.identity(of: root + "/.Trash/thing"))
         XCTAssertThrowsError(try Cleaner.putBack(thing))
         XCTAssertEqual(try String(contentsOfFile: root + "/thing", encoding: .utf8), "new")
         try FileManager.default.removeItem(atPath: root + "/thing")
@@ -741,8 +756,71 @@ final class CleanerTests: XCTestCase {
 
     func testPuttingBackRemakesAMissingFolder() throws {
         try write(root + "/.Trash/thing")
-        try Cleaner.putBack(CleanedThing(itemID: "a", title: "a", original: root + "/gone/deep/thing", inTrash: root + "/.Trash/thing", bytes: 0))
+        try Cleaner.putBack(CleanedThing(itemID: "a", title: "a", original: root + "/gone/deep/thing", inTrash: root + "/.Trash/thing", bytes: 0,
+                                         identity: Cleaner.identity(of: root + "/.Trash/thing")))
         XCTAssertTrue(FileManager.default.fileExists(atPath: root + "/gone/deep/thing"))
+    }
+
+    /// A record from before files were told apart says nothing about which file it was. Whatever has that name now stays.
+    func testWithNothingToTellItByItsNeitherDeletedNorPutBack() throws {
+        try write(root + "/.Trash/thing", "whose is this?")
+        let thing = CleanedThing(itemID: "a", title: "a", original: root + "/thing", inTrash: root + "/.Trash/thing", bytes: 0)
+        XCTAssertFalse(Cleaner.isStillThat(thing))
+        XCTAssertThrowsError(try Cleaner.deleteForGood(thing), "counted as left in the Trash")
+        XCTAssertThrowsError(try Cleaner.putBack(thing))
+        XCTAssertEqual(try String(contentsOfFile: root + "/.Trash/thing", encoding: .utf8), "whose is this?")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root + "/thing"))
+    }
+
+    /// When a move to the Trash doesn't say where the file went, it's found there by which file it is.
+    func testWhatWentToTheTrashIsFoundByWhichFileItIs() throws {
+        try write(root + "/thing.txt", "one")
+        try write(root + "/.Trash/thing.txt", "an older one with the same name")
+        let wanted = try XCTUnwrap(Cleaner.identity(of: root + "/thing.txt"))
+        XCTAssertNil(Cleaner.findInTrash(wanted, from: root + "/thing.txt"))
+        try FileManager.default.moveItem(atPath: root + "/thing.txt", toPath: root + "/.Trash/thing 2.txt")
+        XCTAssertEqual(Cleaner.findInTrash(wanted, from: root + "/thing.txt"), root + "/.Trash/thing 2.txt")
+    }
+
+    /// A link at the destination that points back at the original has the same bytes, and isn't a copy of anything.
+    func testALinkAtTheDestinationIsNeverTakenForTheCopy() throws {
+        try write(root + "/from/ep.mkv", "the only copy")
+        try FileManager.default.createDirectory(atPath: root + "/to", withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: root + "/to/ep.mkv", withDestinationPath: root + "/from/ep.mkv")
+        XCTAssertThrowsError(try Cleaner.copyAndVerify(root + "/from/ep.mkv", into: root + "/to", stop: LockedFlag()) { _ in }) { error in
+            guard case Cleaner.Failure.wouldOverwrite = error else { return XCTFail("\(error)") }
+        }
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: root + "/to/ep.mkv"), root + "/from/ep.mkv")
+    }
+
+    func testAFolderIsNeverCopiedThroughALink() throws {
+        try write(root + "/from/Show/ep.mkv", "episode")
+        try FileManager.default.createDirectory(atPath: root + "/elsewhere", withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(atPath: root + "/to", withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: root + "/to/Show", withDestinationPath: root + "/elsewhere")
+        XCTAssertThrowsError(try Cleaner.copyAndVerify(root + "/from/Show", into: root + "/to", stop: LockedFlag()) { _ in })
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root + "/elsewhere"), [])
+    }
+
+    func testTheSameLinkAlreadyThereIsFineAndAnotherIsNot() throws {
+        try write(root + "/from/Show/ep.mkv", "episode")
+        try FileManager.default.createSymbolicLink(atPath: root + "/from/Show/latest", withDestinationPath: "ep.mkv")
+        try FileManager.default.createDirectory(atPath: root + "/to/Show", withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: root + "/to/Show/latest", withDestinationPath: "ep.mkv")
+        XCTAssertNoThrow(try Cleaner.copyAndVerify(root + "/from/Show", into: root + "/to", stop: LockedFlag()) { _ in })
+        try FileManager.default.removeItem(atPath: root + "/to/Show/latest")
+        try FileManager.default.createSymbolicLink(atPath: root + "/to/Show/latest", withDestinationPath: "something-else")
+        XCTAssertThrowsError(try Cleaner.copyAndVerify(root + "/from/Show", into: root + "/to", stop: LockedFlag()) { _ in })
+    }
+
+    /// Left out of the copy, it would go to the Trash with the original and exist nowhere else.
+    func testSomethingThatCantBeCopiedStopsTheMove() throws {
+        try write(root + "/from/Project/notes.txt", "notes")
+        XCTAssertEqual(mkfifo(root + "/from/Project/pipe", 0o644), 0)
+        XCTAssertThrowsError(try Cleaner.copyAndVerify(root + "/from/Project", into: root + "/to", stop: LockedFlag()) { _ in }) { error in
+            guard case Cleaner.Failure.cantCopy = error else { return XCTFail("\(error)") }
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root + "/from/Project/notes.txt"))
     }
 
     func testAMoveOntoItselfIsRefused() throws {

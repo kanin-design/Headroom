@@ -52,7 +52,10 @@ final class MapHostView: NSView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    deinit { drawer?.end() }
+    deinit {
+        drawer?.end()
+        if let doubleClickWatch { NSEvent.removeMonitor(doubleClickWatch) }
+    }
 
     private var contentScale: CGFloat { window?.backingScaleFactor ?? 2 }
 

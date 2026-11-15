@@ -18,7 +18,7 @@ import SwiftUI
 ///     lens map|changes|freeUp|copies
 ///     copies                   wait until Copies has looked for duplicates, then say what it found and how long it took
 ///     copyrow 2, copytick 0    point at a row in Copies, or tick a row of duplicates
-///     copyopen Aliases         open or close one of Copies' folded lists
+///     copyopen links|symlinks  open or close one of Copies' folded lists
 ///     copyopenrow 0, copykeep 0  open a row of duplicates, or keep its first extra copy instead
 ///     copylink 0               link a row of duplicates' extra copies to the one that stays: only on the throwaway test disk
 ///     focus ~/some/folder      zoom straight to a folder
@@ -35,9 +35,19 @@ import SwiftUI
 ///     lastuse ~/some/folder    what the middle of the ring says about when it was last used, and how long that takes
 ///     pointname ~/some/folder  as if the pointer were on a row with this name. Nothing after it: the pointer leaves
 ///     moveto x y               tell the window the pointer is here, without moving your real one
+///     axlist, axpress Text     what can be pressed in the window, and pressing the first whose name has that text: the
+///                              control's own action, run from inside the app, with no pointer and no permission. The ring
+///                              and the toolbar only: the inspector's rows aren't described to anything inside the app
+///     pointerpost x y          the same through the system's own path, which SwiftUI's hover follows too. Only when this
+///                              app may already post events (Accessibility): it never asks, and says so when it may not
 ///     rightclick x y           right-click here, say what the menu offers, and close it
-///     target                   what an action would apply to now
+///     target                   what an action would apply to now, what the pointer is on, and how many pieces are lit
 ///     where                    which folder it's in, and what's selected
+///     sizes name               what the map says the disk, free space, the Trash and each thing in the folder in view hold
+///     agents                   the socket agents come in by, and who is connected, asking and allowed, with what they did
+///     agentanswer allow|look|deny  your answer to the next agent that asks, given as soon as it does
+///     agentremove              takes back every agent that was allowed
+///     agentswindow             opens Agents from the app menu, and says each window's number, for a photograph of it
 ///     menu ~/some/folder       what a right-click offers for it, or for what an action would apply to now
 ///     action Copy Path         do this from that list, to what an action would apply to now
 ///     clipboard                what's been copied, on a clipboard of its own, and what the pill says
@@ -151,11 +161,12 @@ enum ScriptRunner {
     @MainActor private static var meter: MainThreadMeter?
     @MainActor private static var pacingStarted: CFTimeInterval = 0
 
-    static var path: String? {
+    /// The file of steps the app was started with, if it was. Asked all over the app, so it's worked out once.
+    static let path: String? = {
         let args = CommandLine.arguments
         guard let i = args.firstIndex(of: "--script"), i + 1 < args.count else { return nil }
         return args[i + 1]
-    }
+    }()
 
     @MainActor
     static func startIfAsked() {
@@ -209,15 +220,110 @@ enum ScriptRunner {
     private static func resolve(_ path: String, _ model: AppModel) -> UInt32? {
         guard let tree = model.tree else { return nil }
         var p = path
-        if p.hasPrefix("~") { p = "/System/Volumes/Data" + NSHomeDirectory() + p.dropFirst() }
-        return tree.find(path: p) ?? (p.hasPrefix("/System/Volumes/Data/") ? nil : tree.find(path: "/System/Volumes/Data" + p))
+        if p.hasPrefix("~") { p = NSHomeDirectory() + p.dropFirst() }
+        return tree.find(path: p) ?? tree.find(visible: p)
     }
+
+    /// Whether the app has been told something is reading its views, for `axlist` and `axpress`.
+    @MainActor private static var axAnnounced = false
 
     /// When the director's clock started, for `at`.
     @MainActor private static var clockStart = 0.0
 
+    /// The parts of the harness. Every step belongs to one, and is carried out by that part's function below.
+    private enum StepGroup { case timing, copies, map, menus, plan, measuring, window, card, updates, agents }
+
+    /// Every step there is, and the part that does it.
+    private static let groupOfStep: [String: StepGroup] = [
+        "wait": .timing, "clock": .timing, "at": .timing, "mark": .timing, "scanned": .timing, "quit": .timing,
+        "report": .timing,
+        "copies": .copies, "copyrow": .copies, "copyopen": .copies, "copyopenrow": .copies, "copyline": .copies,
+        "copykeep": .copies, "copylink": .copies, "copyact": .copies, "filekind": .copies, "copyhelp": .copies,
+        "copytick": .copies, "benchcopy": .copies,
+        "lens": .map, "focus": .map, "up": .map, "hover": .map, "links": .map, "lastuse": .map, "pointname": .map,
+        "moveto": .map, "pointerpost": .map, "axlist": .map, "axpress": .map, "rightclick": .map, "target": .map, "where": .map, "select": .map, "back": .map, "forward": .map,
+        "rings": .map, "changeinfo": .map, "ringbench": .map, "piece": .map, "pointer": .map, "labelpoint": .map,
+        "labelleave": .map, "panelhover": .map, "ringpoint": .map, "ringclick": .map, "labelclick": .map, "window": .map,
+        "search": .map, "volume": .map, "sizes": .map,
+        "titlemenu": .menus, "menu": .menus, "action": .menus, "clipboard": .menus, "menubar": .menus, "key": .menus,
+        "menuitem": .menus, "copyroute": .menus, "keydown": .menus, "keys": .menus,
+        "tick": .plan, "plan": .plan, "recommended": .plan, "boxes": .plan, "box": .plan, "point": .plan, "pointat": .plan,
+        "open": .plan, "review": .plan, "checked": .plan, "clean": .plan, "empty": .plan, "undo": .plan,
+        "othercopies": .plan, "refreshcheck": .plan, "othercopy": .plan, "moveplan": .plan, "tryagain": .plan,
+        "uninstallplan": .plan, "keep": .plan, "after": .plan, "expand": .plan, "busy": .plan, "cleananyway": .plan,
+        "button": .plan,
+        "speed": .measuring, "meter": .measuring, "pacing": .measuring, "touch": .measuring, "sweep": .measuring,
+        "bench": .measuring, "memory": .measuring, "footprint": .measuring, "gpu": .measuring, "headroom": .measuring,
+        "frames": .measuring, "leaks": .measuring, "format": .measuring,
+        "panel": .window, "scrolls": .window, "voiceover": .window, "size": .window, "jiggle": .window, "collide": .window,
+        "timescale": .window, "shotwindow": .window, "shot": .window, "film": .window, "mouse": .window, "click": .window,
+        "activate": .window, "float": .window, "hide": .window, "unhide": .window, "minimize": .window, "restore": .window,
+        "lose": .window, "redraw": .window, "stopwhenhidden": .window, "windowid": .window, "frame": .window,
+        "press": .window, "about": .window,
+        "look": .card, "cardpress": .card, "carddrag": .card, "cardframe": .card, "card": .card,
+        "checkupdates": .updates, "installupdate": .updates, "signedlikethis": .updates, "updatestate": .updates,
+        "agents": .agents, "agentanswer": .agents, "agentremove": .agents, "agentswindow": .agents,
+    ]
+
     @MainActor
     private static func run(_ command: String, _ argument: String, _ model: AppModel) async {
+        switch groupOfStep[command] {
+        case .timing: await runTimingStep(command, argument, model)
+        case .copies: await runCopiesStep(command, argument, model)
+        case .map: await runMapStep(command, argument, model)
+        case .menus: await runMenusStep(command, argument, model)
+        case .plan: await runPlanStep(command, argument, model)
+        case .measuring: await runMeasuringStep(command, argument, model)
+        case .window: await runWindowStep(command, argument, model)
+        case .card: await runCardStep(command, argument, model)
+        case .updates: await runUpdatesStep(command, argument, model)
+        case .agents: await runAgentsStep(command, argument)
+        case nil:
+            print("unknown step: \(command)")
+        }
+    }
+
+    /// Agents: who is connected, asking and allowed, and your answer to one that asks.
+    @MainActor
+    private static func runAgentsStep(_ command: String, _ argument: String) async {
+        let agents = Agents.shared
+        func line(_ identity: AgentIdentity) -> String { "\(identity.name) (\(identity.program), \(identity.signer ?? "not signed"))" }
+        switch command {
+        case "agents":
+            print("agents: socket \(AgentSocket.path)")
+            print("  connected: " + (agents.connected.isEmpty ? "none" : agents.connected.map { line($0.identity) }.joined(separator: "; ")))
+            print("  asking: " + (agents.requests.isEmpty ? "none" : agents.requests.map { line($0.identity) }.joined(separator: "; ")))
+            print("  allowed: " + (agents.allowed.isEmpty ? "none" : agents.allowed.map { line($0.identity) }.joined(separator: "; ")))
+            for one in agents.activity.suffix(12) { print("  did: \(one.agent): \(one.what)") }
+        case "agentanswer":
+            // The answer is given the moment an agent asks, so the question isn't left on screen for anyone else to answer.
+            let started = Date()
+            while agents.requests.isEmpty, Date().timeIntervalSince(started) < 20 { try? await Task.sleep(for: .milliseconds(30)) }
+            guard let request = agents.requests.first else { print("agentanswer \(argument): nobody asked"); return }
+            agents.answer(request, argument == "allow" ? .allow : (argument == "look" ? .lookOnly : .deny))
+            print("agentanswer \(argument): \(request.identity.name)")
+        case "agentremove":
+            let gone = agents.allowed
+            for one in gone { agents.remove(one) }
+            print("agentremove: \(gone.count) removed")
+        default:
+            // The Agents window, as the app menu opens it, and every window there is, by the number a photograph is asked for.
+            if let menu = NSApp.mainMenu?.items.first?.submenu, let at = menu.items.firstIndex(where: { $0.title == "Agents…" }) {
+                menu.performActionForItem(at: at)
+            } else {
+                print("no Agents item")
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                for w in NSApp.windows where w.isVisible {
+                    print("agentswindow: window \(w.windowNumber) \"\(w.title)\" \(Int(w.frame.width))x\(Int(w.frame.height))\(w.isSheet ? " sheet" : "")")
+                }
+            }
+        }
+    }
+
+    /// Waiting, the clock, and the end of a run.
+    @MainActor
+    private static func runTimingStep(_ command: String, _ argument: String, _ model: AppModel) async {
         switch command {
         case "wait":
             try? await Task.sleep(for: .seconds(Double(argument) ?? 1))
@@ -229,57 +335,27 @@ enum ScriptRunner {
             // at 3.25: wait until 3.25 s after `clock`. A step that's late runs at once, so lateness never adds up.
             let wait = clockStart + (Double(argument) ?? 0) - ProcessInfo.processInfo.systemUptime
             if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
-        case "titlemenu":
-            // titlemenu Travel SSD: the window title's menu, opened as a click on the title opens it; after a moment the item
-            // with that name is chosen from inside it while it's open, and it closes. Nothing touches your real pointer.
-            guard let w = mainWindow else { return }
-            let wanted = argument
-            var watcher: NSObjectProtocol?
-            watcher = NotificationCenter.default.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: nil) { note in
-                guard let menu = note.object as? NSMenu else { return }
-                if let watcher { NotificationCenter.default.removeObserver(watcher) }
-                print("titlemenu: \(menu.items.map { $0.isSeparatorItem ? "—" : $0.title })")
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                    let index = menu.items.firstIndex { $0.title.contains(wanted) }
-                    print("titlemenu: choosing \(index.map { menu.items[$0].title } ?? "nothing")")
-                    if let index { menu.performActionForItem(at: index) }
-                    menu.cancelTracking()
-                }
-            }
-            let title = NSPoint(x: 226, y: w.frame.height - 19)
-            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
-                if let event = NSEvent.mouseEvent(with: type, location: title, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
-                                                  windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) { NSApp.sendEvent(event) }
-            }
-            if let watcher { NotificationCenter.default.removeObserver(watcher) }
-        case "piece":
-            // piece /some/folder: where its piece is on the ring now, in points from the window's top left.
-            guard let node = resolve(argument, model), let i = model.engine.layout.pieces.firstIndex(where: { $0.node == node }) else {
-                print("piece \(argument): not on the ring"); return
-            }
-            let p = model.engine.layout.pieces[i]
-            let angle = Double(p.a0 + p.a1) / 2, radius = Double(p.r0 + p.r1) / 2 * model.ring.radius
-            print(String(format: "piece %@ at %.1f %.1f (ring %.1f %.1f radius %.1f)", argument, model.ring.center.x + sin(angle) * radius,
-                         model.ring.center.y - cos(angle) * radius, model.ring.center.x, model.ring.center.y, model.ring.radius))
-        case "pointer":
-            // pointer x y: the pointer is here now, in points from the window's top left. Quiet and quick, for a pointer
-            // moved sixty times a second. Your real pointer doesn't move.
-            guard let w = mainWindow else { return }
-            let parts = argument.split(separator: " ").compactMap { Double($0) }
-            guard parts.count == 2 else { return }
-            let at = NSPoint(x: parts[0], y: w.frame.height - parts[1])
-            guard let event = NSEvent.mouseEvent(with: .mouseMoved, location: at, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
-                                                 windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0) else { return }
-            let view = w.contentView?.superview?.hitTest(at)
-            view?.mouseMoved(with: event)
-            if view !== w.contentView { w.contentView?.mouseMoved(with: event) }
         case "scanned":
             while model.isScanning || model.tree == nil || model.mapsOnTheirWay > 0 { try? await Task.sleep(for: .milliseconds(100)) }
             try? await Task.sleep(for: .milliseconds(400))
-        case "lens":
-            // As a click on the switcher does it.
-            let lens: Lens = argument == "changes" ? .changes : argument == "freeUp" ? .freeUp : argument == "copies" ? .copies : .map
-            Motion.animate(.spring(response: 0.34, dampingFraction: 0.82)) { model.setLens(lens) }
+        case "mark":
+            // mark name: a moment another program can wait for and line up with, on the clock every process shares.
+            print(String(format: "mark %@ at %.4f", argument, ProcessInfo.processInfo.systemUptime))
+        case "report":
+            report(model)
+        case "quit":
+            fflush(stdout)
+            // As the Quit menu does it, so a quit that waits for a clean works here too.
+            NSApp.terminateSoon()
+        default:
+            break
+        }
+    }
+
+    /// The Copies view.
+    @MainActor
+    private static func runCopiesStep(_ command: String, _ argument: String, _ model: AppModel) async {
+        switch command {
         case "copies":
             // Copies looks only when it's open, so this waits for it to finish, then says what it found and what it cost.
             let started = CFAbsoluteTimeGetCurrent()
@@ -302,7 +378,7 @@ enum ScriptRunner {
             if let at = Int(argument), at < model.copyGroupsHere.count { model.pointAtCopyGroup(model.copyGroupsHere[at]) }
             else { model.pointAtCopyGroup(nil) }
         case "copyopen":
-            // copyopen Stored once: open one of Copies' folded lists, or close it if it's open.
+            // copyopen links: open one of Copies' folded lists, or close it if it's open.
             if model.copiesOpen.contains(argument) { model.copiesOpen.remove(argument) } else { model.copiesOpen.insert(argument) }
         case "copyopenrow":
             // copyopenrow 0: open the nth row of duplicates in Copies, or close it.
@@ -345,6 +421,51 @@ enum ScriptRunner {
             // copytick 2: tick the nth row of duplicates in Copies, so its extra copies go with the next clean.
             let dups = model.copyGroupsHere.filter { $0.kind == .duplicate }
             if let at = Int(argument), at < dups.count { model.toggleDuplicate(dups[at]) }
+        case "benchcopy":
+            // benchcopy /from -> /into: the real copy and check, timed. Only ever inside the throwaway test disk.
+            let parts = argument.components(separatedBy: " -> ")
+            guard parts.count == 2 else { return }
+            let started = DispatchTime.now()
+            do {
+                try Cleaner.copyAndVerify(parts[0], into: parts[1], stop: LockedFlag()) { _ in }
+                print(String(format: "benchcopy: %.0f ms", Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1e6))
+            } catch {
+                print("benchcopy failed: \(error)")
+            }
+        default:
+            break
+        }
+    }
+
+    /// Moving around the map, and pointing at things on it.
+    @MainActor
+    private static func runMapStep(_ command: String, _ argument: String, _ model: AppModel) async {
+        switch command {
+        case "piece":
+            // piece /some/folder: where its piece is on the ring now, in points from the window's top left.
+            guard let node = resolve(argument, model), let i = model.engine.layout.pieces.firstIndex(where: { $0.node == node }) else {
+                print("piece \(argument): not on the ring"); return
+            }
+            let p = model.engine.layout.pieces[i]
+            let angle = Double(p.a0 + p.a1) / 2, radius = Double(p.r0 + p.r1) / 2 * model.ring.radius
+            print(String(format: "piece %@ at %.1f %.1f (ring %.1f %.1f radius %.1f)", argument, model.ring.center.x + sin(angle) * radius,
+                         model.ring.center.y - cos(angle) * radius, model.ring.center.x, model.ring.center.y, model.ring.radius))
+        case "pointer":
+            // pointer x y: the pointer is here now, in points from the window's top left. Quiet and quick, for a pointer
+            // moved sixty times a second. Your real pointer doesn't move.
+            guard let w = mainWindow else { return }
+            let parts = argument.split(separator: " ").compactMap { Double($0) }
+            guard parts.count == 2 else { return }
+            let at = NSPoint(x: parts[0], y: w.frame.height - parts[1])
+            guard let event = NSEvent.mouseEvent(with: .mouseMoved, location: at, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                 windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0) else { return }
+            let view = w.contentView?.superview?.hitTest(at)
+            view?.mouseMoved(with: event)
+            if view !== w.contentView { w.contentView?.mouseMoved(with: event) }
+        case "lens":
+            // As a click on the switcher does it.
+            let lens: Lens = argument == "changes" ? .changes : argument == "freeUp" ? .freeUp : argument == "copies" ? .copies : .map
+            Motion.animate(.spring(response: 0.34, dampingFraction: 0.82)) { model.setLens(lens) }
         case "focus":
             if let node = resolve(argument, model), let tree = model.tree { model.zoom(into: RingLayout.chainTail(tree: tree, node)) }
             else { print("no such folder: \(argument)") }
@@ -380,7 +501,60 @@ enum ScriptRunner {
             print("moveto \(argument): lands on \(view.map { String(describing: type(of: $0)).prefix(30) } ?? "nothing")")
             view?.mouseMoved(with: event)
             w.contentView?.mouseMoved(with: event)
+            // And as the app's own event loop would hand it out.
+            NSApp.sendEvent(event)
             try? await Task.sleep(for: .milliseconds(60))
+        case "axlist", "axpress":
+            // axlist: everything in the window that can be pressed, as an assistive app would find it. axpress Text: press
+            // the first of them whose name has that text in it. This runs the control's own action, as a click on it does,
+            // from inside the app: no pointer moves and nothing is asked of the system. It reaches the ring's pieces and
+            // the toolbar. The inspector's rows don't show up: SwiftUI only describes those to a reader outside the app.
+            guard let w = mainWindow, let top = w.contentView?.superview else { return }
+            // SwiftUI only describes its views once something that reads them has said it's there, as VoiceOver does.
+            if !axAnnounced {
+                axAnnounced = true
+                for name in ["AXManualAccessibility", "AXEnhancedUserInterface"] {
+                    NSApp.accessibilitySetValue(true as NSNumber, forAttribute: NSAccessibility.Attribute(rawValue: name))
+                }
+                try? await Task.sleep(for: .milliseconds(600))
+            }
+            var found: [(name: String, element: NSAccessibilityProtocol)] = []
+            var seen = 0
+            func walk(_ thing: Any, _ depth: Int) {
+                guard depth < 40, seen < 6000, let element = thing as? NSAccessibilityProtocol else { return }
+                seen += 1
+                let role = element.accessibilityRole()?.rawValue ?? ""
+                if role == NSAccessibility.Role.button.rawValue || role == NSAccessibility.Role.checkBox.rawValue {
+                    let name = [element.accessibilityLabel(), element.accessibilityTitle(), element.accessibilityValue() as? String, element.accessibilityHelp()]
+                        .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " | ")
+                    found.append((name, element))
+                }
+                for child in element.accessibilityChildren() ?? [] { walk(child, depth + 1) }
+            }
+            walk(top, 0)
+            if command == "axlist" {
+                print("axlist: \(found.count) pressable of \(seen) elements")
+                for one in found.prefix(80) { print("  " + one.name.prefix(110)) }
+            } else if let one = found.first(where: { $0.name.localizedCaseInsensitiveContains(argument) }) {
+                let done = one.element.accessibilityPerformPress()
+                print("axpress \(argument): pressed \"\(one.name.prefix(80))\" \(done ? "" : "(it said no)")")
+                try? await Task.sleep(for: .milliseconds(150))
+            } else {
+                print("axpress \(argument): nothing with that name among \(found.count)")
+            }
+        case "pointerpost":
+            // pointerpost x y: a pointer move handed to this copy of the app alone, through the system's own path for events,
+            // so everything that follows the pointer (SwiftUI's hover included) takes it for a real one. The pointer on
+            // screen doesn't move. Only when the system already lets this app post events: it's never asked for.
+            guard let w = mainWindow, let screen = NSScreen.screens.first else { return }
+            let parts = argument.split(separator: " ").compactMap { Double($0) }
+            guard parts.count == 2 else { return }
+            guard CGPreflightPostEventAccess() else { print("pointerpost \(argument): not allowed to post events, so nothing was sent"); return }
+            let global = CGPoint(x: w.frame.minX + parts[0], y: screen.frame.height - w.frame.maxY + parts[1])
+            guard let move = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: global, mouseButton: .left) else { return }
+            move.postToPid(getpid())
+            try? await Task.sleep(for: .milliseconds(120))
+            print("pointerpost \(argument): sent")
         case "rightclick":
             guard let w = mainWindow else { return }
             let parts = argument.split(separator: " ").compactMap { Double($0) }
@@ -409,7 +583,8 @@ enum ScriptRunner {
             NotificationCenter.default.removeObserver(watch)
             if !opened { print("right-click \(argument): no menu") }
         case "target":
-            print("target \(argument):\(model.actionTarget.nodes.map { model.realName(of: $0) })")
+            let pointed = model.pointedThing.map { $0.title ?? $0.nodes.map { model.realName(of: $0) }.joined(separator: ", ") } ?? "nothing"
+            print("target \(argument):\(model.actionTarget.nodes.map { model.realName(of: $0) }); pointed at: \(pointed); lit pieces: \(model.engine.litPieces)")
         case "where":
             print("where \(argument): in \(model.realName(of: model.focus)), selected \(model.selected.map { model.realName(of: $0) } ?? "nothing"), \(model.plan.items.count) planned, back \(model.canGoBack), forward \(model.canGoForward), \(model.afterClean?.things.count ?? 0) in the Trash from here")
         case "select":
@@ -421,6 +596,171 @@ enum ScriptRunner {
         case "forward":
             model.goForward()
             try? await Task.sleep(for: .milliseconds(400))
+        case "rings":
+            guard let tree = model.tree else { print("rings: no map"); return }
+            let start = DispatchTime.now()
+            let layout = RingLayout.build(tree: tree, focus: model.focus, colorer: { _ in .zero }, sizes: model.ringSizes)
+            let took = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1e6
+            // Around the whole disk, ring 0 is the band, and the rings of folders are 1 to n.
+            let first: Int32 = model.focus == 0 ? 1 : 0
+            let rings = (0..<Int32(layout.rings)).map { k in layout.pieces.filter { $0.ring == first + k } }
+            let widths = rings.map { ring in ring.first.map { String(format: "%.0f", ($0.r1 - $0.r0) * RingLayout.typicalRadius) } ?? "-" }
+            let edge = rings.last?.map(\.r1).max() ?? 0
+            print(String(format: "rings: asked %d %@, drawn %d, could fill %d, menu ticks %d and offers up to %d, pieces per ring %@, widths in points %@, outer edge %.4f, %d lips, %.1f ms",
+                         model.ringSizes.depth, model.ringSizes.style.rawValue, layout.rings, layout.reach, model.ringsDrawn, model.ringReach,
+                         rings.map { String($0.count) }.joined(separator: " "), widths.joined(separator: " "), edge,
+                         layout.pieces.filter { $0.deeper > 0 }.count, took))
+            // Where the lips are: the middle of each piece, in degrees clockwise from 12 o'clock, and how strong it is.
+            let lipped = layout.pieces.filter { $0.deeper > 0 }.sorted { $0.sweep > $1.sweep }.prefix(12)
+            if !lipped.isEmpty {
+                print("rings: lips at " + lipped.map { String(format: "%.0f° %.0f%%", $0.midAngle * 180 / .pi, $0.deeper * 100) }.joined(separator: ", "))
+            }
+            // How far around each ring goes with the most rings there can be, as a share of the first ring.
+            let fill = RingLayout.fill(tree: tree, focus: model.focus, style: model.ringSizes.style)
+            print("rings: at \(RingSizes.most), how far around each goes: " + fill.map { String(format: "%.1f%%", $0 * 100) }.joined(separator: " "))
+        case "changeinfo":
+            // changeinfo ~/some/folder: over the last day, how it changed, and what grew and shrank inside it, then the
+            // same for each thing in it, with each one's place in the tree.
+            guard let tree = model.tree, let node = resolve(argument, model) else { print("no such folder: \(argument)"); return }
+            let map = AppModel.changeMap(tree: tree, window: .days(1), rules: model.rules, facts: model.facts)
+            func line(_ id: UInt32) -> String {
+                String(format: "#%u in #%u %@: %+.2f GB, grew %.2f, shrank %.2f", id, tree.nodes[Int(id)].parent, tree.name(id) as NSString,
+                       Double(map.value(of: id)) / 1e9, Double(map.amount(id, shrinking: false)) / 1e9, Double(map.amount(id, shrinking: true)) / 1e9)
+            }
+            print("changeinfo " + line(node))
+            var child = tree.nodes[Int(node)].firstChild
+            while child != 0 {
+                print("  " + line(child))
+                child = tree.nodes[Int(child)].nextSibling
+            }
+        case "ringbench":
+            guard let tree = model.tree else { print("ringbench: no map"); return }
+            for style in RingStyle.allCases {
+                let sizes = RingSizes(depth: model.ringSizes.depth, style: style)
+                var times: [Double] = []
+                var layout = RingLayout()
+                for _ in 0..<20 {
+                    let start = DispatchTime.now()
+                    layout = RingLayout.build(tree: tree, focus: model.focus, colorer: { _ in .zero }, sizes: sizes)
+                    times.append(Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1e6)
+                }
+                times.sort()
+                print(String(format: "ringbench %@, %@: %.2f ms median, %.2f slowest, %d pieces in %d rings", argument as NSString,
+                             style.rawValue as NSString, times[times.count / 2], times.last ?? 0, layout.pieces.count, layout.rings))
+            }
+        case "sizes":
+            guard let tree = model.tree else { print("sizes: no map"); return }
+            let trash = model.trashNode(in: tree).map { formatBytes(tree.totals[Int($0)]) } ?? "none"
+            let inside = tree.children(model.focus == 0 ? (tree.anchors.first?.id ?? 0) : model.focus).map { "\(tree.rawName($0)) \(formatBytes(tree.totals[Int($0)]))" }
+            print("sizes \(argument): disk \(formatBytes(tree.totals[0])), free \(formatBytes(tree.totals[Int(tree.free)])), trash \(trash), whole \(tree.isWhole), version \(model.treeVersion), "
+                + "pieces \(model.engine.layout.pieces.count); \(inside.joined(separator: ", "))")
+        case "window":
+            // window 7 is the last week, 0 the last scan, and -365 what's been untouched for a year.
+            if let d = Int(argument) { model.setChangeWindow(d == 0 ? .lastScan : d < 0 ? .untouched(-d) : .days(d)) }
+        case "search":
+            model.searchActive = true
+            model.searchText = argument
+            model.runSearch()
+        case "labelpoint":
+            // labelpoint 2: the pointer arrives on the name around the ring with this number, and moves a little while it's there.
+            guard let w = mainWindow, let at = labelPoint(argument, model) else { print("no such name: \(argument)"); return }
+            func move(_ x: Double, _ y: Double) {
+                let p = NSPoint(x: x, y: w.frame.height - y)
+                guard let event = NSEvent.mouseEvent(with: .mouseMoved, location: p, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0) else { return }
+                w.contentView?.superview?.hitTest(p)?.mouseMoved(with: event)
+                model.mapView?.mouseMoved(with: event)
+            }
+            let label = at.label
+            print("name \"\(label.title)\" at \(Int(at.x)),\(Int(at.y)), lands on \(w.contentView?.superview?.hitTest(NSPoint(x: at.x, y: w.frame.height - at.y)).map { String(describing: type(of: $0)).prefix(24) } ?? "nothing")")
+            model.enterLabel(piece: label.pieceIndex)
+            print("arrived: lit \(model.hover?.title ?? "nothing")")
+            move(at.x, at.y)
+            try? await Task.sleep(for: .milliseconds(60))
+            print("after a small move: lit \(model.hover?.title ?? "nothing")")
+            move(at.x + 2, at.y)
+            try? await Task.sleep(for: .milliseconds(60))
+            print("after another: lit \(model.hover?.title ?? "nothing")")
+        case "labelleave":
+            // labelleave 2: the pointer goes from that name to empty space beside the ring.
+            guard let w = mainWindow, let at = labelPoint(argument, model) else { print("no such name: \(argument)"); return }
+            model.leaveLabel(piece: at.label.pieceIndex)
+            let p = NSPoint(x: 8, y: w.frame.height - 400)
+            if let event = NSEvent.mouseEvent(with: .mouseMoved, location: p, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0) { model.mapView?.mouseMoved(with: event) }
+            print("left: lit \(model.hover?.title ?? "nothing")")
+        case "panelhover":
+            // panelhover 2: the pointer on the row in the inspector for that name, then moving about on the row a little.
+            guard let w = mainWindow, let at = labelPoint(argument, model) else { print("no such name: \(argument)"); return }
+            model.highlight(node: at.label.node)
+            print("on the row for \"\(at.label.title)\": lit \(model.hover?.title ?? "nothing")")
+            for nudge in [0.0, 3.0, 6.0] {
+                let p = NSPoint(x: w.frame.width - 200 + nudge, y: w.frame.height - 500)
+                if let event = NSEvent.mouseEvent(with: .mouseMoved, location: p, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0) { model.mapView?.mouseMoved(with: event) }
+                try? await Task.sleep(for: .milliseconds(60))
+                print("  after a move on the row: lit \(model.hover?.title ?? "nothing")")
+            }
+            model.highlight(node: nil)
+            print("off the row: lit \(model.hover?.title ?? "nothing")")
+        case "ringpoint":
+            // The pointer on the biggest piece of the ring itself.
+            guard let w = mainWindow, let piece = model.engine.layout.pieces.filter({ !$0.isSmaller && $0.style == .folder }).max(by: { $0.bytes < $1.bytes }) else { return }
+            let angle = Double(piece.a0 + piece.a1) / 2, radius = Double(piece.r0 + piece.r1) / 2 * model.ring.radius
+            let p = NSPoint(x: model.ring.center.x + sin(angle) * radius, y: w.frame.height - (model.ring.center.y - cos(angle) * radius))
+            print("ring: lands on \(w.contentView?.superview?.hitTest(p).map { String(describing: type(of: $0)).prefix(24) } ?? "nothing")")
+            if let event = NSEvent.mouseEvent(with: .mouseMoved, location: p, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0) { model.mapView?.mouseMoved(with: event) }
+            print("on the ring: lit \(model.hover?.title ?? "nothing")")
+        case "ringclick":
+            // ringclick 2 2: a double-click on this piece of the ring, counting what can be clicked. `ringclick 2` is one click.
+            let numbers = argument.split(separator: " ").map(String.init)
+            let pieces = model.engine.layout.pieces.filter { !$0.isSmaller }
+            guard let at = Int(numbers.first ?? ""), pieces.indices.contains(at), let tree = model.tree else { print("no such piece: \(argument)"); return }
+            let piece = pieces[at]
+            let angle = Double(piece.a0 + piece.a1) / 2, radius = Double(piece.r0 + piece.r1) / 2 * model.ring.radius
+            print("on the ring at \"\(tree.name(piece.node))\", in \(model.displayName(model.focus)), \(model.plan.count) selected")
+            await run("press", "\(model.ring.center.x + sin(angle) * radius) \(model.ring.center.y - cos(angle) * radius) \(numbers.count > 1 ? numbers[1] : "1")", model)
+            try? await Task.sleep(for: .milliseconds(700))
+            print("now in \(model.displayName(model.focus)), selected thing \(model.selected.map(model.displayName) ?? "none"), \(model.plan.count) selected")
+        case "labelclick":
+            // labelclick 2: what a click on that name does. `labelclick 2 2` is the second click of a double-click.
+            let numbers = argument.split(separator: " ").map(String.init)
+            guard let at = labelPoint(numbers.first ?? "", model) else { print("no such name: \(argument)"); return }
+            print("clicking \"\(at.label.title)\", in \(model.displayName(model.focus)), \(model.plan.count) selected")
+            model.openLabel(piece: at.label.pieceIndex, count: numbers.count > 1 ? Int(numbers[1]) ?? 1 : 1)
+            try? await Task.sleep(for: .milliseconds(700))
+            print("now in \(model.displayName(model.focus)), selected thing \(model.selected.map(model.displayName) ?? "none"), \(model.plan.count) selected")
+        case "volume":
+            if let facts = VolumeFacts.read(path: argument) { model.switchVolume(facts) } else { print("no such disk: \(argument)") }
+        default:
+            break
+        }
+    }
+
+    /// Menus, shortcuts and the clipboard.
+    @MainActor
+    private static func runMenusStep(_ command: String, _ argument: String, _ model: AppModel) async {
+        switch command {
+        case "titlemenu":
+            // titlemenu Travel SSD: the window title's menu, opened as a click on the title opens it; after a moment the item
+            // with that name is chosen from inside it while it's open, and it closes. Nothing touches your real pointer.
+            guard let w = mainWindow else { return }
+            let wanted = argument
+            var watcher: NSObjectProtocol?
+            watcher = NotificationCenter.default.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: nil) { note in
+                guard let menu = note.object as? NSMenu else { return }
+                if let watcher { NotificationCenter.default.removeObserver(watcher) }
+                print("titlemenu: \(menu.items.map { $0.isSeparatorItem ? "—" : $0.title })")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    let index = menu.items.firstIndex { $0.title.contains(wanted) }
+                    print("titlemenu: choosing \(index.map { menu.items[$0].title } ?? "nothing")")
+                    if let index { menu.performActionForItem(at: index) }
+                    menu.cancelTracking()
+                }
+            }
+            let title = NSPoint(x: 226, y: w.frame.height - 19)
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                if let event = NSEvent.mouseEvent(with: type, location: title, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                  windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) { NSApp.sendEvent(event) }
+            }
+            if let watcher { NotificationCenter.default.removeObserver(watcher) }
         case "menu":
             let thing = resolve(argument, model).map { NamedThing($0) } ?? model.actionTarget
             let titles = model.actions(for: thing).map { action in
@@ -495,60 +835,37 @@ enum ScriptRunner {
                 }
             }
             try? await Task.sleep(for: .milliseconds(60))
-        case "rings":
-            guard let tree = model.tree else { print("rings: no map"); return }
-            let start = DispatchTime.now()
-            let layout = RingLayout.build(tree: tree, focus: model.focus, colorer: { _ in .zero }, sizes: model.ringSizes)
-            let took = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1e6
-            // Around the whole disk, ring 0 is the band, and the rings of folders are 1 to n.
-            let first: Int32 = model.focus == 0 ? 1 : 0
-            let rings = (0..<Int32(layout.rings)).map { k in layout.pieces.filter { $0.ring == first + k } }
-            let widths = rings.map { ring in ring.first.map { String(format: "%.0f", ($0.r1 - $0.r0) * RingLayout.typicalRadius) } ?? "-" }
-            let edge = rings.last?.map(\.r1).max() ?? 0
-            print(String(format: "rings: asked %d %@, drawn %d, could fill %d, menu ticks %d and offers up to %d, pieces per ring %@, widths in points %@, outer edge %.4f, %d lips, %.1f ms",
-                         model.ringSizes.depth, model.ringSizes.style.rawValue, layout.rings, layout.reach, model.ringsDrawn, model.ringReach,
-                         rings.map { String($0.count) }.joined(separator: " "), widths.joined(separator: " "), edge,
-                         layout.pieces.filter { $0.deeper > 0 }.count, took))
-            // Where the lips are: the middle of each piece, in degrees clockwise from 12 o'clock, and how strong it is.
-            let lipped = layout.pieces.filter { $0.deeper > 0 }.sorted { $0.sweep > $1.sweep }.prefix(12)
-            if !lipped.isEmpty {
-                print("rings: lips at " + lipped.map { String(format: "%.0f° %.0f%%", $0.midAngle * 180 / .pi, $0.deeper * 100) }.joined(separator: ", "))
-            }
-            // How far around each ring goes with the most rings there can be, as a share of the first ring.
-            let fill = RingLayout.measure(tree: tree, focus: model.focus, style: model.ringSizes.style).fill
-            print("rings: at \(RingSizes.most), how far around each goes: " + fill.map { String(format: "%.1f%%", $0 * 100) }.joined(separator: " "))
-        case "changeinfo":
-            // changeinfo ~/some/folder: over the last day, how it changed, and what grew and shrank inside it, then the
-            // same for each thing in it, with each one's place in the tree.
-            guard let tree = model.tree, let node = resolve(argument, model) else { print("no such folder: \(argument)"); return }
-            let map = AppModel.changeMap(tree: tree, window: .days(1), rules: model.rules, facts: model.facts)
-            func line(_ id: UInt32) -> String {
-                String(format: "#%u in #%u %@: %+.2f GB, grew %.2f, shrank %.2f", id, tree.nodes[Int(id)].parent, tree.name(id) as NSString,
-                       Double(map.value(of: id)) / 1e9, Double(map.amount(id, shrinking: false)) / 1e9, Double(map.amount(id, shrinking: true)) / 1e9)
-            }
-            print("changeinfo " + line(node))
-            var child = tree.nodes[Int(node)].firstChild
-            while child != 0 {
-                print("  " + line(child))
-                child = tree.nodes[Int(child)].nextSibling
-            }
-        case "ringbench":
-            guard let tree = model.tree else { print("ringbench: no map"); return }
-            for style in RingStyle.allCases {
-                let sizes = RingSizes(depth: model.ringSizes.depth, style: style)
-                var times: [Double] = []
-                var layout = RingLayout()
-                for _ in 0..<20 {
-                    let start = DispatchTime.now()
-                    layout = RingLayout.build(tree: tree, focus: model.focus, colorer: { _ in .zero }, sizes: sizes)
-                    times.append(Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1e6)
-                }
-                times.sort()
-                print(String(format: "ringbench %@, %@: %.2f ms median, %.2f slowest, %d pieces in %d rings", argument as NSString,
-                             style.rawValue as NSString, times[times.count / 2], times.last ?? 0, layout.pieces.count, layout.rings))
-            }
         case "copyroute":
             print("⌘C \(argument): \(model.wouldCopySelectedText ? "selected text" : "the name of \(model.actionTarget.nodes.map { model.realName(of: $0) })"), first responder \(mainWindow?.firstResponder.map { String(describing: type(of: $0)) } ?? "none")")
+        case "keys":
+            for character in argument { model.handleScriptKey(character) }
+        case "keydown":
+            // A key as the app gets it, not the menu bar: keydown 49 is space, keydown 123 cmd is ⌘←.
+            let words = argument.split(separator: " ")
+            guard let w = mainWindow, let first = words.first, let code = UInt16(first) else { return }
+            var flags: NSEvent.ModifierFlags = []
+            for word in words.dropFirst() {
+                switch word {
+                case "cmd": flags.insert(.command)
+                case "opt": flags.insert(.option)
+                case "shift": flags.insert(.shift)
+                case "ctrl": flags.insert(.control)
+                default: break
+                }
+            }
+            if let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: w.windowNumber, context: nil, characters: " ", charactersIgnoringModifiers: " ", isARepeat: false, keyCode: code) {
+                NSApp.sendEvent(event)
+            }
+            try? await Task.sleep(for: .milliseconds(120))
+        default:
+            break
+        }
+    }
+
+    /// Free Up: ticking, checking, cleaning and undoing.
+    @MainActor
+    private static func runPlanStep(_ command: String, _ argument: String, _ model: AppModel) async {
+        switch command {
         case "tick":
             let rows = model.shownRows.filter(\.isPlannable)
             if let i = Int(argument) {
@@ -602,12 +919,78 @@ enum ScriptRunner {
             if argument != "nowait" { while model.isPuttingBack { try? await Task.sleep(for: .milliseconds(50)) } }
         case "othercopies":
             // othercopies Title: what's known about the other copies of a suggestion in Free Up.
-            guard let tree = model.tree, let row = model.flatRows.first(where: { $0.title == argument }) else { print("no such row: \(argument)"); return }
+            guard let tree = model.tree, let row = model.shownRows.first(where: { $0.title == argument }) else { print("no such row: \(argument)"); return }
             let video = tree.links.filter { $0.kind == Kind.video.rawValue }
             let found = Accounting.otherCopies(of: row.nodes, in: tree)
             let viaVideo = Accounting.otherCopies(of: row.nodes, in: tree, links: video)
             print("row bytes \(formatBytes(row.bytes)) paper \(formatBytes(row.paperBytes)) copies \(row.otherCopies.count); via video \(viaVideo.folders.count) \(formatBytes(viaVideo.bytes)); nodes \(row.nodes.map { tree.friendlyPath($0) })")
             print("links \(tree.links.count), video links \(video.count), found \(found.folders.count) folders, \(formatBytes(found.bytes)): \(found.folders.prefix(3).map { tree.friendlyPath($0) })")
+        case "refreshcheck":
+            // A refresh of the map on screen, then a full read straight after, and what differs between them. Reads only.
+            guard let tree = model.tree, let volume = model.volume, let journal = model.journal, journal.base == tree.journal else {
+                print("refreshcheck: nothing to refresh (whole \(model.tree?.isWhole ?? false), journal \(model.journal != nil))")
+                return
+            }
+            let rules = model.rules
+            let access = model.hasFullAccess
+            let result = await Task.detached(priority: .userInitiated) { () -> String in
+                Self.compareRefresh(of: tree, volume: volume, journal: journal, rules: rules, fullAccess: access)
+            }.value
+            print(result)
+        case "othercopy":
+            if let row = model.shownRows.first(where: { $0.title == argument }) { model.toggleOtherCopies(of: row) } else { print("no such row: \(argument)") }
+        case "moveplan":
+            // moveplan /path/to/thing -> /folder/it/goes/into
+            let parts = argument.components(separatedBy: " -> ")
+            if parts.count == 2, let item = model.plan.items.first(where: { $0.paths.first == parts[0] }) {
+                model.setStep(.move(folder: parts[1]), for: item.id)
+            } else {
+                print("no such planned thing: \(argument)")
+            }
+        case "tryagain":
+            if let item = model.plan.items.first(where: { $0.paths.first == argument }) { model.tryAgain(item) } else { print("no such planned thing: \(argument)") }
+        case "uninstallplan":
+            // uninstallplan /path/to/Some.app: the planned thing becomes an uninstall, as an unused app's suggestion is.
+            if let item = model.plan.items.first(where: { $0.paths.first == argument }) {
+                model.setStep(.uninstall, for: item.id)
+            } else {
+                print("no such planned thing: \(argument)")
+            }
+        case "keep":
+            if let row = model.shownRows.first(where: { $0.title == argument }) { model.keep(row) } else { print("no such row: \(argument)") }
+        case "after":
+            model.setPreviewAfter(argument != "off")
+        case "expand":
+            if let row = model.shownRows.first(where: { $0.title == argument }) { model.toggleExpanded(row) } else { print("no such row: \(argument)") }
+        case "busy":
+            // busy anyway|cancel: what Send to Trash is asking, because something is using the folder, and the answer.
+            print("busy: \(model.busyToSend.map { "\($0.title) is in use. \($0.why)" } ?? "nothing asked")")
+            guard let busy = model.busyToSend else { return }
+            if argument.hasPrefix("/") {
+                // A picture of the question, which stays open.
+                try? await Task.sleep(for: .milliseconds(500))
+                if let sheet = NSApp.windows.first(where: { $0.isVisible && $0.sheetParent != nil }) { await picture(of: sheet, to: argument) } else { print("no sheet to picture: \(NSApp.windows.map(\.title))") }
+                return
+            }
+            model.busyToSend = nil
+            if argument == "anyway" {
+                model.sendAnyway(busy)
+                while model.cleanProgress != nil { try? await Task.sleep(for: .milliseconds(50)) }
+            }
+        case "cleananyway":
+            if let item = model.plan.items.first(where: { $0.paths.first == argument }) { model.acceptInUse(for: item.id) } else { print("no such planned thing: \(argument)") }
+        case "button":
+            // What the button under the Free Up list says, what's held back, and why.
+            print("ready \(model.readyItems.count) of \(model.plan.count); held: \(model.heldBackItems.map { "\($0.title): \(model.checks[$0.id]?.problems.map(\.text) ?? [])" })")
+        default:
+            break
+        }
+    }
+
+    /// What things cost: time, memory, frames.
+    @MainActor
+    private static func runMeasuringStep(_ command: String, _ argument: String, _ model: AppModel) async {
+        switch command {
         case "speed":
             // How long things take, from the click to the new picture being ready.
             guard let tree = model.tree else { return }
@@ -654,17 +1037,6 @@ enum ScriptRunner {
             print(pacing(view.drawer.endNotes(), interval: mainWindow?.screen?.minimumRefreshInterval ?? 1.0 / 60, since: pacingStarted, label: argument))
             meter?.report(argument)
             meter = nil
-        case "benchcopy":
-            // benchcopy /from -> /into: the real copy and check, timed. Only ever inside the throwaway test disk.
-            let parts = argument.components(separatedBy: " -> ")
-            guard parts.count == 2 else { return }
-            let started = DispatchTime.now()
-            do {
-                try Cleaner.copyAndVerify(parts[0], into: parts[1], stop: LockedFlag()) { _ in }
-                print(String(format: "benchcopy: %.0f ms", Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1e6))
-            } catch {
-                print("benchcopy failed: \(error)")
-            }
         case "touch":
             // So that something outside can tell how far this has got.
             FileManager.default.createFile(atPath: argument, contents: nil)
@@ -707,7 +1079,7 @@ enum ScriptRunner {
             let home = NSHomeDirectory()
             let facts = model.facts
             let biggest = model.flatTop(tree).first ?? 0
-            let library = tree.find(path: "/System/Volumes/Data" + home + "/Library") ?? biggest
+            let library = tree.find(visible: home + "/Library") ?? biggest
             time("reclaimable, biggest") { _ = Accounting.reclaimable([biggest], in: tree) }
             time("story, biggest") { _ = Accounting.story(biggest, in: tree) }
             time("hover line, biggest") { _ = Accounting.hoverLine(biggest, bytes: tree.totals[Int(biggest)], in: tree) }
@@ -718,7 +1090,7 @@ enum ScriptRunner {
             time("pictures, biggest") { _ = LookContents.media(in: biggest, tree: tree) }
             time("the menu for it") { _ = model.actions(for: NamedThing(biggest)) }
             time("kinds, biggest") { _ = tree.kindBytes(biggest) }
-            time("find by path") { _ = tree.find(path: "/System/Volumes/Data" + home + "/Library/Caches") }
+            time("find by path") { _ = tree.find(visible: home + "/Library/Caches") }
             time("search: a", rounds: 3) { _ = Search.run("a", in: tree) }
             time("search: mkv", rounds: 3) { _ = Search.run("mkv", in: tree) }
             time("search: node_modules", rounds: 3) { _ = Search.run("node_modules", in: tree) }
@@ -736,20 +1108,24 @@ enum ScriptRunner {
                 let item = PlanItem(id: "bench", title: "bench", note: "", tierRaw: Tier.yourCall.rawValue, paths: [home + "/Library"], lastKnownBytes: 0)
                 _ = PlanChecks.run(items: [item], trueBytes: [:], otherCopy: [:], runningApps: [], fullAccess: true)
             }
-            let everything = model.flatRows.filter(\.isPlannable).compactMap { row -> PlanItem? in
-                let paths = row.nodes.compactMap { tree.path($0).map(ThingText.visible) }
+            time("check one thing, as a clean does", rounds: 1) {
+                let item = PlanItem(id: "bench", title: "bench", note: "", tierRaw: Tier.yourCall.rawValue, paths: [home + "/Library"], lastKnownBytes: 0)
+                _ = PlanChecks.run(items: [item], trueBytes: [:], otherCopy: [:], runningApps: [], fullAccess: true, thorough: true)
+            }
+            let everything = model.shownRows.filter(\.isPlannable).compactMap { row -> PlanItem? in
+                let paths = row.nodes.compactMap { tree.path($0).map(PathMath.visible) }
                 return paths.isEmpty ? nil : PlanItem(id: row.id, title: row.title, note: "", tierRaw: row.tier.rawValue, paths: paths, lastKnownBytes: row.bytes)
             }
             print("bench \(everything.count) things could be ticked, \(everything.reduce(0) { $0 + $1.paths.count }) paths")
             time("check them all, first time", rounds: 1) { _ = PlanChecks.run(items: everything, trueBytes: [:], otherCopy: [:], runningApps: [], fullAccess: true) }
             time("check them all, again", rounds: 3) { _ = PlanChecks.run(items: everything, trueBytes: [:], otherCopy: [:], runningApps: [], fullAccess: true) }
             time("check them all, while ticking", rounds: 3) { _ = PlanChecks.run(items: everything, trueBytes: [:], otherCopy: [:], runningApps: [], fullAccess: true, fresh: false) }
-            let tops = model.flatRows.filter(\.isPlannable).flatMap(\.nodes)
+            let tops = model.shownRows.filter(\.isPlannable).flatMap(\.nodes)
             print("bench \(tops.count) nodes in those")
             time("what they'd free", rounds: 3) { _ = Accounting.effect(of: tops, except: [], in: tree) }
             let effect = Accounting.effect(of: tops, except: [], in: tree)
             time("the disk as it'd be after", rounds: 3) { _ = AfterPlan(tree: tree, ids: tops, excluded: [], effect: effect) }
-            time("the other copies of each", rounds: 1) { for row in model.flatRows { _ = Accounting.otherCopies(of: row.nodes, in: tree) } }
+            time("the other copies of each", rounds: 1) { for row in model.shownRows { _ = Accounting.otherCopies(of: row.nodes, in: tree) } }
             if let volume = model.volume { time("save the map", rounds: 1) { TreeCache.save(tree, for: volume, rules: model.rules) } }
             if let volume = model.volume { time("read the saved map", rounds: 3) { _ = TreeCache.load(for: volume, rules: model.rules) } }
             time("gather facts, afresh", rounds: 1) { _ = Facts.gather(tree: tree, running: [], fullAccess: true, reusing: nil) }
@@ -772,52 +1148,53 @@ enum ScriptRunner {
             let opened = known.lastOpened.values.filter { $0 >= since }.count
             let found = ChangeMap.usedRecently(known, in: tree, days: 91).count
             print("used in the last 3 months: \(apps) apps, \(watched) watched, \(played) played, \(opened) opened; \(found) of them found on the map")
-        case "refreshcheck":
-            // A refresh of the map on screen, then a full read straight after, and what differs between them. Reads only.
-            guard let tree = model.tree, let volume = model.volume, let journal = model.journal, journal.base == tree.journal else {
-                print("refreshcheck: nothing to refresh (whole \(model.tree?.isWhole ?? false), journal \(model.journal != nil))")
-                return
+        case "leaks":
+            findLeaks(in: model)
+        case "format":
+            // format wide|narrow|auto: the picture on screen in one format, for comparing them.
+            MapHostView.forcedFormat = argument == "wide" ? MapRenderer.outputFormat : argument == "narrow" ? MapRenderer.narrowOutputFormat : nil
+            model.engine.requestFrame()
+            try? await Task.sleep(for: .milliseconds(400))
+        case "gpu":
+            // What the GPU holds for the ring, texture by texture.
+            print("gpu \(model.engine.allocations())")
+        case "headroom":
+            // How far above white this screen can go now, and at most: what the picture's format has to hold.
+            if let screen = mainWindow?.screen {
+                print("headroom now \(screen.maximumExtendedDynamicRangeColorComponentValue), at most \(screen.maximumPotentialExtendedDynamicRangeColorComponentValue), reference \(screen.maximumReferenceExtendedDynamicRangeColorComponentValue)")
             }
-            let rules = model.rules
-            let access = model.hasFullAccess
-            let result = await Task.detached(priority: .userInitiated) { () -> String in
-                Self.compareRefresh(of: tree, volume: volume, journal: journal, rules: rules, fullAccess: access)
-            }.value
-            print(result)
-        case "othercopy":
-            if let row = model.flatRows.first(where: { $0.title == argument }) { model.toggleOtherCopies(of: row) } else { print("no such row: \(argument)") }
-        case "moveplan":
-            // moveplan /path/to/thing -> /folder/it/goes/into
-            let parts = argument.components(separatedBy: " -> ")
-            if parts.count == 2, let item = model.plan.items.first(where: { $0.paths.first == parts[0] }) {
-                model.setStep(.move(folder: parts[1]), for: item.id)
-            } else {
-                print("no such planned thing: \(argument)")
+        case "memory":
+            // memory label: how much memory the app is using now, and the most it has used so far.
+            var info = task_vm_info_data_t()
+            var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.stride / MemoryLayout<integer_t>.stride)
+            let result = withUnsafeMutablePointer(to: &info) { pointer in
+                pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count) }
             }
-        case "tryagain":
-            if let item = model.plan.items.first(where: { $0.paths.first == argument }) { model.tryAgain(item) } else { print("no such planned thing: \(argument)") }
-        case "uninstallplan":
-            // uninstallplan /path/to/Some.app: the planned thing becomes an uninstall, as an unused app's suggestion is.
-            if let item = model.plan.items.first(where: { $0.paths.first == argument }) {
-                model.setStep(.uninstall, for: item.id)
-            } else {
-                print("no such planned thing: \(argument)")
+            if result == KERN_SUCCESS {
+                print(String(format: "memory %@: %.0f MB now, %.0f MB at most", argument, Double(info.phys_footprint) / 1e6, Double(info.ledger_phys_footprint_peak) / 1e6))
             }
-        case "keep":
-            if let row = model.shownRows.first(where: { $0.title == argument }) { model.keep(row) } else { print("no such row: \(argument)") }
-        case "after":
-            model.setPreviewAfter(argument != "off")
-        case "expand":
-            if let row = model.shownRows.first(where: { $0.title == argument }) { model.toggleExpanded(row) } else { print("no such row: \(argument)") }
-        case "keys":
-            for character in argument { model.handleScriptKey(character) }
-        case "window":
-            // window 7 is the last week, 0 the last scan, and -365 what's been untouched for a year.
-            if let d = Int(argument) { model.setChangeWindow(d == 0 ? .lastScan : d < 0 ? .untouched(-d) : .days(d)) }
-        case "search":
-            model.searchActive = true
-            model.searchText = argument
-            model.runSearch()
+        case "frames":
+            print("frames drawn \(argument): \(model.mapView?.framesDrawn ?? -1), ring at \(model.engine.placeNow)")
+        case "footprint":
+            // What the memory is made of, by the tool macOS has for it.
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/footprint")
+            process.arguments = [String(ProcessInfo.processInfo.processIdentifier)]
+            let pipe = Pipe()
+            process.standardOutput = pipe
+            try? process.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            print(String(decoding: data, as: UTF8.self))
+        default:
+            break
+        }
+    }
+
+    /// The window itself: its size, its pictures, the pointer over it.
+    @MainActor
+    private static func runWindowStep(_ command: String, _ argument: String, _ model: AppModel) async {
+        switch command {
         case "panel":
             model.showPanel(argument != "off")
         case "scrolls":
@@ -897,19 +1274,6 @@ enum ScriptRunner {
             print("collide: asked for \(Int(frame.width))x\(Int(frame.height))")
         case "timescale":
             model.engine.timeScale = Float(argument) ?? 1
-        case "checkupdates":
-            Updater.shared.checkNow()
-            Updater.shared.bringForward()
-        case "installupdate":
-            if case .available(let release) = Updater.shared.state { Updater.shared.install(release) } else { print("no update to install: \(Updater.shared.state)") }
-        case "signedlikethis":
-            // Whether the updater would take the app at this path.
-            print("signed like this app: \(Updater.isSignedLikeThis(URL(fileURLWithPath: argument))) — \(argument)")
-        case "updatestate":
-            print("update state \(Updater.shared.state)")
-            if case .available(let release) = Updater.shared.state {
-                print("update window: Headroom \(Updater.name(of: release)) is out. You have \(Updater.currentName(besides: release)).")
-            }
         case "shotwindow":
             // A picture of another window, by its title: "shotwindow Update Headroom /path.png".
             guard let cut = argument.range(of: " /") else { print("shotwindow needs a title and a path"); return }
@@ -921,107 +1285,6 @@ enum ScriptRunner {
             guard let w = mainWindow else { print("no window"); return }
             await picture(of: w, to: argument)
             print("shot \(argument)")
-        case "leaks":
-            findLeaks(in: model)
-        case "format":
-            // format wide|narrow|auto: the picture on screen in one format, for comparing them.
-            MapHostView.forcedFormat = argument == "wide" ? MapRenderer.outputFormat : argument == "narrow" ? MapRenderer.narrowOutputFormat : nil
-            model.engine.requestFrame()
-            try? await Task.sleep(for: .milliseconds(400))
-        case "gpu":
-            // What the GPU holds for the ring, texture by texture.
-            print("gpu \(model.engine.allocations())")
-        case "headroom":
-            // How far above white this screen can go now, and at most: what the picture's format has to hold.
-            if let screen = mainWindow?.screen {
-                print("headroom now \(screen.maximumExtendedDynamicRangeColorComponentValue), at most \(screen.maximumPotentialExtendedDynamicRangeColorComponentValue), reference \(screen.maximumReferenceExtendedDynamicRangeColorComponentValue)")
-            }
-        case "labelpoint":
-            // labelpoint 2: the pointer arrives on the name around the ring with this number, and moves a little while it's there.
-            guard let w = mainWindow, let at = labelPoint(argument, model) else { print("no such name: \(argument)"); return }
-            func move(_ x: Double, _ y: Double) {
-                let p = NSPoint(x: x, y: w.frame.height - y)
-                guard let event = NSEvent.mouseEvent(with: .mouseMoved, location: p, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0) else { return }
-                w.contentView?.superview?.hitTest(p)?.mouseMoved(with: event)
-                model.mapView?.mouseMoved(with: event)
-            }
-            let label = at.label
-            print("name \"\(label.title)\" at \(Int(at.x)),\(Int(at.y)), lands on \(w.contentView?.superview?.hitTest(NSPoint(x: at.x, y: w.frame.height - at.y)).map { String(describing: type(of: $0)).prefix(24) } ?? "nothing")")
-            model.enterLabel(piece: label.pieceIndex)
-            print("arrived: lit \(model.hover?.title ?? "nothing")")
-            move(at.x, at.y)
-            try? await Task.sleep(for: .milliseconds(60))
-            print("after a small move: lit \(model.hover?.title ?? "nothing")")
-            move(at.x + 2, at.y)
-            try? await Task.sleep(for: .milliseconds(60))
-            print("after another: lit \(model.hover?.title ?? "nothing")")
-        case "labelleave":
-            // labelleave 2: the pointer goes from that name to empty space beside the ring.
-            guard let w = mainWindow, let at = labelPoint(argument, model) else { print("no such name: \(argument)"); return }
-            model.leaveLabel(piece: at.label.pieceIndex)
-            let p = NSPoint(x: 8, y: w.frame.height - 400)
-            if let event = NSEvent.mouseEvent(with: .mouseMoved, location: p, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0) { model.mapView?.mouseMoved(with: event) }
-            print("left: lit \(model.hover?.title ?? "nothing")")
-        case "panelhover":
-            // panelhover 2: the pointer on the row in the inspector for that name, then moving about on the row a little.
-            guard let w = mainWindow, let at = labelPoint(argument, model) else { print("no such name: \(argument)"); return }
-            model.highlight(node: at.label.node)
-            print("on the row for \"\(at.label.title)\": lit \(model.hover?.title ?? "nothing")")
-            for nudge in [0.0, 3.0, 6.0] {
-                let p = NSPoint(x: w.frame.width - 200 + nudge, y: w.frame.height - 500)
-                if let event = NSEvent.mouseEvent(with: .mouseMoved, location: p, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0) { model.mapView?.mouseMoved(with: event) }
-                try? await Task.sleep(for: .milliseconds(60))
-                print("  after a move on the row: lit \(model.hover?.title ?? "nothing")")
-            }
-            model.highlight(node: nil)
-            print("off the row: lit \(model.hover?.title ?? "nothing")")
-        case "ringpoint":
-            // The pointer on the biggest piece of the ring itself.
-            guard let w = mainWindow, let piece = model.engine.layout.pieces.filter({ !$0.isSmaller && $0.style == 0 }).max(by: { $0.bytes < $1.bytes }) else { return }
-            let angle = Double(piece.a0 + piece.a1) / 2, radius = Double(piece.r0 + piece.r1) / 2 * model.ring.radius
-            let p = NSPoint(x: model.ring.center.x + sin(angle) * radius, y: w.frame.height - (model.ring.center.y - cos(angle) * radius))
-            print("ring: lands on \(w.contentView?.superview?.hitTest(p).map { String(describing: type(of: $0)).prefix(24) } ?? "nothing")")
-            if let event = NSEvent.mouseEvent(with: .mouseMoved, location: p, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0) { model.mapView?.mouseMoved(with: event) }
-            print("on the ring: lit \(model.hover?.title ?? "nothing")")
-        case "ringclick":
-            // ringclick 2 2: a double-click on this piece of the ring, counting what can be clicked. `ringclick 2` is one click.
-            let numbers = argument.split(separator: " ").map(String.init)
-            let pieces = model.engine.layout.pieces.filter { !$0.isSmaller }
-            guard let at = Int(numbers.first ?? ""), pieces.indices.contains(at), let tree = model.tree else { print("no such piece: \(argument)"); return }
-            let piece = pieces[at]
-            let angle = Double(piece.a0 + piece.a1) / 2, radius = Double(piece.r0 + piece.r1) / 2 * model.ring.radius
-            print("on the ring at \"\(tree.name(piece.node))\", in \(model.displayName(model.focus)), \(model.plan.count) selected")
-            await run("press", "\(model.ring.center.x + sin(angle) * radius) \(model.ring.center.y - cos(angle) * radius) \(numbers.count > 1 ? numbers[1] : "1")", model)
-            try? await Task.sleep(for: .milliseconds(700))
-            print("now in \(model.displayName(model.focus)), selected thing \(model.selected.map(model.displayName) ?? "none"), \(model.plan.count) selected")
-        case "labelclick":
-            // labelclick 2: what a click on that name does. `labelclick 2 2` is the second click of a double-click.
-            let numbers = argument.split(separator: " ").map(String.init)
-            guard let at = labelPoint(numbers.first ?? "", model) else { print("no such name: \(argument)"); return }
-            print("clicking \"\(at.label.title)\", in \(model.displayName(model.focus)), \(model.plan.count) selected")
-            model.openLabel(piece: at.label.pieceIndex, count: numbers.count > 1 ? Int(numbers[1]) ?? 1 : 1)
-            try? await Task.sleep(for: .milliseconds(700))
-            print("now in \(model.displayName(model.focus)), selected thing \(model.selected.map(model.displayName) ?? "none"), \(model.plan.count) selected")
-        case "busy":
-            // busy anyway|cancel: what Send to Trash is asking, because something is using the folder, and the answer.
-            print("busy: \(model.busyToSend.map { "\($0.title) is in use. \($0.why)" } ?? "nothing asked")")
-            guard let busy = model.busyToSend else { return }
-            if argument.hasPrefix("/") {
-                // A picture of the question, which stays open.
-                try? await Task.sleep(for: .milliseconds(500))
-                if let sheet = NSApp.windows.first(where: { $0.isVisible && $0.sheetParent != nil }) { await picture(of: sheet, to: argument) } else { print("no sheet to picture: \(NSApp.windows.map(\.title))") }
-                return
-            }
-            model.busyToSend = nil
-            if argument == "anyway" {
-                model.sendAnyway(busy)
-                while model.cleanProgress != nil { try? await Task.sleep(for: .milliseconds(50)) }
-            }
-        case "cleananyway":
-            if let item = model.plan.items.first(where: { $0.paths.first == argument }) { model.acceptInUse(for: item.id) } else { print("no such planned thing: \(argument)") }
-        case "button":
-            // What the button under the Free Up list says, what's held back, and why.
-            print("ready \(model.readyItems.count) of \(model.plan.count); held: \(model.heldBackItems.map { "\($0.title): \(model.checks[$0.id]?.problems.map(\.text) ?? [])" })")
         case "about":
             // about /path/to/picture.png: About Headroom from the app menu, as a click on it would open it.
             let titles = { NSApp.windows.filter(\.isVisible).map(\.title) }
@@ -1077,6 +1340,85 @@ enum ScriptRunner {
             // Stage Manager shrinks a window it can't bring forward, as on a locked screen. It leaves floating ones alone.
             mainWindow?.level = .floating
             mainWindow?.orderFrontRegardless()
+        case "hide":
+            NSApp.hide(nil)
+        case "unhide":
+            NSApp.unhide(nil)
+        case "minimize":
+            mainWindow?.miniaturize(nil)
+        case "restore":
+            mainWindow?.deminiaturize(nil)
+        case "lose":
+            model.mapView?.loseWhatItMayLose()
+        case "redraw":
+            model.mapView?.startAnimating()
+        case "stopwhenhidden":
+            // As in real use, where nothing is drawn while the window can't be seen.
+            MapHostView.drawsWhenHidden = false
+        case "windowid":
+            // The window's number and frame, for a recorder outside the app.
+            if let w = mainWindow {
+                print("window \(w.windowNumber) at \(Int(w.frame.minX)),\(Int(w.frame.minY)) \(Int(w.frame.width))x\(Int(w.frame.height)), backing \(w.backingScaleFactor)")
+            }
+        case "frame":
+            // Where the window is, whether it fills the screen, and whether it has been told to move.
+            if let w = mainWindow {
+                print("frame \(argument): \(Int(w.frame.minX)),\(Int(w.frame.minY)) \(Int(w.frame.width))x\(Int(w.frame.height)) zoomed \(w.isZoomed); moves started \(model.mapView?.windowMovesStarted ?? -1); selected \(model.selected.map { model.displayName($0) } ?? "nothing")")
+            }
+        case "press":
+            // press x y clicks [dx dy]: a click, double-click or drag at points from the window's top left, given straight to
+            // the app. Your real pointer doesn't move. `press piece` picks the middle of the biggest piece on the ring.
+            guard let w = mainWindow else { return }
+            var parts = argument.split(separator: " ").map(String.init)
+            var x = 0.0, y = 0.0
+            var flags: NSEvent.ModifierFlags = []
+            if parts.first == "cmd" {
+                parts.removeFirst()
+                flags = .command
+            }
+            if parts.first == "piece" {
+                parts.removeFirst()
+                let layout = model.engine.layout
+                guard let piece = layout.pieces.filter({ !$0.isSmaller && $0.style == .folder }).max(by: { $0.bytes < $1.bytes }) else {
+                    print("press: no piece among \(layout.pieces.count)")
+                    return
+                }
+                let angle = Double(piece.a0 + piece.a1) / 2, radius = Double(piece.r0 + piece.r1) / 2 * model.ring.radius
+                x = model.ring.center.x + sin(angle) * radius
+                y = model.ring.center.y - cos(angle) * radius
+            } else {
+                guard parts.count >= 3, let px = Double(parts[0]), let py = Double(parts[1]) else { return }
+                x = px
+                y = py
+                parts.removeFirst(2)
+            }
+            let clicks = Int(parts.first ?? "1") ?? 1
+            let dx = parts.count > 2 ? Double(parts[1]) ?? 0 : 0, dy = parts.count > 2 ? Double(parts[2]) ?? 0 : 0
+            func send(_ type: NSEvent.EventType, _ px: Double, _ py: Double, count: Int) {
+                let at = NSPoint(x: px, y: w.frame.height - py)
+                if let event = NSEvent.mouseEvent(with: type, location: at, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: count, pressure: 1) {
+                    NSApp.sendEvent(event)
+                }
+            }
+            let target = w.contentView?.superview?.hitTest(NSPoint(x: x, y: w.frame.height - y))
+            print("press at \(Int(x)),\(Int(y)) lands on \(target.map { String(describing: type(of: $0)) } ?? "nothing")")
+            for click in 1...max(clicks, 1) {
+                send(.leftMouseDown, x, y, count: click)
+                if dx != 0 || dy != 0 {
+                    for step in 1...6 { send(.leftMouseDragged, x + dx * Double(step) / 6, y + dy * Double(step) / 6, count: click) }
+                }
+                send(.leftMouseUp, x + dx, y + dy, count: click)
+                try? await Task.sleep(for: .milliseconds(80))
+            }
+        default:
+            break
+        }
+    }
+
+    /// The card that Space opens.
+    @MainActor
+    private static func runCardStep(_ command: String, _ argument: String, _ model: AppModel) async {
+        switch command {
         case "look":
             if let node = resolve(argument, model) { model.openLook(node) } else { model.toggleLook() }
             try? await Task.sleep(for: .milliseconds(400))
@@ -1131,130 +1473,30 @@ enum ScriptRunner {
             } else {
                 print("card \(argument): closed")
             }
-        case "keydown":
-            // A key as the app gets it, not the menu bar: keydown 49 is space, keydown 123 cmd is ⌘←.
-            let words = argument.split(separator: " ")
-            guard let w = mainWindow, let first = words.first, let code = UInt16(first) else { return }
-            var flags: NSEvent.ModifierFlags = []
-            for word in words.dropFirst() {
-                switch word {
-                case "cmd": flags.insert(.command)
-                case "opt": flags.insert(.option)
-                case "shift": flags.insert(.shift)
-                case "ctrl": flags.insert(.control)
-                default: break
-                }
-            }
-            if let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: w.windowNumber, context: nil, characters: " ", charactersIgnoringModifiers: " ", isARepeat: false, keyCode: code) {
-                NSApp.sendEvent(event)
-            }
-            try? await Task.sleep(for: .milliseconds(120))
-        case "volume":
-            if let facts = VolumeFacts.read(path: argument) { model.switchVolume(facts) } else { print("no such disk: \(argument)") }
-        case "memory":
-            // memory label: how much memory the app is using now, and the most it has used so far.
-            var info = task_vm_info_data_t()
-            var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.stride / MemoryLayout<integer_t>.stride)
-            let result = withUnsafeMutablePointer(to: &info) { pointer in
-                pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count) }
-            }
-            if result == KERN_SUCCESS {
-                print(String(format: "memory %@: %.0f MB now, %.0f MB at most", argument, Double(info.phys_footprint) / 1e6, Double(info.ledger_phys_footprint_peak) / 1e6))
-            }
-        case "hide":
-            NSApp.hide(nil)
-        case "unhide":
-            NSApp.unhide(nil)
-        case "minimize":
-            mainWindow?.miniaturize(nil)
-        case "restore":
-            mainWindow?.deminiaturize(nil)
-        case "lose":
-            model.mapView?.loseWhatItMayLose()
-        case "redraw":
-            model.mapView?.startAnimating()
-        case "stopwhenhidden":
-            // As in real use, where nothing is drawn while the window can't be seen.
-            MapHostView.drawsWhenHidden = false
-        case "frames":
-            print("frames drawn \(argument): \(model.mapView?.framesDrawn ?? -1), ring at \(model.engine.placeNow)")
-        case "mark":
-            // mark name: a moment another program can wait for and line up with, on the clock every process shares.
-            print(String(format: "mark %@ at %.4f", argument, ProcessInfo.processInfo.systemUptime))
-        case "windowid":
-            // The window's number and frame, for a recorder outside the app.
-            if let w = mainWindow {
-                print("window \(w.windowNumber) at \(Int(w.frame.minX)),\(Int(w.frame.minY)) \(Int(w.frame.width))x\(Int(w.frame.height)), backing \(w.backingScaleFactor)")
-            }
-        case "frame":
-            // Where the window is, whether it fills the screen, and whether it has been told to move.
-            if let w = mainWindow {
-                print("frame \(argument): \(Int(w.frame.minX)),\(Int(w.frame.minY)) \(Int(w.frame.width))x\(Int(w.frame.height)) zoomed \(w.isZoomed); moves started \(model.mapView?.windowMovesStarted ?? -1); selected \(model.selected.map { model.displayName($0) } ?? "nothing")")
-            }
-        case "press":
-            // press x y clicks [dx dy]: a click, double-click or drag at points from the window's top left, given straight to
-            // the app. Your real pointer doesn't move. `press piece` picks the middle of the biggest piece on the ring.
-            guard let w = mainWindow else { return }
-            var parts = argument.split(separator: " ").map(String.init)
-            var x = 0.0, y = 0.0
-            var flags: NSEvent.ModifierFlags = []
-            if parts.first == "cmd" {
-                parts.removeFirst()
-                flags = .command
-            }
-            if parts.first == "piece" {
-                parts.removeFirst()
-                let layout = model.engine.layout
-                guard let piece = layout.pieces.filter({ !$0.isSmaller && $0.style == 0 }).max(by: { $0.bytes < $1.bytes }) else {
-                    print("press: no piece among \(layout.pieces.count)")
-                    return
-                }
-                let angle = Double(piece.a0 + piece.a1) / 2, radius = Double(piece.r0 + piece.r1) / 2 * model.ring.radius
-                x = model.ring.center.x + sin(angle) * radius
-                y = model.ring.center.y - cos(angle) * radius
-            } else {
-                guard parts.count >= 3, let px = Double(parts[0]), let py = Double(parts[1]) else { return }
-                x = px
-                y = py
-                parts.removeFirst(2)
-            }
-            let clicks = Int(parts.first ?? "1") ?? 1
-            let dx = parts.count > 2 ? Double(parts[1]) ?? 0 : 0, dy = parts.count > 2 ? Double(parts[2]) ?? 0 : 0
-            func send(_ type: NSEvent.EventType, _ px: Double, _ py: Double, count: Int) {
-                let at = NSPoint(x: px, y: w.frame.height - py)
-                if let event = NSEvent.mouseEvent(with: type, location: at, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: count, pressure: 1) {
-                    NSApp.sendEvent(event)
-                }
-            }
-            let target = w.contentView?.superview?.hitTest(NSPoint(x: x, y: w.frame.height - y))
-            print("press at \(Int(x)),\(Int(y)) lands on \(target.map { String(describing: type(of: $0)) } ?? "nothing")")
-            for click in 1...max(clicks, 1) {
-                send(.leftMouseDown, x, y, count: click)
-                if dx != 0 || dy != 0 {
-                    for step in 1...6 { send(.leftMouseDragged, x + dx * Double(step) / 6, y + dy * Double(step) / 6, count: click) }
-                }
-                send(.leftMouseUp, x + dx, y + dy, count: click)
-                try? await Task.sleep(for: .milliseconds(80))
-            }
-        case "footprint":
-            // What the memory is made of, by the tool macOS has for it.
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/footprint")
-            process.arguments = [String(ProcessInfo.processInfo.processIdentifier)]
-            let pipe = Pipe()
-            process.standardOutput = pipe
-            try? process.run()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-            print(String(decoding: data, as: UTF8.self))
-        case "report":
-            report(model)
-        case "quit":
-            fflush(stdout)
-            // As the Quit menu does it, so a quit that waits for a clean works here too.
-            NSApp.terminateSoon()
         default:
-            print("unknown step: \(command)")
+            break
+        }
+    }
+
+    /// Looking for a new version and putting it in place.
+    @MainActor
+    private static func runUpdatesStep(_ command: String, _ argument: String, _ model: AppModel) async {
+        switch command {
+        case "checkupdates":
+            Updater.shared.checkNow()
+            Updater.shared.bringForward()
+        case "installupdate":
+            if case .available(let release) = Updater.shared.state { Updater.shared.install(release) } else { print("no update to install: \(Updater.shared.state)") }
+        case "signedlikethis":
+            // Whether the updater would take the app at this path.
+            print("signed like this app: \(Updater.isSignedLikeThis(URL(fileURLWithPath: argument))) — \(argument)")
+        case "updatestate":
+            print("update state \(Updater.shared.state)")
+            if case .available(let release) = Updater.shared.state {
+                print("update window: Headroom \(Updater.name(of: release)) is out. You have \(Updater.currentName(besides: release)).")
+            }
+        default:
+            break
         }
     }
 
@@ -1308,7 +1550,7 @@ enum ScriptRunner {
             collect("changes", AppModel.changeMap(tree: tree, window: window, rules: model.rules, facts: model.facts).rows(tree: tree, rules: model.rules))
         }
         model.setLens(.map)
-        collect("suggestions", model.flatRows)
+        collect("suggestions", model.shownRows)
         collect("boxes", Sections.build(from: Wins.build(tree: tree, rules: model.rules, running: [], facts: model.facts), tree: tree, facts: model.facts))
         collect("copy list", model.listText()?.text ?? "")
         for node in things {
@@ -1455,11 +1697,11 @@ enum ScriptRunner {
         if tree.isPartial { print("still reading \(formatBytes(tree.totals[Int(tree.hidden)])), \(model.scanFiles) files so far") }
         print(String(format: "pieces %d, labels %d, last scan loaded in %.1f ms", model.engine.layout.pieces.count, model.labels.count, model.cacheLoadMilliseconds))
         print("last scan \(model.lastScanNote); read in full \(Int(Date().timeIntervalSince(tree.fullReadAt))) s ago, journal \(tree.journal == nil ? "none" : "kept"), whole \(tree.isWhole)")
-        print("focus \(model.displayName(model.focus)), planned \(model.plan.count), you'd get back \(formatBytes(model.planBytes)), message: \(model.message ?? "none")")
+        print("focus \(model.displayName(model.focus)), planned \(model.plan.count), you'd get back \(formatBytes(model.planNumbers.total)), message: \(model.message ?? "none")")
         print("plan:")
         for item in model.plan.items {
             let check = model.checks[item.id]
-            print("  \(item.title) — \(formatBytes(model.planBytesByItem[item.id] ?? 0)) step=\(item.step) paths=\(item.paths.count) excluded=\(item.excluded.count) problems=\(check?.problems.map(\.text) ?? [])")
+            print("  \(item.title) — \(formatBytes(model.planNumbers.byItem[item.id] ?? 0)) step=\(item.step) paths=\(item.paths.count) excluded=\(item.excluded.count) problems=\(check?.problems.map(\.text) ?? [])")
         }
         if let after = model.afterClean { print("after clean: \(formatBytes(after.bytes)) in the Trash, \(after.things.count) things, failed \(after.failed), state \(after.state)") }
         print("disks: \(model.otherDisks(for: "/").map { "\($0.name) \($0.isPluggedIn ? "plugged in" : "away")" })")
