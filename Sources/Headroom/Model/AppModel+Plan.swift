@@ -382,33 +382,10 @@ extension AppModel {
         }
     }
 
-    func ghostShare() -> Float {
-        guard mode == .freeUp, let tree, !previewingAfter else { return 0 }
-        return Float(planNumbers.total) / Float(max(tree.capacityBytes, 1))
-    }
-
-    /// The new free space wears the colours of what's making room, in the order of the list.
-    func ghostColours() -> [(end: Float, color: SIMD3<Float>)] {
-        guard planNumbers.total > 0 else { return [] }
-        var out: [(end: Float, color: SIMD3<Float>)] = []
-        var sum: UInt64 = 0
-        // From the sections, not the boxes on screen: it's the whole disk's free space, wherever you're looking.
-        for section in suggestions.sections {
-            let bytes = section.allRows.reduce(UInt64(0)) { $0 &+ (planNumbers.byItem[$1.id] ?? 0) &+ (planNumbers.byItem[PlanItem.otherCopyID(of: $1.id)] ?? 0) }
-            guard bytes > 0 else { continue }
-            sum &+= bytes
-            out.append((min(Float(sum) / Float(planNumbers.total), 1), section.color.linearP3))
-        }
-        if sum < planNumbers.total { out.append((1, Palette.Box.hand.linearP3)) }
-        if out.count > MapEngine.ghostSliceLimit {
-            out = Array(out.prefix(MapEngine.ghostSliceLimit - 1)) + [(1, out[out.count - 1].color)]
-        }
-        return out
-    }
-
+    /// Free Up's preview of the free space after cleaning, drawn onto the Free wedge, is off: over the views' own colours it
+    /// covered the pieces beside it. The middle of the ring says what cleaning frees instead.
     func refreshGhost() {
-        engine.setGhostColours(ghostColours())
-        engine.setGhost(ghostShare())
+        engine.setGhost(0)
     }
 
     /// Looks at everything that's ticked as soon as the ticking stops, so what needs a look shows before you press Clean.
@@ -467,7 +444,6 @@ extension AppModel {
         let bytes = rows.reduce(UInt64(0)) { $0 &+ $1.aTickFrees }
         pointing = Pointing(id: "recommended", title: "Recommended", bytes: bytes, color: Palette.Box.quick)
         highlight(nodes: rows.flatMap(\.nodes))
-        engine.setPreview(Float(bytes) / Float(max(tree.capacityBytes, 1)), color: Palette.Box.quick.linearP3)
     }
 
     private func setPlanned(_ row: WinRow, _ on: Bool, in tree: DiskTree) {
@@ -536,8 +512,6 @@ extension AppModel {
         let color = row.flatMap { rowColours[$0.id] } ?? box.color
         pointing = Pointing(id: id, title: row?.title ?? box.title, bytes: bytes, color: color)
         highlight(nodes: rows.flatMap(\.nodes))
-        let adding = (row == nil ? box.rowsATickTakes : rows).filter { rowStates[$0.id] != .all }.reduce(UInt64(0)) { $0 &+ $1.aTickFrees }
-        engine.setPreview(Float(adding) / Float(max(tree.capacityBytes, 1)), color: color.linearP3)
         // The biggest of what's lit gets its name around the ring.
         var picks: [LabelPlacer.Pick] = []
         let layout = engine.layout
@@ -820,7 +794,7 @@ extension AppModel {
             engine.setGhost(0)
             engine.apply(drawing(tree, after: after), .settle)
         } else {
-            engine.setGhost(ghostShare())
+            engine.setGhost(0)
             engine.apply(drawing(tree), .settle)
             placeLabels(after: 0.3)
         }

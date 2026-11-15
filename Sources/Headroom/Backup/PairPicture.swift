@@ -202,17 +202,18 @@ struct PairPicture {
         for (rel, ghost) in movedRel where ghost != 0 {
             places[ghost] = driveFiles[rel] != nil ? .moved : .missing
         }
-        // Each file counted once: a file on both sides is one file, the Mac's.
+        // Each file counted once: a file on both sides is one file, the Mac's. At the space it takes, as the ring draws it, so the
+        // legend and the ring agree; a file still downloading can say it's bigger than that.
         var counts: [PairPlace: (files: Int, bytes: UInt64)] = [:]
         for mine in macFiles.values {
             guard let place = places[mine.node] else { continue }
             counts[place, default: (0, 0)].files += 1
-            counts[place, default: (0, 0)].bytes &+= mine.size
+            counts[place, default: (0, 0)].bytes &+= tree.nodes[Int(mine.node)].bytes
         }
         for (rel, theirs) in driveFiles where macFiles[rel] == nil {
             guard let place = places[theirs.node] else { continue }
             counts[place, default: (0, 0)].files += 1
-            counts[place, default: (0, 0)].bytes &+= theirs.size
+            counts[place, default: (0, 0)].bytes &+= tree.nodes[Int(theirs.node)].bytes
         }
         for (rel, ghost) in movedRel where ghost != 0 && driveFiles[rel] == nil {
             counts[.missing, default: (0, 0)].files += 1

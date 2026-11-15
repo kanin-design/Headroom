@@ -130,9 +130,11 @@ open it in Terminal or move it to the Trash.
 ### Backup
 
 Backup moves files of 100 MB and up to another drive and leaves a small note in place of each. Choose the drive at the
-bottom right, select files in the list or on the ring, and click **Move**. Each file is copied and verified against its
-SHA-256 before the original goes to the Trash, so Undo puts it back until you empty it. Each copy gets a `name.sha256`
-that `shasum -a 256 -c` can check; the note, `name.hrmoved`, is plain text saying where the file went.
+bottom right, select files in the list or on the ring, and click **Move**. On the drive, each file goes in a folder named
+for the Mac, at its full path: `/Users/you/Downloads/F.mkv` from a Mac named Studio lands at
+`Backup from Studio/Users/you/Downloads/F.mkv`. Each file is copied and verified against its SHA-256 before the original
+goes to the Trash, so Undo puts it back until you empty it. Each copy gets a `name.sha256` that `shasum -a 256 -c` can
+check; the note, `name.hrmoved`, is plain text saying where the file went.
 
 **Show moved files** draws moved files where they were, even with the drive unplugged. **Compare with *drive*** splits
 the ring: this folder on the Mac on the left, on the drive on the right, coloured by where each file is. Select files on

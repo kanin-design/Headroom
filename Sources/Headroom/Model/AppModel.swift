@@ -1408,10 +1408,8 @@ final class AppModel {
         guard let tree, index < engine.layout.pieces.count else { return }
         let p = engine.layout.pieces[index]
         let n = tree.nodes[Int(p.node)]
-        if n.has(NodeFlag.free) {
-            setMode(.freeUp)
-            return
-        }
+        // Free space opens nothing, and doesn't change the mode.
+        if n.has(NodeFlag.free) { return }
         if p.isSmaller {
             if p.node != focus { zoom(into: p.node) }
             return
@@ -1742,20 +1740,27 @@ extension AppModel {
         let wasPair = pair != nil
         pair = nil
         driveSelection = []
-        if wasPair, bareTree != nil {
+        // Whatever was on screen, the real map or a picture made from it, what follows reads the one that's there now.
+        var changed = false
+        if wasPair, tree !== real {
             tree = real
+            // What was noted in the picture of both sides is numbered for it, not for the map.
+            selected = nil
+            trail = []
             if let back = focusBeforePair, Int(back) < real.count { focus = back }
             focusBeforePair = nil
+            changed = true
         }
         let wanted = showGhosts && inBackup
         if wanted, let picture = real.withGhosts(movedNotes) {
             tree = picture
             bareTree = real
-        } else if bareTree != nil {
+            changed = true
+        } else if tree !== real {
             tree = real
-        } else {
-            return
+            changed = true
         }
+        guard changed else { return }
         nameCache = [:]
         treeVersion += 1
         if let tree { resolvePlanSynchronously(in: tree) }
@@ -1770,7 +1775,7 @@ extension AppModel {
         if folder == 0 || real.nodes[Int(folder)].has(NodeFlag.synthetic) { folder = real.home }
         guard folder != 0, let raw = real.path(folder) else { return }
         let visible = PathMath.visible(raw)
-        let drivePath = visible == NSHomeDirectory() ? destination.root : BackupPaths.onDrive(visible, under: destination.root)
+        let drivePath = BackupPaths.onDrive(visible, under: destination.root)
         if let pair, pair.macPath == raw, pair.drivePath == drivePath, tree === pair.tree { return }
         pairTask?.cancel()
         let notes = movedNotes, ghosts = showGhosts, name = destination.drive.name
@@ -1806,7 +1811,12 @@ extension AppModel {
         pairTask?.cancel()
         pair = nil
         guard let real = bareTree else { return }
+        let wasPair = focusBeforePair != nil
         tree = real
+        if wasPair {
+            selected = nil
+            trail = []
+        }
         if let back = focusBeforePair, Int(back) < real.count { focus = back }
         focusBeforePair = nil
         nameCache = [:]

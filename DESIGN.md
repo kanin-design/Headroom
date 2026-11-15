@@ -251,6 +251,10 @@ duplicates instead of the suggestions.
   selecting it for one takes it off the other, and says so. Each button does one thing and says it: **Clean** (green, to
   the Trash) and **Move … to <drive>** (blue).
 - **Big files only.** Backup offers and takes files of 100 MB and up; smaller ones cost more to move than they free.
+- **Where it goes.** In `Backup from <Mac>` on the drive, named as Sharing names the Mac, at the file's full path on the
+  Mac: `/Users/you/Downloads/F.mkv` goes to `Backup from Studio/Users/you/Downloads/F.mkv`. Nothing mixes with what the
+  drive holds already, and each path says which Mac and folder it came from. Choose Folder… puts that folder elsewhere
+  on the drive. Compare with *drive* looks in the same place.
 - **A move proves itself first.** The file is hashed as it's read, written under a hidden name, read back from the drive
   past every cache and hashed again; only a copy that matches gets its name, and it never replaces anything. Then
   `name.sha256` goes beside it and `name.hrmoved` where the file was, and only then does the original go to the Trash, on

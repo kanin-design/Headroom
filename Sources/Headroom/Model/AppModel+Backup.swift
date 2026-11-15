@@ -81,7 +81,7 @@ extension AppModel {
         panel.canCreateDirectories = true
         panel.allowsMultipleSelection = false
         panel.prompt = "Choose"
-        panel.message = "Choose where Backup puts files. They keep their folder structure."
+        panel.message = "Choose where Backup puts files. They go in \(BackupPaths.macFolder), at their full path."
         panel.directoryURL = URL(fileURLWithPath: BackupDestination(drive: drive, folder: backup.destination?.folder ?? "").root)
         guard panel.runModal() == .OK, let url = panel.url, let holder = DriveInfo.holding(url.path), whyNotDestination(holder) == nil else { return }
         chooseDestination(holder, folder: BackupPaths.fromDriveTop(url.path, mount: holder.mountPath))
@@ -93,8 +93,11 @@ extension AppModel {
     /// the age chosen. Largest first.
     func backupCandidates() -> [UInt32] {
         guard let tree = workTree, !tree.isPartial else { return [] }
-        if let memo = backupCandidatesMemo, memo.version == treeVersion, memo.focus == focus, memo.age == backupAge { return memo.rows }
-        let start = Int(tree.dfsIn[Int(focus)]), size = Int(tree.dfsSize[Int(focus)])
+        // With both sides on screen, the folder they were drawn for: the picture's own numbers aren't the map's.
+        let here = showsPair ? (focusBeforePair ?? 0) : focus
+        guard Int(here) < tree.count else { return [] }
+        if let memo = backupCandidatesMemo, memo.version == treeVersion, memo.focus == here, memo.age == backupAge { return memo.rows }
+        let start = Int(tree.dfsIn[Int(here)]), size = Int(tree.dfsSize[Int(here)])
         let before = backupAge == 0 ? UInt32.max : UInt32(clamping: Int(Date().timeIntervalSince1970) - backupAge * 86_400)
         let trash = trashNode(in: tree)
         var rows: [UInt32] = []
@@ -115,7 +118,7 @@ extension AppModel {
             let visible = PathMath.visible(path)
             return Safety.canTrash(path) && !self.backup.isKept(visible)
         }.prefix(300))
-        backupCandidatesMemo = (treeVersion, focus, backupAge, offered)
+        backupCandidatesMemo = (treeVersion, here, backupAge, offered)
         return offered
     }
 

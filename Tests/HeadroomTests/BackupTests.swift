@@ -71,12 +71,17 @@ final class BackupTests: XCTestCase {
 
     // MARK: Where things go
 
-    func testAFileKeepsItsPlaceOnTheDrive() {
-        XCTAssertEqual(BackupPaths.relative("/Users/x/Media/Movies/F.mkv", home: "/Users/x"), "Media/Movies/F.mkv")
-        XCTAssertEqual(BackupPaths.onDrive("/Users/x/Media/Movies/F.mkv", under: "/Volumes/Spare", home: "/Users/x"), "/Volumes/Spare/Media/Movies/F.mkv")
-        XCTAssertEqual(BackupPaths.onDrive("/Users/x/Media/F.mkv", under: "/Volumes/Spare/Backups", home: "/Users/x"), "/Volumes/Spare/Backups/Media/F.mkv")
-        XCTAssertEqual(BackupPaths.relative("/Users/Shared/Big.mov", home: "/Users/x"), "Macintosh HD/Users/Shared/Big.mov", "outside home, under the disk's name")
-        XCTAssertEqual(BackupPaths.relative("/Volumes/Other/Films/F.mkv", home: "/Users/x"), "Other/Films/F.mkv")
+    func testAFileKeepsItsWholePathInTheMacsFolder() {
+        let mac = "Backup from Test"
+        XCTAssertEqual(BackupPaths.relative("/Users/x/Downloads/F.mkv", folder: mac), "Backup from Test/Users/x/Downloads/F.mkv", "the home folder stays in the path")
+        XCTAssertEqual(BackupPaths.relative("/System/Volumes/Data/Users/x/Downloads/F.mkv", folder: mac), "Backup from Test/Users/x/Downloads/F.mkv",
+                       "the path as the Finder shows it")
+        XCTAssertEqual(BackupPaths.onDrive("/Users/x/Media/Movies/F.mkv", under: "/Volumes/Spare", folder: mac), "/Volumes/Spare/Backup from Test/Users/x/Media/Movies/F.mkv")
+        XCTAssertEqual(BackupPaths.onDrive("/Users/x/Media/F.mkv", under: "/Volumes/Spare/Backups", folder: mac), "/Volumes/Spare/Backups/Backup from Test/Users/x/Media/F.mkv")
+        XCTAssertEqual(BackupPaths.relative("/Users/Shared/Big.mov", folder: mac), "Backup from Test/Users/Shared/Big.mov")
+        XCTAssertEqual(BackupPaths.relative("/Volumes/Other/Films/F.mkv", folder: mac), "Backup from Test/Volumes/Other/Films/F.mkv")
+        XCTAssertTrue(BackupPaths.macFolder.hasPrefix("Backup from "), "named for this Mac")
+        XCTAssertFalse(BackupPaths.macFolder.dropFirst("Backup from ".count).contains("/"), "one folder, whatever the Mac is called")
         XCTAssertEqual(BackupPaths.fromDriveTop("/Volumes/Spare/Media/F.mkv", mount: "/Volumes/Spare"), "Media/F.mkv")
         XCTAssertEqual(BackupDestination(drive: drive, folder: "Backups").root, "/Volumes/Spare/Backups")
         XCTAssertEqual(BackupDestination(drive: drive).root, "/Volumes/Spare")

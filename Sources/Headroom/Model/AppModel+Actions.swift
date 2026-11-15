@@ -472,6 +472,11 @@ extension AppModel {
     /// Skips anything that has gone since.
     private func walkVisits(_ step: Int) {
         guard let tree else { return }
+        // Both sides are a picture of their own, numbered apart from the map: back goes up in it, and forward waits.
+        if showsPair {
+            if step < 0, focus != 0 { goUp() }
+            return
+        }
         func isThere(_ node: UInt32) -> Bool { node == 0 || (Int(node) < tree.count && tree.totals[Int(node)] > 0) }
         var to = visitAt + step
         while visited.indices.contains(to) {
@@ -500,6 +505,8 @@ extension AppModel {
     /// Going up to where you just came from is going back, so forward still leads down again.
     private func noteVisit() {
         visitPending = false
+        // Places in the picture of both sides aren't places on the map.
+        guard !showsPair else { return }
         let here = Visit(focus: focus, selected: selected)
         guard visited[visitAt] != here else { return }
         if visitAt > 0, visited[visitAt - 1] == here {
@@ -516,7 +523,8 @@ extension AppModel {
 
     /// A new scan numbers everything again, so what you visited is found again by path. What's gone is left out.
     func carryVisits(to new: DiskTree) {
-        guard let old = tree else {
+        // The map the places were noted on, under whatever picture is on screen.
+        guard let old = bareTree ?? tree else {
             resetVisits()
             return
         }

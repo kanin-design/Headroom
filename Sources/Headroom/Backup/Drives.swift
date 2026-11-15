@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import SystemConfiguration
 
 /// A drive as the drive row lists it: its name, how full it is and what file system it has.
 struct DriveInfo: Codable, Identifiable, Equatable, Hashable, Sendable {
@@ -98,21 +99,25 @@ struct BackupDestination: Codable, Equatable, Sendable {
     var title: String { folder.isEmpty ? drive.name : drive.name + " › " + (folder as NSString).lastPathComponent }
 }
 
-/// Where a file goes on the drive: the same place it has on the Mac. In your home folder that's its path from there, so
-/// `~/Media/Movies/Film.mkv` goes to `Media/Movies/Film.mkv` in the backup folder, which is the layout a drive of media
-/// usually has already. Outside your home folder it's its path from the top of its disk, under the disk's name.
+/// Where a file goes on the drive: in a folder named for this Mac, at its full path on the Mac, so
+/// `/Users/you/Downloads/Film.mkv` from a Mac named Studio goes to `Backup from Studio/Users/you/Downloads/Film.mkv`. Nothing is
+/// mixed in with what the drive holds already, and the path says which Mac and which folder each file came from.
 enum BackupPaths {
-    static func relative(_ path: String, home: String = NSHomeDirectory()) -> String {
-        let visible = PathMath.visible(path)
-        if PathMath.isInside(visible, home), visible != home { return String(visible.dropFirst(home.count + 1)) }
-        let mount = PathMath.mount(of: visible)
-        let disk = mount == "/" ? "Macintosh HD" : (mount as NSString).lastPathComponent
-        let inside = mount == "/" ? String(visible.dropFirst()) : String(visible.dropFirst(mount.count + 1))
-        return disk + "/" + inside
+    /// The folder on the drive that holds this Mac's files, named as Sharing names the Mac.
+    static let macFolder = "Backup from " + macName
+
+    private static var macName: String {
+        let name = (SCDynamicStoreCopyComputerName(nil, nil) as String?) ?? Host.current().localizedName ?? ""
+        let safe = name.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-").trimmingCharacters(in: .whitespaces)
+        return safe.isEmpty ? "Mac" : safe
     }
 
-    static func onDrive(_ path: String, under root: String, home: String = NSHomeDirectory()) -> String {
-        (root == "/" ? "" : root) + "/" + relative(path, home: home)
+    static func relative(_ path: String, folder: String = macFolder) -> String {
+        folder + PathMath.visible(path)
+    }
+
+    static func onDrive(_ path: String, under root: String, folder: String = macFolder) -> String {
+        (root == "/" ? "" : root) + "/" + relative(path, folder: folder)
     }
 
     /// The path from the drive's top, as a note keeps it.
