@@ -5,7 +5,7 @@ extension AppModel {
     /// folders that hold one, so those show at once. Duplicates are looked for only now, never at launch: groups remembered from
     /// an earlier search come back unread, and the rest are read biggest first, showing as they're found.
     func refreshCopies() {
-        guard lens == .copies, let tree, !tree.isPartial else { return }
+        guard view == .copies, let tree, !tree.isPartial else { return }
         if let copies, copies.scanID == tree.scanID, copies.duplicatesDone { return }
         // Already looking, in this scan's numbering.
         if copiesReading, copiesScanID == tree.scanID { return }
@@ -94,7 +94,7 @@ extension AppModel {
         guard copiesStop === stop else { return }
         copiesStop = nil
         copiesReading = false
-        if lens == .copies, let tree, copies?.scanID != tree.scanID || copies?.duplicatesDone == false { refreshCopies() }
+        if view == .copies, let tree, copies?.scanID != tree.scanID || copies?.duplicatesDone == false { refreshCopies() }
     }
 
     /// A few threads: the disk is the limit, and more only fight over it.
@@ -110,7 +110,7 @@ extension AppModel {
         copies = map
         copyColours.merge(map.colourOf) { _, new in new }
         refreshCopyGroups()
-        if lens == .copies { relayout(.recolor) }
+        if view == .copies { relayout(.recolor) }
     }
 
     /// The groups that touch the folder in view: the list, like every list in the inspector, follows the zoom.
@@ -178,7 +178,7 @@ extension AppModel {
     /// What lights up with a piece under the pointer in Copies: every copy of the set it holds, wherever it is, as a box's files
     /// light up together in Free Up. The set's row in the inspector lights too.
     func copyLight(for index: Int) -> (full: [Range<Int>], holding: [Int], tint: SIMD3<Float>?) {
-        guard lens == .copies, let tree, let copies, copies.scanID == tree.scanID, index < engine.layout.pieces.count else { return ([], [], nil) }
+        guard view == .copies, let tree, let copies, copies.scanID == tree.scanID, index < engine.layout.pieces.count else { return ([], [], nil) }
         let p = engine.layout.pieces[index]
         guard !p.isSmaller, p.style != .free, p.style != .hidden, let set = copies.set(of: p.node) else {
             hotCopyGroup = nil

@@ -321,6 +321,8 @@ extension AppModel {
     /// Things are about to leave the disk. Nothing replaces the map meanwhile: a running scan stops, and the disk is read
     /// again afterwards, at full power if you were waiting for it. The flag stops the work between one thing and the next.
     private func beginRemoval(_ progress: CleanProgress) -> LockedFlag {
+        // Ghosts are for looking at: what's leaving is taken out of the real map.
+        dropGhosts()
         factsOfSavedMap = false
         // What was said about the last clean is over now.
         message = nil
@@ -395,10 +397,11 @@ extension AppModel {
     }
 
     private func didMove(_ path: String, to inTrash: String, identity: String?, item: PlanItem, trueBytes: [UInt32: UInt64], tree cleaned: DiskTree,
-                         linkedTo: String? = nil) {
+                         linkedTo: String? = nil, note: String? = nil) {
         // On record first, whatever else is going on: this is what makes it possible to bring it back.
         var thing = CleanedThing(itemID: item.id, title: item.title, original: path, inTrash: inTrash, bytes: 0, identity: identity)
         thing.linkedTo = linkedTo
+        thing.note = note
         if let tree, isOnScreen(cleaned), let node = planPlaces.node(at: path, in: tree) {
             thing.bytes = takeOut(node, trueBytes: trueBytes[node])
         } else {
@@ -466,21 +469,41 @@ extension AppModel {
         guard let after = afterClean, after.state == .waiting, mayEditPlan() else { return }
         let things = after.things
         let items = lastPlanItems
-        let hadMoves = items.contains(where: \.isMove)
+        let backupItems = lastBackupItems
+        lastBackupItems = []
+        let hadMoves = items.contains(where: \.isMove) || things.contains { $0.note != nil }
         afterClean = nil
         cleanFailures = [:]
         // Until everything is back, nothing else starts, and quitting waits.
         isPuttingBack = true
         Task.detached(priority: .userInitiated) {
             var failed = 0
+            var notesGone: [String] = []
             for thing in things.reversed() {
-                do { try Cleaner.putBack(thing) } catch { failed += 1 }
+                do {
+                    try Cleaner.putBack(thing)
+                    // The file is back where its note was, so the note has nothing left to say.
+                    if let note = thing.note, Cleaner.mayAct(on: note), MovedNote.isNote(note) {
+                        unlink(note)
+                        notesGone.append(note)
+                    }
+                } catch { failed += 1 }
             }
             let failures = failed
+            let gone = notesGone
             await MainActor.run {
                 for item in items {
                     self.plan.remove(item.id)
                     self.plan.items.append(item)
+                }
+                if !gone.isEmpty {
+                    self.movedNotes.removeAll { gone.contains($0.notePath) }
+                    self.backup.notes.removeAll { gone.contains($0) }
+                    // What was moved is selected for Backup again, so it can be moved again, or not.
+                    for item in backupItems where !self.backup.has(item.path) && gone.contains(MovedNote.notePath(for: item.path)) {
+                        self.backup.items.append(item)
+                    }
+                    self.saveBackup()
                 }
                 self.isPuttingBack = false
                 if self.quitAfterClean {
@@ -642,6 +665,124 @@ extension AppModel {
             try? await Task.sleep(for: .seconds(failed > 0 ? 16 : 9))
             guard let self, case .done = self.afterClean?.state else { return }
             self.afterClean = nil
+        }
+    }
+
+    // MARK: Moving to a drive
+
+    /// Copies what Backup has selected to its drive, one file at a time, proving every copy before anything else happens.
+    /// A move then leaves a note where each file was and sends the file to the Trash, on record like a clean, so Undo puts
+    /// it back and emptying the Trash frees the space. A copy leaves the Mac as it was. It stops between files, and a file
+    /// it's halfway through is left out whole: the original isn't touched until its copy is proved.
+    func runBackup(copyOnly: Bool) {
+        guard !isCleaning, let tree = workTree, !tree.isPartial, let destination = backup.destination else { return }
+        guard let drive = connected(destination.drive) else {
+            showTip("Connect \(destination.drive.name) first.")
+            return
+        }
+        let ready = backupReady()
+        guard !ready.items.isEmpty else {
+            showTip(ready.problem ?? "Nothing selected for Backup.")
+            return
+        }
+        let items = ready.items
+        let root = BackupDestination(drive: drive, folder: destination.folder).root
+        let job = DriveJob(kind: copyOnly ? .copy : .move, title: (copyOnly ? "Copying to " : "Moving to ") + drive.name, driveName: drive.name,
+                           entries: items.map { DriveJob.Entry(id: $0.path, title: $0.title, bytes: $0.bytes) })
+        let stop = copyOnly ? job.stop : beginRemoval(CleanProgress(done: 0, total: items.count, title: job.title))
+        if !copyOnly {
+            // Stopping the job stops the removal between files, and the other way round.
+            cleanStop = job.stop
+        }
+        lastBackupItems = copyOnly ? [] : items
+        driveJob = job
+        let activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .idleSystemSleepDisabled], reason: job.title)
+        Task.detached(priority: .userInitiated) {
+            defer { ProcessInfo.processInfo.endActivity(activity) }
+            // Something an app has open, a film that's playing, say, stays: taking it away would break what's using it.
+            let open = copyOnly ? nil : OpenFiles.snapshot()
+            for (index, item) in items.enumerated() {
+                if job.stop.value || stop.value { break }
+                await MainActor.run { job.begin(index) }
+                if let users = open?.users(of: item.path) {
+                    let who = users.first.process
+                    await MainActor.run { job.finish(index, .failed("In use by \(who).")) }
+                    continue
+                }
+                let target = BackupPaths.onDrive(item.path, under: root)
+                var last = Date.distantPast
+                let report: (DriveMover.Progress) -> Void = { p in
+                    let now = Date()
+                    guard now.timeIntervalSince(last) > 0.1 || p.bytes == p.of else { return }
+                    last = now
+                    Task { @MainActor in job.progress(index, phase: p.phase, bytes: p.bytes, of: p.of) }
+                }
+                // What it frees, worked out before it goes: a file with another hard link frees nothing until that goes too.
+                let node = tree.find(path: item.path) ?? tree.find(visible: item.path)
+                let share = node.map { Accounting.effect(of: [$0], except: [], in: tree).perTop } ?? [:]
+                let sent: (copied: DriveMover.Copied, note: MovedNote?)
+                do {
+                    sent = try DriveMover.send(item.path, to: target, drive: drive, writeNote: !copyOnly, stop: job.stop, progress: report)
+                } catch {
+                    let failure = (error as? DriveMover.Failure) ?? .io(error.localizedDescription)
+                    await MainActor.run { job.finish(index, failure == .stopped ? .stopped : .failed(failure.text)) }
+                    // Without its drive nothing else can go either.
+                    if !FileManager.default.fileExists(atPath: drive.mountPath) { break }
+                    continue
+                }
+                if copyOnly {
+                    let said = sent.copied.wasThere ? "Already on \(drive.name)" : "Copied"
+                    await MainActor.run {
+                        job.finish(index, .done(said))
+                        self.backup.items.removeAll { $0.path == item.path }
+                    }
+                    continue
+                }
+                guard let note = sent.note else { continue }
+                do {
+                    let moved = try Cleaner.trash(item.path)
+                    await MainActor.run {
+                        let plan = PlanItem(id: "backup:" + item.path, title: item.title, note: drive.name, tierRaw: Tier.yourCall.rawValue, paths: [item.path],
+                                            lastKnownBytes: item.bytes)
+                        self.didMove(item.path, to: moved.place, identity: moved.identity, item: plan, trueBytes: share, tree: tree, note: note.notePath)
+                        self.backup.items.removeAll { $0.path == item.path }
+                        self.movedNotes.removeAll { $0.notePath == note.notePath }
+                        self.movedNotes.append(note)
+                        if !self.backup.notes.contains(note.notePath) { self.backup.notes.append(note.notePath) }
+                        job.finish(index, .done(sent.copied.wasThere ? "Already on \(drive.name)" : "Moved"))
+                    }
+                } catch {
+                    // The copy is proved and stays on the drive, but the original couldn't go, so it's on both, and no note
+                    // may say otherwise.
+                    unlink(note.notePath)
+                    let why = Cleaner.whyItFailed(error).text
+                    await MainActor.run { job.finish(index, .failed("Copied, but the original couldn't go to the Trash. \(why)")) }
+                }
+            }
+            await MainActor.run {
+                job.end()
+                self.saveBackup()
+                if !copyOnly {
+                    self.cleanProgress = nil
+                    self.putOnRecord(self.takePending())
+                    self.rescanWhenBack = true
+                    self.refreshShownRows()
+                    self.endRemoval()
+                    self.showWhatLeft(of: tree)
+                    let moved = job.doneCount
+                    if moved > 0 { self.showTip(job.summary, for: 10, offeringUndo: true) }
+                } else {
+                    self.showTip(job.summary, for: 8)
+                    // A quit was waiting for the copy to stop at a safe point.
+                    if self.quitAfterClean {
+                        self.cleanStoppedForQuit = true
+                        self.quitWhenNothingIsLeft()
+                        return
+                    }
+                }
+                self.refreshDrives()
+                self.applyGhosts()
+            }
         }
     }
 }

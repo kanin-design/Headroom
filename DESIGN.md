@@ -21,7 +21,7 @@ They also get the numbers wrong in ways that matter:
 | You're thinking | What you need | What Headroom does |
 |---|---|---|
 | "How full am I, and what's biggest?" | One glance | The ring is already there when the window opens, with free space in the middle and the biggest things named around it |
-| "I had 41 GB yesterday. What happened?" | What changed | **Changes** lights up what grew and dims the rest, with a ranked list and a free-space history |
+| "I had 41 GB yesterday. What happened?" | What changed | **Changes** lights up what grew and dims the rest, since the last scan or in the last day, week or month |
 | "What's just been sitting there?" | What hasn't changed | **Changes**, the other way round, lights up what nothing has changed in for a month, three months or a year |
 | "I have this film in three places" | Duplicates, and what only looks like one | **Copies** gives each set of duplicates its own colour on the ring. Keep one, then delete, hardlink or symlink the rest |
 | "I need 20 GB now, without breaking anything" | Safe wins, ranked by risk | **Free Up** is a short stack of boxes, safest first. One click selects a whole box, and the ring shows it before anything happens |
@@ -83,20 +83,18 @@ sunburst in the reference:
   whole spectrum, kept far from the pieces beside it. Headroom remembers it, so a folder keeps its colour
   between scans even when sizes change. Everything inside stays close to that colour and gets lighter going
   out, so one group reads as one wedge from the middle to the edge. Big files are the brightest, and tiny
-  things step back. System data stays slate on the whole disk. The inspector lists the kinds of data, and
-  pointing at one lights it up.
+  things step back. System data stays slate on the whole disk.
 - **Changes:** what grew. Uses scan history when there is any, and file dates on the first run, so it's
   useful on day one. Keeps a free-space history, including system volumes, which is how a downloaded
   update gets caught. Each piece is coloured by how much of it is new or changed, from red for a little to
   yellow for all of it, and what didn't change goes quiet. A file counts as wholly changed when its date is in the
   window, or by how much it grew since the scan compared with: which bytes inside it changed could only be found
-  by reading it. The middle says how much free space changed; the inspector has the month's free space, then what grew and what shrank in
-  the folder you're in.
+  by reading it. The middle says how much free space changed; the time to compare with is at the top of the inspector.
   The other way round, it shows what's gone untouched: what nothing has changed in for a month, three months or a
   year, by file dates, which the scan sums per folder as it reads. The cold scale mirrors the warm one, as light at
   every step, so the two read the same way. What you're known to have used in that time counts as touched, however
   old its files: an app you opened, a film Plex says you watched, a game Steam started, a video Spotlight saw you open.
-  macOS's own parts and what Headroom leaves alone never count. Both scales in the inspector are drawn from the ring's own
+  macOS's own parts and what Headroom leaves alone never count. The scale in the inspector is drawn from the ring's own
   colours, starting from the quiet grey of a piece with none of it.
 - **Free Up:** things you may want to delete, in boxes named for what they are: Caches, Junk, Developer, AI models, Games,
   Unused apps, Leftover app data, iPhone backups, Old installers, Screenshots, Project leftovers. Biggest first, and
@@ -116,8 +114,8 @@ sunburst in the reference:
   Boxes span folders, so `node_modules` in 14 projects lights up all 14 places at once. Name-based rules only apply inside
   your own folders. The same name inside an app, Homebrew or a tool's install is part of something that would stop
   working without it.
-- **Copies:** duplicates by content, plus the hardlinks, clones and symlinks already on the disk. Sets are rows like Free
-  Up's boxes, each with its own colour, which every copy wears on the ring. A folder that's mostly one set wears it too.
+- **Copies:** duplicates by content, plus the hardlinks, clones and symlinks already on the disk. In Free Up the inspector
+  lists the sets in place of the suggestions. Sets are rows like Free Up's boxes, each with its own colour, which every copy wears on the ring. A folder that's mostly one set wears it too.
   Pointing at a set lights its copies in that colour and tints the folders leading to each, more toward the copy; a lit
   piece is drawn at least 4 pt wide, on top, so a copy too small to draw still shows. Ring labels give each copy's last two
   folders, plus the folder where two paths differ when they'd read the same, and mark the copy to keep. The row says the
@@ -242,6 +240,39 @@ seconds a folder, and it rated a folder of finished films as the likeliest thing
   macOS asks once whether Headroom may ask the Finder, and the Finder asks for your password when an app isn't yours to
   move. The inspector says so first. Whatever doesn't go stays on the list with the reason and a Try again button.
 
+## Backup
+
+Free Up and Backup are modes: what you're doing. Map, Changes and Copies are views: how the ring is drawn. The toolbar has a
+picker for each, and each always has one chosen. The mode owns the inspector, what a click selects and the button at the
+bottom, whatever the view. Changes adds its time picker at the top of the inspector; Copies with Free Up shows the sets of
+duplicates instead of the suggestions.
+
+- **Two lists, one at a time.** Each mode has its own list, kept between launches. A file is on one of them at a time:
+  selecting it for one takes it off the other, and says so. Each button does one thing and says it: **Clean** (green, to
+  the Trash) and **Move … to <drive>** (blue).
+- **Big files only.** Backup offers and takes files of 100 MB and up; smaller ones cost more to move than they free.
+- **A move proves itself first.** The file is hashed as it's read, written under a hidden name, read back from the drive
+  past every cache and hashed again; only a copy that matches gets its name, and it never replaces anything. Then
+  `name.sha256` goes beside it and `name.hrmoved` where the file was, and only then does the original go to the Trash, on
+  record like a clean, so Undo puts it back and emptying the Trash frees the space. A file an app has open stays.
+- **The note is the record.** It's plain text: name, size, hash, the drive by name and ID, the path on the drive, when.
+  It moves with its folder, and Time Machine keeps it. Headroom remembers the notes it wrote and finds others through
+  Spotlight.
+- **Ghosts.** Show moved files draws each note as its file, at its size, faint and hatched, in Backup only. It's a
+  picture: nothing is selected, counted or cleaned from it, and anything that changes the disk puts the real map back
+  first.
+- **Compare.** Compare with *drive* splits the ring: the drive's half on the right, under its capsule, the
+  Mac's on the left, under the disk's. Each half is drawn at its own size, and files are matched by their path from the
+  folder and their size: green on both, amber only on the Mac, blue only on the drive, violet moved, red different or
+  missing. The middle says what the folder holds on the Mac, and on the drive under it. Files on the drive's half can be
+  selected too: Copy to Mac (checked against the `.sha256` beside each, or its note), Verify, and Delete from the drive,
+  which asks first for anything this Mac doesn't also have. Both halves and moved files are drawn on the Map only.
+- **The drive row.** At the bottom, the disk you're looking at on the left, and in Backup, where files go on the right,
+  each a glass capsule with a list of drives and their file systems. The right one can't be the left one, or read-only;
+  FAT32 says it can't hold files over 4 GB.
+- **Moved files** can be moved back (copied back and proved against the note's hash; the drive keeps its copy),
+  verified, or deleted from the drive: the last copy, so only after you confirm it.
+
 ## Agents
 
 Headroom is where you and an AI agent look at the same thing. The agent works the way agents do, with commands on the
@@ -268,6 +299,8 @@ and nothing listens on the network.
 - **What it's told.** Before or as it selects, what Headroom knows about a path: whether it's protected, what it is,
   and what removing it really frees. A hardlinked or cloned file frees nothing while its other copies stay, so the
   answer names them, and the copy selected last is the one that frees the file.
+- **Backup too.** An agent can read Backup's list and the moved files, select big files for it, choose its drive, verify
+  moved files, and wait for your Move. Moving, copying, moving back and deleting from a drive are your clicks.
 - **The window.** It can bring Headroom forward on what it selected, and have it show another disk.
 - **Cleaning is yours, always.** Deleting is destructive, so the click that does it is never an agent's. This isn't a
   rule the agent is asked to keep: the server has no command that deletes, empties the Trash, undoes a clean or presses

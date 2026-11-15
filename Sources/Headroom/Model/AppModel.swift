@@ -22,7 +22,13 @@ enum Lens: String, CaseIterable, Identifiable {
     case changes = "Changes"
     case freeUp = "Free Up"
     case copies = "Copies"
+    case backup = "Backup"
     var id: String { rawValue }
+
+    /// Ways of looking at the disk, and the two things you can do: Free Up, which cleans, and Backup, which moves.
+    static let views: [Lens] = [.map, .changes, .copies]
+    static let actions: [Lens] = [.freeUp, .backup]
+    var isAction: Bool { self == .freeUp || self == .backup }
 
     /// What the tab says.
     var title: String {
@@ -31,6 +37,7 @@ enum Lens: String, CaseIterable, Identifiable {
         case .changes: "Changes"
         case .freeUp: "Free Up"
         case .copies: "Copies"
+        case .backup: "Backup"
         }
     }
 
@@ -38,8 +45,9 @@ enum Lens: String, CaseIterable, Identifiable {
         switch self {
         case .map: "Disk usage by kind"
         case .changes: "Recent changes and untouched files"
-        case .freeUp: "Space you can free, safest first"
+        case .freeUp: "Free up space, safest first"
         case .copies: "Duplicates, hardlinks, clones and symlinks"
+        case .backup: "Move big files to another drive"
         }
     }
 }
@@ -67,7 +75,8 @@ struct RingGeometry: Equatable {
 
     static func make(size: CGSize) -> RingGeometry {
         let usable = max(size.width, 320)
-        let top: CGFloat = 60, bottom: CGFloat = 46
+        // At the bottom, the drive row and a little air above it.
+        let top: CGFloat = 60, bottom: CGFloat = 58
         let height = max(size.height - top - bottom, 240)
         // Room at the sides for names around the ring.
         let side: CGFloat = usable > 1040 ? 168 : (usable > 900 ? 150 : (usable > 820 ? 132 : 40))
@@ -101,7 +110,13 @@ final class AppModel {
     // Disk
     var volumes: [VolumeFacts] = []
     var volume: VolumeFacts?
-    private(set) var tree: DiskTree? { didSet { planner = nil } }
+    private(set) var tree: DiskTree? {
+        didSet {
+            planner = nil
+            // Any map that isn't a picture with ghosts is the real one: the one kept for when the ghosts go is out of date.
+            if tree?.ghostBase ?? .max == .max { bareTree = nil }
+        }
+    }
     /// Goes up whenever the tree's numbers change, so views can follow along.
     var treeVersion = 0
     var isScanning = false
@@ -143,7 +158,10 @@ final class AppModel {
     @ObservationIgnored var visitPending = false
     /// Where you've been, so Back returns to the picture you came from.
     @ObservationIgnored var trail: [UInt32] = []
-    var lens: Lens = .map
+    /// How the ring is drawn: Map, Changes or Copies.
+    var view: Lens = .map
+    /// What you're doing: Free Up or Backup. It decides the panel, what a click selects and the button at the bottom.
+    var mode: Lens = .freeUp
     var panelOpen = true { didSet { if oldValue != panelOpen { rememberWindow() } } }
     @ObservationIgnored var inspectorWidthTask: Task<Void, Never>?
     /// How the rings are sized, picked in View › Rings and kept for the next launch.
@@ -295,6 +313,8 @@ final class AppModel {
     @ObservationIgnored let windowHidden = LockedFlag()
     @ObservationIgnored var isReadingOtherDisk = false
     @ObservationIgnored var lastPlanItems: [PlanItem] = []
+    /// What the last move to a drive took, so Undo can select it for Backup again.
+    @ObservationIgnored var lastBackupItems: [BackupItem] = []
     @ObservationIgnored var pendingCleaned: [CleanedThing] = []
     /// Why things didn't go in the last clean, by planned thing. It shows on the list until you say try again.
     @ObservationIgnored var cleanFailures: [String: CheckProblem] = [:]
@@ -330,6 +350,35 @@ final class AppModel {
     var searchResults: [UInt32] = []
     /// Something is typed in the search field, so the inspector lists what it finds, wherever the keyboard is.
     var isSearching: Bool { !searchText.isEmpty }
+
+    // MARK: Backup
+
+    /// What Backup has selected, where it goes, and what it remembers.
+    var backup = BackupState()
+    /// The notes of files moved to a drive that this Mac knows of.
+    var movedNotes: [MovedNote] = []
+    /// The drives connected now.
+    var drives: [DriveInfo] = []
+    /// A move, copy, bring back or check that's running, or the last one, until it's put away.
+    var driveJob: DriveJob?
+    /// Moved files drawn back where they were, in Backup.
+    var showGhosts = false
+    /// Only files at least this old, in Backup's list of big files: days, 0 for any age.
+    var backupAge = 0
+    /// The map without ghosts, while a picture with them, or both sides, is on screen.
+    @ObservationIgnored var bareTree: DiskTree?
+    /// Backup's folder on the Mac and the same folder on its drive, as two halves of the ring, while that's on screen.
+    var pair: PairPicture?
+    /// Files picked on the drive's half, to copy back, check or delete.
+    var driveSelection: [DriveFile] = []
+    /// Whether Backup shows both sides when its drive is connected.
+    var showDriveSide = false
+    @ObservationIgnored var pairTask: Task<Void, Never>?
+    /// Where you were on the real map before both sides were shown, to go back to.
+    @ObservationIgnored var focusBeforePair: UInt32?
+    @ObservationIgnored var backupCandidatesMemo: (version: Int, focus: UInt32, age: Int, rows: [UInt32])?
+    /// What each selected file's warning said, for the map it was worked out on: it reads every link on the disk.
+    @ObservationIgnored var backupWarningMemo: (version: Int, said: [String: String?])?
 
     @ObservationIgnored let engine = MapEngine()
     @ObservationIgnored let rules = RuleBook(homePath: NSHomeDirectory())
@@ -372,6 +421,7 @@ final class AppModel {
         didStart = true
         watchBackAndForwardKeys()
         loadPlan()
+        loadBackup()
         // Asking for each folder is gone: it brought up a prompt per folder, and still left the rest needing Full Disk Access.
         UserDefaults.standard.removeObject(forKey: "askPerFolder")
         hasFullAccess = Self.mayReadEverything()
@@ -567,7 +617,7 @@ final class AppModel {
             if isSearching { runSearch() }
             workOutInsights(from: picture)
             // A saved map is whole at once, so Copies, if that's the view you left, can look straight away.
-            if lens == .copies { refreshCopies() }
+            if view == .copies { refreshCopies() }
             return
         }
         guard current.isPartial else { return }
@@ -654,7 +704,7 @@ final class AppModel {
                 guard self.tree?.isPartial == true, self.tree?.scanID == picture.scanID else { return }
                 self.adopt(map, wins, change, rows, for: window)
                 if self.isSearching { self.runSearch() }
-                if self.lens != .map { self.refreshLive() }
+                if self.view != .map { self.refreshLive() }
             }
         }
     }
@@ -741,7 +791,10 @@ final class AppModel {
                     self.carryVisits(to: newTree)
                     // Keep your place, if the folder you were looking at still exists.
                     var keepPath: String?
-                    if self.focus != 0, let tree = self.tree { keepPath = tree.path(self.focus) }
+                    // With both sides on screen, the place is the real map's folder they were drawn for.
+                    let showingPair = self.pair != nil && self.pair?.tree === self.tree
+                    let realFocus = showingPair ? (self.focusBeforePair ?? 0) : self.focus
+                    if realFocus != 0, let tree = showingPair ? self.bareTree : self.tree { keepPath = tree.path(realFocus) }
                     newFocus = keepPath.flatMap { newTree.find(path: $0) } ?? 0
                     self.trail = []
                     self.selected = nil
@@ -750,12 +803,16 @@ final class AppModel {
                 self.tree = newTree
                 self.nameCache = [:]
                 self.treeVersion += 1
+                // Moved files, or both sides, are drawn again from the new map, once it's on screen.
+                self.pair = nil
+                self.focusBeforePair = nil
+                if self.showGhosts || self.showDriveSide { DispatchQueue.main.async { self.applyGhosts() } }
                 // Only now, so what moving there sets off reads the new tree with the new tree's numbers.
                 if let newFocus { self.focus = newFocus }
                 self.resolvePlanSynchronously(in: newTree)
                 self.adopt(map, wins, change, rows, for: window)
                 // Copies looks again whenever there's a new map of the whole disk, remembering what hasn't changed.
-                if self.lens == .copies { self.refreshCopies() }
+                if self.view == .copies { self.refreshCopies() }
                 // What was read for a saved map is read again once the scan after it has finished.
                 var isFresh = true
                 if case .appear = transition { isFresh = false }
@@ -859,6 +916,7 @@ final class AppModel {
     /// A disk was plugged in or removed. If it was the one on screen, go back to the startup disk.
     func volumesChanged() {
         volumes = VolumeFacts.available()
+        refreshDrives()
         readOtherDisksQuietly()
         guard let volume, !volumes.contains(where: { $0.mountPath == volume.mountPath }), let boot = volumes.first else { return }
         switchVolume(boot)
@@ -880,7 +938,7 @@ final class AppModel {
             rescanWhenBack = false
             scan()
         }
-        if lens == .freeUp, !plan.isEmpty { runChecks(fresh: true) }
+        if mode == .freeUp, !plan.isEmpty { runChecks(fresh: true) }
     }
 
     // MARK: Insights, worked out off the main thread
@@ -903,7 +961,7 @@ final class AppModel {
                 self.adopt(map, wins, change, rows, for: window)
                 // What went to the Trash isn't a copy any more.
                 if self.copies != nil { self.rebuildCopies() }
-                if self.lens != .map { self.relayout(.recolor) }
+                if self.view != .map { self.relayout(.recolor) }
             }
         }
     }
@@ -913,7 +971,7 @@ final class AppModel {
         guard let tree else { return }
         let change = Self.changeMap(tree: tree, window: window, rules: rules, facts: facts)
         show(change, change.rows(tree: tree, rules: rules))
-        if lens == .changes { relayout(.recolor) }
+        if view == .changes { relayout(.recolor) }
     }
 
     /// The map for a Changes window. Looking back at what's gone untouched also needs to know what to leave out, and what
@@ -950,7 +1008,7 @@ final class AppModel {
         guard let tree else { return }
         let layout = drawing(tree)
         engine.apply(layout, transition)
-        if lens == .copies { refreshCopyGroups() }
+        if view == .copies { refreshCopyGroups() }
         mapView?.voiceOverLayoutChanged()
         lastHoverIndex = nil
         hover = nil
@@ -961,7 +1019,8 @@ final class AppModel {
 
     /// The picture for the folder in view.
     func drawing(_ tree: DiskTree, after: AfterPlan? = nil) -> RingLayout {
-        let planned = plannedTest()
+        // Whatever the view, the ring stripes what the mode has selected.
+        let planned = mode == .backup ? backupPlanned() : plannedTest()
         var layout = RingLayout.build(tree: tree, focus: focus, colorer: colorer(tree), planned: after == nil ? planned : nil, after: after,
                                       sizes: ringSizes)
         // The picture on screen, rather than the one while ⌥ is held, sets what the Rings menu offers.
@@ -969,22 +1028,23 @@ final class AppModel {
             if ringsDrawn != layout.rings { ringsDrawn = layout.rings }
             if ringReach != layout.reach { ringReach = layout.reach }
         }
-        if lens == .map { layout.calmTinyPieces(viewBytes: tree.totals[Int(focus)]) }
+        if view == .map || showsPair { layout.calmTinyPieces(viewBytes: tree.totals[Int(focus)]) }
         return layout
     }
 
+    /// Whether both sides of Backup are what's on screen.
+    var showsPair: Bool { pair != nil && pair?.tree === tree }
+
     private func colorer(_ tree: DiskTree) -> RingLayout.Colorer {
-        switch lens {
-        case .map:
+        if let pair, pair.tree === tree { return { pair.colour($0) } }
+        switch view {
+        case .map, .freeUp, .backup:
             let colours = RingColours(tree: tree, focus: focus, memory: colourMemory)
             ringColours = colours
             return { colours.lab($0).linearP3 }
         case .changes:
             guard let changes else { return Lenses.kindColorer(tree: tree) }
             return Lenses.changeColorer(tree: tree, changes: changes)
-        case .freeUp:
-            guard let reclaim else { return Lenses.kindColorer(tree: tree) }
-            return Lenses.reclaimColorer(map: reclaim, colours: mapColours, planned: plannedTest())
         case .copies:
             guard let copies, copies.scanID == tree.scanID else { let quiet = Palette.quiet.linearP3; return { _ in quiet } }
             return Lenses.copiesColorer(map: copies, tree: tree)
@@ -1014,7 +1074,7 @@ final class AppModel {
 
     func makeLabels() -> [MapLabel] {
         guard let tree else { return [] }
-        return LabelPlacer.place(layout: engine.layout, ring: ring, lens: lens, tree: tree, model: self)
+        return LabelPlacer.place(layout: engine.layout, ring: ring, lens: showsPair ? .map : view, tree: tree, model: self)
     }
 
     /// Works out the link story for what the panel is showing. It takes a moment, so it never holds up the zoom.
@@ -1112,7 +1172,7 @@ final class AppModel {
         linksTask?.cancel()
         guard let index, let tree, index < engine.layout.pieces.count else {
             engine.setEmphasis(primary: nil, related: [])
-            if lens == .copies { hotCopyGroup = nil }
+            if view == .copies { hotCopyGroup = nil }
             hover = nil
             hotBox = nil
             hotRow = nil
@@ -1121,7 +1181,7 @@ final class AppModel {
         let layout = engine.layout
         let p = layout.pieces[index]
         // The list says so too: one set of data, shown two ways.
-        if lens == .freeUp, let at = reclaim?.rowIndex(of: p.node), let id = reclaim?.rowIDs[at] {
+        if mode == .freeUp, let at = reclaim?.rowIndex(of: p.node), let id = reclaim?.rowIDs[at] {
             hotRow = id
             hotBox = boxOfRow[id]
         } else {
@@ -1158,8 +1218,19 @@ final class AppModel {
     }
 
     private func describe(_ p: Piece, index: Int, tree: DiskTree) -> HoverInfo {
+        // Both sides: where it is. Which half it's in says which side you're pointing at.
+        if let pair, pair.tree === tree, !p.isSmaller, let place = pair.places[p.node] {
+            return HoverInfo(pieceIndex: index, node: p.node, title: displayName(piece: p), bytes: p.bytes, share: "",
+                             note: place.title(drive: pair.driveName), links: nil)
+        }
+        // A moved file, drawn from its note: where it is now.
+        if !p.isSmaller, let ghost = tree.ghosts[p.node], tree.isGhost(p.node) {
+            let connected = drive(of: ghost) != nil
+            return HoverInfo(pieceIndex: index, node: p.node, title: ghost.name, bytes: ghost.size, share: "On \(ghost.driveName)\(connected ? "" : ", not connected")",
+                             note: "Moved " + LastUse.ago(ghost.moved, now: Date()), links: nil)
+        }
         // In Copies the line under the size says what it is there: an extra copy, the copy that stays, how much is extra.
-        if lens == .copies, !p.isSmaller, let copies, copies.scanID == tree.scanID, let text = copies.note(for: p.node, total: p.bytes, in: tree) {
+        if view == .copies, !p.isSmaller, let copies, copies.scanID == tree.scanID, let text = copies.note(for: p.node, total: p.bytes, in: tree) {
             return HoverInfo(pieceIndex: index, node: p.node, title: displayName(piece: p), bytes: p.bytes, share: "", note: text, links: nil)
         }
         let n = tree.nodes[Int(p.node)]
@@ -1176,7 +1247,7 @@ final class AppModel {
         var tellsUse = false
         var shrank = false
         let ownShape = p.node == tree.free || p.node == tree.hidden
-        if lens == .changes, let changes, changes.isUntouched {
+        if view == .changes, let changes, changes.isUntouched {
             // All of it, or how much of it. A piece that's been touched says when, as it would on the map.
             let untouched = changes.value(of: p.node)
             if untouched > 0 {
@@ -1186,7 +1257,7 @@ final class AppModel {
                 share = ""
                 tellsUse = !(n.has(NodeFlag.synthetic) || (n.rule != 0 && rules.rule(n.rule).tier == .handsOff))
             }
-        } else if lens == .changes, let changes {
+        } else if view == .changes, let changes {
             let delta = changes.value(of: p.node)
             if delta > 0 { note = "+\(formatBytes(UInt64(delta))) \(changes.shortCaption)" }
             else if delta < 0 {
@@ -1306,8 +1377,13 @@ final class AppModel {
             }
             return
         }
+        // In Backup a click on a big file selects it, and a double-click opens it. Folders open.
+        if mode == .backup, !n.has(NodeFlag.directory), !n.has(NodeFlag.synthetic), !p.isSmaller {
+            if count == 1 { toggleBackup(p.node) }
+            if count < 2 || tree.isGhost(p.node) { return }
+        }
         // In Free Up a click means "this too", and a double-click opens it, as in the Finder.
-        if lens == .freeUp, !n.has(NodeFlag.free), !p.isSmaller {
+        if mode == .freeUp, !n.has(NodeFlag.free), !p.isSmaller {
             if count == 1 || count == 2 { togglePiece(p.node) }
             if count < 2 { return }
         }
@@ -1333,7 +1409,7 @@ final class AppModel {
         let p = engine.layout.pieces[index]
         let n = tree.nodes[Int(p.node)]
         if n.has(NodeFlag.free) {
-            setLens(.freeUp)
+            setMode(.freeUp)
             return
         }
         if p.isSmaller {
@@ -1418,10 +1494,33 @@ final class AppModel {
         readFocusFirst()
     }
 
+    /// A view or a mode, whichever it is.
     func setLens(_ new: Lens) {
-        guard new != lens else { return }
+        if new.isAction { setMode(new) } else { setView(new) }
+    }
+
+    /// How the ring is drawn. The panel, and what's selected, stay as they are.
+    func setView(_ new: Lens) {
+        guard !new.isAction, new != view else { return }
         closeLook()
-        lens = new
+        view = new
+        rememberWindow()
+        hotCopyGroup = nil
+        engine.setCalm(new == .map ? 1 : (new == .copies ? 0.55 : 0))
+        engine.setGlow(new == .changes ? 0.35 : 1)
+        // Moved files and both sides are drawn on the Map only.
+        if showGhosts || showDriveSide || bareTree != nil { applyGhosts() }
+        relayout(.recolor, labelDelay: 0.2)
+        if new == .copies { refreshCopies() }
+        // Changes and Copies want the whole picture, so now you're waiting on the scan.
+        if tree?.isPartial == true, !scanIsHurrying { activeScan?.scanner.setHurry(new != .map) }
+    }
+
+    /// What you're doing. Each mode keeps its own selection.
+    func setMode(_ new: Lens) {
+        guard new.isAction, new != mode else { return }
+        closeLook()
+        mode = new
         rememberWindow()
         selected = nil
         showPanel(true)
@@ -1429,16 +1528,12 @@ final class AppModel {
         pointedThing = nil
         hotBox = nil
         hotRow = nil
-        engine.setCalm(new == .map ? 1 : (new == .freeUp || new == .copies ? 0.55 : 0))
-        engine.setGlow(new == .changes ? 0.35 : 1)
         engine.setPreview(0, color: .zero)
         refreshGhost()
-        hotCopyGroup = nil
         if new == .freeUp, !plan.isEmpty { runChecks() }
+        if new == .backup { refreshDrives() }
+        if showGhosts || showDriveSide || bareTree != nil { applyGhosts() }
         relayout(.recolor, labelDelay: 0.2)
-        if new == .copies { refreshCopies() }
-        // Free Up and Changes want the whole picture, so now you're waiting on the scan.
-        if tree?.isPartial == true, !scanIsHurrying { activeScan?.scanner.setHurry(new != .map) }
     }
 
     private func noteLabelLight() {
@@ -1626,4 +1721,96 @@ final class MenuAction: NSObject {
 final class MenuTarget: NSObject {
     static let shared = MenuTarget()
     @objc func run(_ sender: NSMenuItem) { (sender.representedObject as? MenuAction)?.run() }
+}
+
+// MARK: Ghosts
+
+extension AppModel {
+    /// The real map, without ghosts: what everything that counts, selects or changes anything goes by.
+    var workTree: DiskTree? { bareTree ?? tree }
+
+    /// Draws moved files where they were, in Backup, when Show Moved Files is on, or takes them away again. The picture
+    /// with them is for looking at: a clean, a move, a scan or another view puts the real map back first.
+    func applyGhosts() {
+        guard let real = workTree else { return }
+        let inBackup = mode == .backup && view == .map && !isCleaning && !real.isPartial
+        if inBackup, showDriveSide, let destination = backup.destination, let drive = connected(destination.drive) {
+            showPair(of: real, on: BackupDestination(drive: drive, folder: destination.folder))
+            return
+        }
+        pairTask?.cancel()
+        let wasPair = pair != nil
+        pair = nil
+        driveSelection = []
+        if wasPair, bareTree != nil {
+            tree = real
+            if let back = focusBeforePair, Int(back) < real.count { focus = back }
+            focusBeforePair = nil
+        }
+        let wanted = showGhosts && inBackup
+        if wanted, let picture = real.withGhosts(movedNotes) {
+            tree = picture
+            bareTree = real
+        } else if bareTree != nil {
+            tree = real
+        } else {
+            return
+        }
+        nameCache = [:]
+        treeVersion += 1
+        if let tree { resolvePlanSynchronously(in: tree) }
+        relayout(.recolor)
+    }
+
+    /// The folder you're in and the same folder on Backup's drive, as two halves. The drive is read in the background; the
+    /// picture goes on screen when it's ready, if it's still wanted.
+    private func showPair(of real: DiskTree, on destination: BackupDestination) {
+        let realFocus = focusBeforePair ?? focus
+        var folder = RingLayout.chainTail(tree: real, realFocus)
+        if folder == 0 || real.nodes[Int(folder)].has(NodeFlag.synthetic) { folder = real.home }
+        guard folder != 0, let raw = real.path(folder) else { return }
+        let visible = PathMath.visible(raw)
+        let drivePath = visible == NSHomeDirectory() ? destination.root : BackupPaths.onDrive(visible, under: destination.root)
+        if let pair, pair.macPath == raw, pair.drivePath == drivePath, tree === pair.tree { return }
+        pairTask?.cancel()
+        let notes = movedNotes, ghosts = showGhosts, name = destination.drive.name
+        let stop = LockedFlag()
+        pairTask = Task { [weak self] in
+            await withTaskCancellationHandler {
+                let built = await Task.detached(priority: .userInitiated) {
+                    PairPicture.build(real: real, macFolder: folder, macPath: raw, drivePath: drivePath, driveName: name, notes: notes, ghosts: ghosts, stop: stop)
+                }.value
+                guard let self, let built, !Task.isCancelled, self.workTree === real, self.mode == .backup, self.view == .map, self.showDriveSide, !self.isCleaning else { return }
+                if self.focusBeforePair == nil { self.focusBeforePair = self.focus }
+                // What's picked on the drive stays picked while it's still in this folder there, with where it is now.
+                self.driveSelection = self.driveSelection.compactMap { file in
+                    guard file.path.hasPrefix(built.drivePath + "/") else { return nil }
+                    return built.driveNodes[String(file.path.dropFirst(built.drivePath.count + 1))].flatMap { built.driveFile($0) }
+                }
+                self.tree = built.tree
+                self.bareTree = real
+                self.pair = built
+                self.focus = 0
+                self.selected = nil
+                self.trail = []
+                self.nameCache = [:]
+                self.treeVersion += 1
+                self.resolvePlanSynchronously(in: built.tree)
+                self.relayout(.recolor)
+            } onCancel: { stop.value = true }
+        }
+    }
+
+    /// The real map back on screen, before anything that changes it.
+    func dropGhosts() {
+        pairTask?.cancel()
+        pair = nil
+        guard let real = bareTree else { return }
+        tree = real
+        if let back = focusBeforePair, Int(back) < real.count { focus = back }
+        focusBeforePair = nil
+        nameCache = [:]
+        treeVersion += 1
+        if let tree { resolvePlanSynchronously(in: tree) }
+    }
 }

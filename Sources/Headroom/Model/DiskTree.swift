@@ -138,6 +138,13 @@ final class DiskTree: @unchecked Sendable {
     var capacityBytes: UInt64 = 0
     var freeBytes: UInt64 = 0
     var rootPath = ""
+    /// Files moved to a drive, drawn where they were from the notes they left: only in a picture made by `withGhosts`, where
+    /// they're the nodes from `ghostBase` on. They have no name in the name table, and nothing on the disk at their path.
+    var ghosts: [UInt32: MovedNote] = [:]
+    var ghostBase = UInt32.max
+    /// The top level is drawn in the order it's linked, not biggest first: Backup's two sides keep the drive on the right.
+    var keepsTopOrder = false
+    @inline(__always) func isGhost(_ id: UInt32) -> Bool { id >= ghostBase && ghosts[id] != nil }
 
     /// `statRows` for a copy of a tree whose rows are already packed, which needs no more room than they have.
     init(sharingNamesWith owner: DiskTree? = nil, statRows: Int = DiskTree.capacity) {
@@ -252,7 +259,60 @@ final class DiskTree: @unchecked Sendable {
         copy.capacityBytes = capacityBytes
         copy.freeBytes = freeBytes
         copy.rootPath = rootPath
+        copy.ghosts = ghosts
+        copy.ghostBase = ghostBase
+        copy.keepsTopOrder = keepsTopOrder
         return copy
+    }
+
+    /// This map with the files moved to a drive drawn back where they were, at their size, each from its note. A note in a
+    /// folder the map doesn't have is left out. Nil when there's nothing to draw. The disk itself isn't changed, so a picture
+    /// like this is for looking at only: nothing is planned, cleaned or moved from it.
+    func withGhosts(_ notes: [MovedNote]) -> DiskTree? {
+        var placed: [(folder: UInt32, note: MovedNote)] = []
+        for note in notes {
+            let folder = (note.notePath as NSString).deletingLastPathComponent
+            guard let at = find(path: folder) ?? find(visible: folder), !nodes[Int(at)].has(NodeFlag.gone), nodes[Int(at)].has(NodeFlag.directory) else { continue }
+            placed.append((at, note))
+        }
+        guard !placed.isEmpty, count + placed.count < Self.capacity else { return nil }
+        let picture = copy()
+        let first = picture.count
+        if let index = picture.statIndex {
+            // Each ghost reads the all-zero row: it has no files of its own on the disk.
+            let grown = vmAlloc(UInt32.self, first + placed.count)
+            grown.update(from: index, count: picture.statIndexCount)
+            vmFree(index, picture.statIndexCount)
+            picture.statIndex = grown
+            picture.statIndexCount = first + placed.count
+        }
+        picture.ghostBase = UInt32(first)
+        for (folder, note) in placed {
+            let id = UInt32(picture.count)
+            var node = Node()
+            node.parent = folder
+            node.bytes = note.size
+            node.kind = Array(note.name.utf8).withUnsafeBufferPointer { ExtensionTable.shared.kind(name: $0.baseAddress!, length: $0.count) }
+            node.modTime = UInt32(clamping: Int(note.moved.timeIntervalSince1970))
+            node.nextSibling = picture.nodes[Int(folder)].firstChild
+            picture.nodes[Int(folder)].firstChild = id
+            picture.nodes[Int(id)] = node
+            picture.count += 1
+            picture.totals[Int(id)] = note.size
+            picture.totalFiles[Int(id)] = 0
+            picture.aliasTotals[Int(id)] = 0
+            picture.newest[Int(id)] = node.modTime
+            picture.ghosts[id] = note
+            var at = folder
+            while true {
+                picture.totals[Int(at)] &+= note.size
+                if at == 0 { break }
+                at = picture.nodes[Int(at)].parent
+            }
+        }
+        picture.sortChildren()
+        picture.numberSubtrees()
+        return picture
     }
 
     /// Whether this size may still grow, because something inside hasn't been read yet.
@@ -261,8 +321,24 @@ final class DiskTree: @unchecked Sendable {
     }
 
     /// A size as it should read on screen. The dots mean there's more to come.
+    /// A folder's size on this disk: moved files drawn in it don't count.
     func sizeText(_ id: UInt32) -> String {
-        formatBytes(totals[Int(id)]) + (isStillGrowing(id) ? "…" : "")
+        formatBytes(bytesHere(id)) + (isStillGrowing(id) ? "…" : "")
+    }
+
+    /// What a node takes on this disk: its total, less the moved files drawn inside it. A moved file is its own size.
+    func bytesHere(_ id: UInt32) -> UInt64 {
+        guard ghostBase != .max, !isGhost(id) else { return totals[Int(id)] }
+        let moved = movedBytes(inside: id)
+        return totals[Int(id)] &- min(moved, totals[Int(id)])
+    }
+
+    /// The moved files drawn inside a node, in bytes.
+    func movedBytes(inside id: UInt32) -> UInt64 {
+        guard ghostBase != .max else { return 0 }
+        var moved: UInt64 = 0
+        for ghost in ghosts.keys where isGhost(ghost) && isInside(ghost, id) { moved &+= nodes[Int(ghost)].bytes }
+        return moved
     }
 
     /// Takes a removed folder or file out of the sums, so the ring can update at once without a new scan.
@@ -420,6 +496,7 @@ final class DiskTree: @unchecked Sendable {
 
     /// The name on disk, even when another one is being shown.
     func rawName(_ id: UInt32) -> String {
+        if id >= ghostBase, let ghost = ghosts[id] { return ghost.name }
         let n = nodes[Int(id)]
         return String(decoding: UnsafeBufferPointer(start: names + Int(n.nameOffset), count: Int(n.nameLength)), as: UTF8.self)
     }
@@ -431,7 +508,7 @@ final class DiskTree: @unchecked Sendable {
         while true {
             let n = nodes[Int(i)]
             if n.has(NodeFlag.synthetic) { return nil }
-            let raw = String(decoding: UnsafeBufferPointer(start: names + Int(n.nameOffset), count: Int(n.nameLength)), as: UTF8.self)
+            let raw = i >= ghostBase && ghosts[i] != nil ? rawName(i) : String(decoding: UnsafeBufferPointer(start: names + Int(n.nameOffset), count: Int(n.nameLength)), as: UTF8.self)
             parts.append(raw)
             if n.has(NodeFlag.anchor) { break }
             i = n.parent

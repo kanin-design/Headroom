@@ -48,6 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         model.quitAfterClean = true
         model.stopCleaning()
+        model.driveJob?.stop.value = true
         return .terminateLater
     }
 }
@@ -100,6 +101,17 @@ private struct EnclosingFolderCommand: View {
         Button("Enclosing Folder") { model.goToEnclosingFolder() }
             .keyboardShortcut(.upArrow, modifiers: .command)
             .disabled(model.focus == 0 && model.selected == nil)
+    }
+}
+
+/// Files moved to a drive, drawn where they were from the notes they left. They're shown in Backup.
+private struct ShowMovedFilesCommand: View {
+    let model = AppModel.shared
+
+    var body: some View {
+        Toggle("Show Moved Files", isOn: Binding(get: { model.showGhosts }, set: { model.setShowGhosts($0) }))
+            .keyboardShortcut("m", modifiers: [.command, .shift])
+            .disabled(model.movedNotes.isEmpty && !model.showGhosts)
     }
 }
 
@@ -196,10 +208,14 @@ struct HeadroomApp: App {
                     .keyboardShortcut("1", modifiers: .command)
                 Button("Changes") { AppModel.shared.setLens(.changes) }
                     .keyboardShortcut("2", modifiers: .command)
-                Button("Free Up") { AppModel.shared.setLens(.freeUp) }
-                    .keyboardShortcut("3", modifiers: .command)
                 Button("Copies") { AppModel.shared.setLens(.copies) }
+                    .keyboardShortcut("3", modifiers: .command)
+                Divider()
+                Button("Free Up") { AppModel.shared.setLens(.freeUp) }
                     .keyboardShortcut("4", modifiers: .command)
+                Button("Backup") { AppModel.shared.setLens(.backup) }
+                    .keyboardShortcut("5", modifiers: .command)
+                ShowMovedFilesCommand()
                 Divider()
                 Button("Back") { AppModel.shared.goBack() }
                     .keyboardShortcut("[", modifiers: .command)

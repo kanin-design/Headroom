@@ -320,6 +320,8 @@ struct CleanedThing: Codable, Equatable {
     var identity: String? = nil
     /// A copy replaced by a hard link to this path, the copy that stayed. Putting it back takes that link away first.
     var linkedTo: String? = nil
+    /// The note left where a file moved to a drive was. Putting the file back takes the note away: the drive keeps its copy.
+    var note: String? = nil
 }
 
 /// What's kept on disk between launches.

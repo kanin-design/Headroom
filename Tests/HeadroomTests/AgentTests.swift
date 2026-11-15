@@ -55,8 +55,11 @@ final class AgentTests: XCTestCase {
         let reply = try await ask(session(), ["jsonrpc": "2.0", "id": 1, "method": "tools/list"])
         let tools = try XCTUnwrap((reply?["result"] as? [String: Any])?["tools"] as? [[String: Any]])
         XCTAssertEqual(tools.compactMap { $0["name"] as? String },
-                       ["overview", "check", "list_suggestions", "list_duplicates", "get_plan", "select", "select_suggestions", "deselect", "show", "switch_disk", "wait_for_clean"])
-        XCTAssertEqual(AgentLook.tools.filter(\.selects).map(\.name), ["select", "select_suggestions", "deselect", "show", "switch_disk"], "these need more than looking")
+                       ["overview", "check", "list_suggestions", "list_duplicates", "get_plan", "select", "select_suggestions", "deselect", "show", "switch_disk",
+                        "get_backup", "select_for_backup", "deselect_for_backup", "set_backup_drive", "verify_moved", "wait_for_backup", "wait_for_clean"])
+        XCTAssertEqual(AgentLook.tools.filter(\.selects).map(\.name),
+                       ["select", "select_suggestions", "deselect", "show", "switch_disk", "select_for_backup", "deselect_for_backup", "set_backup_drive", "verify_moved"],
+                       "these need more than looking")
         // An agent looks at the disk with its own tools. Headroom is where it marks, not where it browses.
         for word in ["list_folder", "search", "find"] { XCTAssertFalse(tools.contains { $0["name"] as? String == word }) }
         for tool in tools {
@@ -80,16 +83,27 @@ final class AgentTests: XCTestCase {
         // Every way the app has of taking something off the disk, out of the Trash, or back again.
         let removes = ["cleanNow(", "emptyNow(", "sendToTrash(", "sendAnyway(", "undoClean(", "undoCommand(", "putBack(", "takeCopies(", "leaveInTrash(",
                        "deleteForGood(", "deleteFromTrash(", "replaceCopy(", "copyAndVerify(", "Cleaner.trash(", "Cleaner.run", "trashContents(",
-                       "removeItem(", "trashItem(", "moveItem(", "performClick", "cleanAnyway"]
+                       "removeItem(", "trashItem(", "moveItem(", "performClick", "cleanAnyway",
+                       // Backup's: moving, copying, bringing back and deleting from a drive are the user's clicks too.
+                       "runBackup(", "bringBack(", "deleteLastCopy(", "copyToMac(", "deleteFromDrive(", "DriveMover.send(", "DriveMover.copy(",
+                       "unlink(", "rename("]
         for file in agents {
             let code = try String(contentsOf: file, encoding: .utf8)
+            // The socket's own file is the one thing its code may take away, and only when it is a socket.
+            if file.lastPathComponent == "AgentSocket.swift" {
+                XCTAssertEqual(code.components(separatedBy: "unlink(").count - 1, 1, "one place that removes a file")
+                XCTAssertTrue(code.contains("S_IFSOCK"), "and it removes only a socket")
+                for call in removes where call != "unlink(" { XCTAssertFalse(code.contains(call), "\(file.lastPathComponent) calls \(call)") }
+                continue
+            }
             for call in removes {
                 XCTAssertFalse(code.contains(call), "\(file.lastPathComponent) calls \(call): an agent must have no way to remove anything")
             }
         }
         // And the tools an agent is given are exactly these. A new one has to be added here, where this is read.
         XCTAssertEqual(AgentLook.tools.map(\.name),
-                       ["overview", "check", "list_suggestions", "list_duplicates", "get_plan", "select", "select_suggestions", "deselect", "show", "switch_disk", "wait_for_clean"])
+                       ["overview", "check", "list_suggestions", "list_duplicates", "get_plan", "select", "select_suggestions", "deselect", "show", "switch_disk",
+                        "get_backup", "select_for_backup", "deselect_for_backup", "set_backup_drive", "verify_moved", "wait_for_backup", "wait_for_clean"])
     }
 
     func testAToolsAnswerAndAToolsFailureAreBothAnswers() async throws {

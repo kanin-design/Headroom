@@ -3,7 +3,7 @@ import simd
 
 /// How a piece is drawn. The shaders know these by number: see `StyleFree` and the others in `Shaders.metal`.
 enum PieceStyle: Float {
-    case folder = 0, free = 1, hidden = 2, smaller = 3, file = 4
+    case folder = 0, free = 1, hidden = 2, smaller = 3, file = 4, ghost = 5
 }
 
 /// One drawn piece of the ring.
@@ -449,7 +449,7 @@ struct RingLayout {
             // Free space closes the circle, right after what's hidden.
             // While a scan is running, the big groups keep their places instead of swapping as they fill up.
             let growing = tree.isPartial
-            kids.sort { x, y in
+            if !tree.keepsTopOrder { kids.sort { x, y in
                 func rank(_ id: UInt32) -> Int {
                     if id == tree.free { return 5 }
                     if id == tree.hidden { return 4 }
@@ -458,7 +458,7 @@ struct RingLayout {
                 }
                 let rx = rank(x), ry = rank(y)
                 return rx != ry ? rx < ry : total(x) > total(y)
-            }
+            } }
         }
 
         let perByte = (a1 - a0) / Float(parentTotal)
@@ -489,6 +489,7 @@ struct RingLayout {
             var style = PieceStyle.folder
             if n.has(NodeFlag.free) { style = .free }
             else if n.has(NodeFlag.hidden) || n.has(NodeFlag.locked) { style = .hidden }
+            else if tree.isGhost(id) { style = .ghost }
             else if !n.has(NodeFlag.directory) && !n.has(NodeFlag.synthetic) { style = .file }
             let key = Self.key(tree, id, in: kidsKey)
             pieces.append(Piece(node: id, tail: id, key: key, a0: angle, a1: angle + sweep, r0: r0, r1: r1,

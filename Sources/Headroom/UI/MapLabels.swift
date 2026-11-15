@@ -91,13 +91,14 @@ enum LabelPlacer {
 
         // Inside the pieces, biggest first. Only in the Map view: elsewhere most of the ring is dimmed on purpose.
         let order = layout.pieces.indices.sorted { layout.pieces[$0].bytes > layout.pieces[$1].bytes }
-        if lens == .map || lens == .freeUp {
+        if lens == .map || lens == .freeUp || lens == .backup {
             for i in order.prefix(160) {
                 let p = layout.pieces[i]
                 if p.isSmaller || p.ring > 3 { continue }
                 if lens == .freeUp && p.style != .free { continue }
                 let isFree = p.style == .free
-                let isHidden = p.style == .hidden
+                // A ghost is drawn faint, whatever its colour, so its name is light like on the dark parts.
+                let isHidden = p.style == .hidden || p.style == .ghost
                 // The top of a chain is what you'd call it. The whole chain shows when you point at it.
                 let title = isFree ? "Free" : model.displayName(p.node)
                 let value = tree.sizeText(p.node)
@@ -119,7 +120,7 @@ enum LabelPlacer {
         var candidates: [Candidate] = only ?? []
         if only == nil {
         switch lens {
-        case .map:
+        case .map, .backup:
             let total = Double(max(tree.totals[Int(layout.focus)], 1))
             for i in order.prefix(260) where !labelled.contains(i) {
                 let p = layout.pieces[i]
@@ -222,7 +223,7 @@ enum LabelPlacer {
         candidates = kept
 
         let spacing: CGFloat = 35
-        let maxPerSide = min(max(Int((ring.windowHeight - 120) / spacing), 3), 7)
+        let maxPerSide = min(max(Int((ring.windowHeight - 150) / spacing), 3), 7)
         var rightSide: [Candidate] = [], leftSide: [Candidate] = []
         for c in candidates {
             let mid = layout.pieces[c.index].midAngle
@@ -259,7 +260,8 @@ enum LabelPlacer {
                 let mid = CGFloat(layout.pieces[c.index].midAngle)
                 return Slot(c: c, y: cy - cos(mid) * reach, mid: mid)
             }.sorted { $0.y < $1.y }
-            let top: CGFloat = 78, bottom = ring.windowHeight - 26
+            // The drive row at the bottom is kept clear.
+            let top: CGFloat = 78, bottom = ring.windowHeight - 26 - DriveRow.height - 14
             for i in slots.indices {
                 slots[i].y = max(slots[i].y, i == 0 ? top : slots[i - 1].y + spacing)
             }
@@ -429,11 +431,13 @@ struct CenterReadout: View {
         Group {
             if let hover = model.hover {
                 hoverContent(hover, size: size)
+            } else if model.focus == 0, let pair = model.pair, pair.tree === model.tree {
+                pairContent(pair, size: size)
             } else if model.focus != 0, let tree = model.tree {
                 folderContent(tree, size: size)
-            } else if model.lens == .changes, model.changeUsesHistory || model.changeTotal > 0 {
+            } else if model.view == .changes, model.changeUsesHistory || model.changeTotal > 0 {
                 changesContent(size: size)
-            } else if model.lens == .copies, model.copies != nil {
+            } else if model.view == .copies, model.copies != nil {
                 copiesContent(size: size)
             } else {
                 diskContent(size: size)
@@ -478,7 +482,7 @@ struct CenterReadout: View {
         return HStack(alignment: .firstTextBaseline, spacing: size * 0.016) {
             ZStack(alignment: .trailing) {
                 // Changes has a sign in front, so its box makes room for one in every number it shows.
-                Text(model.lens == .changes ? "−8.88" : "8.88").font(digits).hidden()
+                Text(model.view == .changes ? "−8.88" : "8.88").font(digits).hidden()
                 Text(sign + value)
                     .font(digits)
                     .contentTransition(Motion.rolling(Double(bytes)))
@@ -500,7 +504,7 @@ struct CenterReadout: View {
         // Nothing until the disk is known, so the first frame doesn't roll up from zero.
         if let free = model.tree.map({ $0.totals[Int($0.free)] }) ?? model.volume?.free {
             let capacity = model.tree?.capacityBytes ?? model.volume?.capacity ?? 0
-            let planning = model.planNumbers.total >= 1_000_000 && model.lens == .freeUp
+            let planning = model.planNumbers.total >= 1_000_000 && model.mode == .freeUp
             let preview = free &+ model.planNumbers.total
             let usedShare = 1 - Double(free) / Double(max(capacity, 1))
             slots(size, number: bigNumber(planning ? preview : free, size: size, color: planning ? Color(red: 0.45, green: 1, blue: 0.68) : .white)) {
@@ -510,7 +514,7 @@ struct CenterReadout: View {
                     Text(planning ? "free after cleaning" : "free of \(formatBytes(capacity))")
                         .font(.system(size: size * 0.058, weight: .medium))
                         .foregroundStyle(.white.opacity(0.55))
-                    if let pointing = model.pointing, model.lens == .freeUp {
+                    if let pointing = model.pointing, model.mode == .freeUp {
                         pointingLine(pointing, size: size)
                     } else if planning {
                         Text("+\(formatBytes(model.planNumbers.total))")
@@ -527,6 +531,26 @@ struct CenterReadout: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
             }
+        }
+    }
+
+    /// With the drive beside it, the middle says what the folder holds on the Mac, and on the drive under it.
+    private func pairContent(_ pair: PairPicture, size: CGFloat) -> some View {
+        slots(size, number: bigNumber(pair.macBytes, size: size)) {
+            Text(pair.folderName)
+                .font(.system(size: size * 0.07, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.9))
+        } below: {
+            VStack(spacing: size * 0.012) {
+                Text("on this Mac")
+                    .font(.system(size: size * 0.058, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.55))
+                Text("\(formatBytes(pair.driveBytes)) on \(pair.driveName)")
+                    .font(.system(size: size * 0.05, weight: .medium).monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.36))
+            }
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
         }
     }
 
@@ -625,7 +649,8 @@ struct CenterReadout: View {
     }
 
     private func folderContent(_ tree: DiskTree, size: CGFloat) -> some View {
-        slots(size, number: bigNumber(tree.totals[Int(model.focus)], size: size)) {
+        let moved = tree.movedBytes(inside: model.focus)
+        return slots(size, number: bigNumber(tree.bytesHere(model.focus), size: size)) {
             HStack(spacing: 2) {
                 Image(systemName: "chevron.left")
                     .font(.system(size: size * 0.05, weight: .bold))
@@ -636,16 +661,23 @@ struct CenterReadout: View {
             }
             .foregroundStyle(.white.opacity(0.92))
         } below: {
-            Text(tree.isStillGrowing(model.focus) ? "so far" : shareOfDisk(tree))
-                .font(.system(size: size * 0.052, weight: .medium))
-                .foregroundStyle(.white.opacity(0.5))
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
+            VStack(spacing: size * 0.012) {
+                Text(tree.isStillGrowing(model.focus) ? "so far" : shareOfDisk(tree))
+                    .font(.system(size: size * 0.052, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.5))
+                if moved > 0 {
+                    Text("+ \(formatBytes(moved)) moved")
+                        .font(.system(size: size * 0.05, weight: .medium).monospacedDigit())
+                        .foregroundStyle(.white.opacity(0.36))
+                }
+            }
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
         }
     }
 
     private func shareOfDisk(_ tree: DiskTree) -> String {
-        let percent = Double(tree.totals[Int(model.focus)]) / Double(max(tree.capacityBytes, 1)) * 100
+        let percent = Double(tree.bytesHere(model.focus)) / Double(max(tree.capacityBytes, 1)) * 100
         return (percent >= 10 ? String(format: "%.0f%%", percent) : String(format: "%.1f%%", percent)) + " of the disk"
     }
 
@@ -666,7 +698,7 @@ struct CenterReadout: View {
             } else if !hover.note.isEmpty {
                 // In Changes the line says what changed, in the view's own colours. When it says when something was last
                 // used, it looks as it does on the map.
-                let saysChange = model.lens == .changes && !hover.tellsUse
+                let saysChange = model.view == .changes && !hover.tellsUse
                 Text(hover.note)
                     .font(.system(size: size * 0.072, weight: saysChange ? .semibold : .medium))
                     .foregroundStyle(saysChange ? changeColour(shrank: hover.shrank) : .white.opacity(0.72))

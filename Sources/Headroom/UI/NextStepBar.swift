@@ -2,8 +2,13 @@ import AppKit
 import SwiftUI
 
 /// The button that does what the ticks say. It's green in any window, focused or not, so it never looks switched off when it isn't.
-private struct GoButton: ButtonStyle {
+/// Backup's is blue: it moves things rather than throwing them away, and the two must never look alike.
+struct GoButton: ButtonStyle {
+    var moves = false
     @Environment(\.isEnabled) private var isEnabled
+
+    private var top: Color { moves ? Color(red: 0.25, green: 0.56, blue: 0.96) : Color(red: 0.15, green: 0.70, blue: 0.47) }
+    private var bottom: Color { moves ? Color(red: 0.16, green: 0.42, blue: 0.82) : Color(red: 0.10, green: 0.54, blue: 0.35) }
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -13,7 +18,7 @@ private struct GoButton: ButtonStyle {
             .frame(height: 38)
             .background {
                 RoundedRectangle(cornerRadius: 15, style: .continuous)
-                    .fill(isEnabled ? AnyShapeStyle(LinearGradient(colors: [Color(red: 0.15, green: 0.70, blue: 0.47), Color(red: 0.10, green: 0.54, blue: 0.35)], startPoint: .top, endPoint: .bottom)) : AnyShapeStyle(.white.opacity(0.08)))
+                    .fill(isEnabled ? AnyShapeStyle(LinearGradient(colors: [top, bottom], startPoint: .top, endPoint: .bottom)) : AnyShapeStyle(.white.opacity(0.08)))
             }
             .overlay {
                 if isEnabled {
@@ -21,14 +26,14 @@ private struct GoButton: ButtonStyle {
                         .strokeBorder(LinearGradient(colors: [.white.opacity(0.28), .clear], startPoint: .top, endPoint: .center), lineWidth: 1)
                 }
             }
-            .shadow(color: Color(red: 0.12, green: 0.62, blue: 0.40).opacity(isEnabled ? 0.28 : 0), radius: 11, y: 6)
+            .shadow(color: bottom.opacity(isEnabled ? 0.28 : 0), radius: 11, y: 6)
             .brightness(configuration.isPressed ? -0.06 : 0)
             .contentShape(Rectangle())
     }
 }
 
 /// The quieter choice beside it.
-private struct SoftButton: ButtonStyle {
+struct SoftButton: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 13, weight: .semibold))
@@ -47,13 +52,15 @@ struct NextStepBar: View {
 
     var body: some View {
         Group {
-            if let progress = model.cleanProgress {
+            if model.mode == .backup {
+                BackupBar(model: model)
+            } else if let progress = model.cleanProgress {
                 cleaning(progress)
             } else if let after = model.afterClean {
                 afterClean(after)
             } else if !model.plan.isEmpty {
                 planned
-            } else if model.lens == .freeUp {
+            } else {
                 nothing
             }
         }
@@ -95,35 +102,23 @@ struct NextStepBar: View {
             : ready.count == count ? "Clean \(formatBytes(model.planNumbers.total))"
             : "Clean \(ready.count) of \(count): \(formatBytes(cleanBytes(ready)))"
         return bar {
-            if model.lens == .freeUp {
-                Button {
-                    model.cleanNow()
-                } label: {
-                    Text(label)
-                        .contentTransition(Motion.rolling())
-                }
-                .disabled(partial || ready.isEmpty || model.isCleaning)
-                .buttonStyle(GoButton())
-                .help(onlyTrash ? "" : "Moves everything to the Trash. Undo puts it back.")
-                .animation(.snappy(duration: 0.25), value: model.planNumbers.total)
-                HStack(spacing: 6) {
-                    Spacer(minLength: 0)
-                    Button("Deselect all") { Motion.animate(.snappy(duration: 0.2)) { model.clearPlan() } }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.55))
-                        .fixedSize()
-                }
-            } else {
-                Button {
-                    Motion.animate(.spring(response: 0.34, dampingFraction: 0.82)) { model.setLens(.freeUp) }
-                } label: {
-                    Text("\(formatBytes(model.planNumbers.total)) selected in Free Up")
-                        .font(.system(size: 13, weight: .semibold).monospacedDigit())
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.glass)
-                .controlSize(.large)
+            Button {
+                model.cleanNow()
+            } label: {
+                Text(label)
+                    .contentTransition(Motion.rolling())
+            }
+            .disabled(partial || ready.isEmpty || model.isCleaning)
+            .buttonStyle(GoButton())
+            .help(onlyTrash ? "" : "Moves everything to the Trash. Undo puts it back.")
+            .animation(.snappy(duration: 0.25), value: model.planNumbers.total)
+            HStack(spacing: 6) {
+                Spacer(minLength: 0)
+                Button("Deselect all") { Motion.animate(.snappy(duration: 0.2)) { model.clearPlan() } }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.55))
+                    .fixedSize()
             }
         }
     }

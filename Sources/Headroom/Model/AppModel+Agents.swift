@@ -119,8 +119,8 @@ extension AppModel {
     /// read again, so it shows too.
     func select(_ references: [String], by agent: String, reason: String) -> [AgentPick] {
         if let refused = refusedAll(references) { return refused }
-        guard let tree else { return [] }
-        let picks = AgentPicks.select(references, in: tree, plan: &plan, by: agent, reason: reason) { displayName($0) }
+        guard let tree = workTree else { return [] }
+        let picks = AgentPicks.select(references, in: tree, plan: &plan, by: agent, reason: reason) { tree.name($0) }
         if picks.contains(where: { $0.outcome == .selected }) { planChanged() }
         if picks.contains(where: \.isNewerThanMap), !isScanning { scan(hurry: true) }
         return picks
@@ -128,7 +128,7 @@ extension AppModel {
 
     func deselect(paths: [String], ids: [String]) -> [AgentPick] {
         if let refused = refusedAll(paths + ids) { return refused }
-        guard let tree else { return [] }
+        guard let tree = workTree else { return [] }
         let picks = AgentPicks.deselect(paths: paths, ids: ids, in: tree, plan: &plan)
         if picks.contains(where: { $0.outcome == .deselected }) { planChanged() }
         return picks

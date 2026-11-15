@@ -56,14 +56,38 @@ enum AgentLook {
                                "ids": ["type": "array", "items": ["type": "string"], "maxItems": mostSelected, "description": "Suggestion ids."]],
                   selects: true),
         AgentTool(name: "show",
-                  description: "Bring Headroom's window forward so the user can look: on Free Up, where what is selected is listed, or on the map, and inside a folder when one is given.",
+                  description: "Bring Headroom's window forward so the user can look: on Free Up, Backup or the map, inside a folder when one is given.",
                   properties: ["path": ["type": "string", "description": "A folder to show. A file is shown in its folder."],
-                               "view": ["type": "string", "enum": ["free_up", "map"], "description": "free_up unless given."]],
+                               "view": ["type": "string", "enum": ["free_up", "backup", "map"], "description": "free_up unless given."]],
                   selects: true),
         AgentTool(name: "switch_disk",
                   description: "Have Headroom show another disk, by its name or path from overview. It reads that disk, which takes a moment: overview says when it is read.",
                   properties: ["disk": ["type": "string", "description": "The disk's name or path."]],
                   required: ["disk"], selects: true),
+        AgentTool(name: "get_backup",
+                  description: "Backup's list: big files the user moves to another drive, leaving a note in place of each. Returns the drive and whether it's connected, the selected files, what Move would do now or why it can't, and the files already moved.",
+                  properties: ["limit": ["type": "integer", "minimum": 1, "maximum": most, "description": "How many selected and moved files to list. 50 unless given."]]),
+        AgentTool(name: "select_for_backup",
+                  description: "Select files of 100 MB or more for Backup. When the user clicks Move, each is copied and verified, a note takes its place, and the original goes to the Trash. Folders aren't accepted. A file selected here is taken off Free Up's list. Nothing moves until the user clicks Move.",
+                  properties: ["paths": ["type": "array", "items": ["type": "string"], "minItems": 1, "maxItems": mostSelected, "description": "Absolute paths of files."],
+                               "reason": ["type": "string", "description": "One short line the user sees beside these: why they can live on the drive."]],
+                  required: ["paths", "reason"], selects: true),
+        AgentTool(name: "deselect_for_backup",
+                  description: "Take files off Backup's list that an agent selected. What the user selected stays.",
+                  properties: ["paths": ["type": "array", "items": ["type": "string"], "minItems": 1, "maxItems": mostSelected, "description": "Absolute paths."]],
+                  required: ["paths"], selects: true),
+        AgentTool(name: "set_backup_drive",
+                  description: "Set the drive Backup moves files to, by name or path from overview, and optionally a folder on it. Not the disk Headroom is showing, and not a read-only drive.",
+                  properties: ["drive": ["type": "string", "description": "The drive's name or path."],
+                               "folder": ["type": "string", "description": "A folder on the drive, from its top. The top of the drive unless given."]],
+                  required: ["drive"], selects: true),
+        AgentTool(name: "verify_moved",
+                  description: "Read moved files on their drive again and compare each with the hash its note keeps. Only reads. Without paths, every moved file whose drive is connected.",
+                  properties: ["paths": ["type": "array", "items": ["type": "string"], "maxItems": mostSelected, "description": "Where the files were on the Mac, as get_backup lists them."]],
+                  selects: true),
+        AgentTool(name: "wait_for_backup",
+                  description: "Wait until the user moves or copies Backup's files, or a verify ends, then report each file. Returns unfinished after the timeout; call again to keep waiting.",
+                  properties: ["timeout_seconds": ["type": "integer", "minimum": 1, "maximum": longestWait, "description": "How long to wait. 600 unless given."]]),
         AgentTool(name: "wait_for_clean",
                   description: "Wait until the user has cleaned in Headroom, then say what went to the Trash, how much that frees and what could not go. Call it after show, when the selection is ready for the user. It returns unfinished after the time given, and can be called again.",
                   properties: ["timeout_seconds": ["type": "integer", "minimum": 1, "maximum": longestWait, "description": "How long to wait. 600 unless given."]]),
@@ -212,6 +236,10 @@ enum AgentLook {
     /// What Headroom knows about one path an agent found.
     static func check(_ reference: String, in tree: DiskTree, rules: RuleBook, plan: PlanList, planned: [UInt32] = [], excluded: [UInt32] = [],
                       open: OpenFiles? = nil) -> [String: Any] {
+        if let moved = MovedNote.read(at: MovedNote.notePath(for: written(reference))) ?? MovedNote.read(at: written(reference)) {
+            // Only a note is here: the file is on a drive.
+            return ["path": moved.originalPath, "exists": false, "moved_to": moved.driveName, "size": moved.size, "size_text": formatBytes(moved.size)]
+        }
         guard let node = try? node(reference, in: tree) else {
             // Not on the map: newer than the last scan, too small to be listed, or not there at all.
             let path = PathMath.visible(real(written(reference)) ?? written(reference))
@@ -436,11 +464,23 @@ struct AgentAPI {
         guard AgentLook.tools.contains(where: { $0.name == tool }) else { throw AgentFailure("No such tool: \(tool)") }
         switch tool {
         case "overview": return overview()
+        case "get_backup": return AgentBackup.state(model, limit: AgentLook.limit(arguments))
+        case "wait_for_backup": return await AgentBackup.wait(model, seconds: AgentLook.integer(arguments["timeout_seconds"]))
+        case "set_backup_drive": return try AgentBackup.setDrive(model, arguments)
+        case "select_for_backup":
+            guard let reason = arguments["reason"] as? String, !reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw AgentFailure("Say why, in one short line: the user sees it beside what you select.")
+            }
+            return AgentBackup.picked(model.selectForBackup(try list(arguments, "paths"), agent: agent, reason: reason), model: model, selecting: true)
+        case "deselect_for_backup":
+            return AgentBackup.picked(model.deselectForBackup(try list(arguments, "paths"), byAgent: true), model: model, selecting: false)
+        case "verify_moved": return try AgentBackup.verify(model, arguments)
         case "switch_disk": return try switchDisk(arguments)
         case "wait_for_clean": return await waitForClean(arguments)
         default: break
         }
-        guard let tree = model.tree else { throw AgentFailure("Headroom has no map yet. It is still starting or scanning; try again shortly.") }
+        // The real map, never a picture drawn for looking at.
+        guard let tree = model.workTree else { throw AgentFailure("Headroom has no map yet. It is still starting or scanning; try again shortly.") }
         switch tool {
         case "check":
             let paths = try list(arguments, "paths", atMost: AgentLook.mostChecked)
@@ -465,7 +505,8 @@ struct AgentAPI {
             let results = model.deselect(paths: paths, ids: ids)
             return ["deselected": results.filter { $0.outcome == .deselected }.count, "results": results.map { ["path": $0.path, "result": $0.outcome.text] }]
         case "show":
-            let view: Lens = arguments["view"] as? String == "map" ? .map : .freeUp
+            let asked = arguments["view"] as? String
+            let view: Lens = asked == "map" ? .map : (asked == "backup" ? .backup : .freeUp)
             return ["shown": try model.show(arguments["path"] as? String, view: view)]
         case "list_suggestions": return try AgentLook.suggestions(model.suggestions, group: arguments["group"] as? String, in: tree)
         case "list_duplicates": return AgentLook.duplicates(model.copies, reading: model.copiesReading, arguments: arguments, in: tree)

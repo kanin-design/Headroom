@@ -12,7 +12,7 @@ enum AgentText {
         identity.programName + "  ·  " + (identity.signer ?? "Unsigned")
     }
 
-    static let whatAllowingMeans = "It can read the names and sizes of your files and folders, and select things for removal. Nothing is removed until you clean in Headroom."
+    static let whatAllowingMeans = "It can see the names and sizes of your files and folders, and select them for Free Up or Backup. Only you can clean or move them."
 
     /// The command an agent is given to reach this copy of Headroom.
     static var command: String {
@@ -134,7 +134,7 @@ struct AgentsView: View {
                     }
                     .controlSize(.small)
                 }
-                .help("Add this to an agent as an MCP server. Headroom asks you before a new agent gets any answers.")
+                .help("Add to an agent as an MCP server")
             }
             if !agents.activity.isEmpty {
                 section("Activity") {

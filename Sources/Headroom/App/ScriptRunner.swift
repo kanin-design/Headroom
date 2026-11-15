@@ -231,7 +231,7 @@ enum ScriptRunner {
     @MainActor private static var clockStart = 0.0
 
     /// The parts of the harness. Every step belongs to one, and is carried out by that part's function below.
-    private enum StepGroup { case timing, copies, map, menus, plan, measuring, window, card, updates, agents }
+    private enum StepGroup { case timing, copies, map, menus, plan, measuring, window, card, updates, agents, backup }
 
     /// Every step there is, and the part that does it.
     private static let groupOfStep: [String: StepGroup] = [
@@ -263,6 +263,10 @@ enum ScriptRunner {
         "look": .card, "cardpress": .card, "carddrag": .card, "cardframe": .card, "card": .card,
         "checkupdates": .updates, "installupdate": .updates, "signedlikethis": .updates, "updatestate": .updates,
         "agents": .agents, "agentanswer": .agents, "agentremove": .agents, "agentswindow": .agents,
+        "drives": .backup, "backupdrive": .backup, "backupselect": .backup, "backupdeselect": .backup, "backupmove": .backup, "backupcopy": .backup,
+        "backupwait": .backup, "backupstate": .backup, "ghosts": .backup, "bringback": .backup, "verifymoved": .backup, "deletelast": .backup,
+        "backupcandidates": .backup, "undomove": .backup, "driveside": .backup, "drivepick": .backup, "drivecopy": .backup,
+        "drivecheck": .backup, "drivedelete": .backup,
     ]
 
     @MainActor
@@ -278,8 +282,89 @@ enum ScriptRunner {
         case .card: await runCardStep(command, argument, model)
         case .updates: await runUpdatesStep(command, argument, model)
         case .agents: await runAgentsStep(command, argument)
+        case .backup: await runBackupStep(command, argument, model)
         case nil:
             print("unknown step: \(command)")
+        }
+    }
+
+    /// Backup: the drives, its list, a move or copy and what it did, ghosts, and the moved files. Moves only ever happen
+    /// between the two test disks: see `Cleaner.mayAct`.
+    @MainActor
+    private static func runBackupStep(_ command: String, _ argument: String, _ model: AppModel) async {
+        func notes(_ which: String) -> [MovedNote] {
+            which.isEmpty || which == "all" ? model.movedNotes : model.movedNotes.filter { $0.originalPath == which || $0.name == which }
+        }
+        switch command {
+        case "drives":
+            model.refreshDrives()
+            for drive in model.drives {
+                print("drive \(drive.name) at \(drive.mountPath): \(drive.fileSystemTitle), \(formatBytes(drive.free)) free\(drive.isReadOnly ? ", read-only" : "")\(model.whyNotDestination(drive).map { ", not for Backup: \($0)" } ?? "")")
+            }
+        case "backupdrive":
+            model.refreshDrives()
+            guard let drive = model.drives.first(where: { $0.name == argument || $0.mountPath == argument }) else { print("backupdrive: no drive \(argument)"); return }
+            model.chooseDestination(drive)
+            print("backupdrive: \(model.backup.destination?.title ?? "not chosen")")
+        case "backupselect":
+            for pick in model.selectForBackup([argument]) { print("backupselect \(pick.path): \(pick.outcome.text)") }
+        case "backupdeselect":
+            for pick in model.deselectForBackup([argument]) { print("backupdeselect \(pick.path): \(pick.outcome.text)") }
+        case "backupcandidates":
+            let tree = model.workTree
+            for node in model.backupCandidates().prefix(20) { print("candidate \(tree?.friendlyPath(node) ?? "") \(formatBytes(tree?.totals[Int(node)] ?? 0))") }
+        case "backupmove", "backupcopy":
+            let ready = model.backupReady()
+            print("\(command): \(ready.problem ?? "\(ready.items.count) files, \(formatBytes(ready.items.reduce(0) { $0 &+ $1.bytes }))")")
+            model.runBackup(copyOnly: command == "backupcopy")
+        case "backupwait":
+            let started = Date()
+            while model.driveJob?.isRunning == true, Date().timeIntervalSince(started) < 120 { try? await Task.sleep(for: .milliseconds(100)) }
+            guard let job = model.driveJob else { print("backupwait: no run"); return }
+            print("backupwait: \(job.summary)")
+            for entry in job.entries { print("  \(entry.title): \(entry.step)") }
+        case "backupstate":
+            print("backup: to \(model.backup.destination?.title ?? "nothing") (\(model.destinationDrive == nil ? "not connected" : "connected")), \(model.backup.items.count) selected, \(formatBytes(model.backupBytes)); Free Up has \(model.plan.count)")
+            for item in model.backup.items { print("  selected \(item.path) \(formatBytes(item.bytes))\(item.agent.map { " by \($0)" } ?? "")") }
+            for note in model.movedNotes { print("  moved \(note.originalPath) → \(note.driveName):\(note.drivePath) \(formatBytes(note.size)) \(model.drive(of: note) == nil ? "(not connected)" : "")") }
+            print("  ghosts \(model.showGhosts ? "on" : "off"), on screen: \(model.tree?.ghosts.count ?? 0); ready: \(model.backupReady().problem ?? "yes")")
+        case "driveside":
+            model.setShowDriveSide(argument != "off")
+            let started = Date()
+            while argument != "off", model.pair == nil, Date().timeIntervalSince(started) < 20 { try? await Task.sleep(for: .milliseconds(100)) }
+            guard let pair = model.pair else { print("driveside \(argument): not shown, focus \(model.focus)"); return }
+            print("driveside: \(pair.macPath) beside \(pair.drivePath), \(pair.tree.count) nodes, on screen \(model.tree === pair.tree)")
+            for place in PairPlace.allCases { if let c = pair.counts[place] { print("  \(place.title(drive: pair.driveName)): \(c.files) files, \(formatBytes(c.bytes))") } }
+            let pieces = model.engine.layout.pieces
+            for p in pieces where p.ring == 0 { print("  half \(pair.tree.name(p.node)) from \(String(format: "%.0f", p.a0 * 180 / .pi))° to \(String(format: "%.0f", p.a1 * 180 / .pi))°") }
+        case "drivepick":
+            // drivepick name: picks a file on the drive's half, as a click on it does.
+            guard let pair = model.pair, let node = pair.driveRel.first(where: { $0.value == argument || $0.value.hasSuffix("/" + argument) })?.key else {
+                print("drivepick \(argument): not on the drive's half"); return
+            }
+            model.toggleDriveFile(node, in: pair)
+            print("drivepick: \(model.driveSelection.map { "\($0.title) (\($0.place))" }.joined(separator: ", "))")
+        case "drivecopy":
+            model.copyToMac(model.driveSelection)
+        case "drivecheck":
+            model.checkOnDrive(model.driveSelection)
+        case "drivedelete":
+            // As the panel's Delete does once it's been confirmed.
+            model.deleteFromDrive(model.driveSelection)
+        case "ghosts":
+            model.setShowGhosts(argument != "off")
+            try? await Task.sleep(for: .milliseconds(400))
+            print("ghosts \(argument): \(model.tree?.ghosts.count ?? 0) drawn, real map kept: \(model.bareTree != nil)")
+        case "bringback":
+            model.bringBack(notes(argument))
+        case "verifymoved":
+            model.verifyMoved(notes(argument))
+        case "deletelast":
+            // The confirmation is the user's in the app. A scripted check only ever reaches its own test disks.
+            model.deleteLastCopy(notes(argument))
+        default:
+            // undomove: what ⌘Z does after a move.
+            model.undoCommand()
         }
     }
 
@@ -464,7 +549,7 @@ enum ScriptRunner {
             if view !== w.contentView { w.contentView?.mouseMoved(with: event) }
         case "lens":
             // As a click on the switcher does it.
-            let lens: Lens = argument == "changes" ? .changes : argument == "freeUp" ? .freeUp : argument == "copies" ? .copies : .map
+            let lens: Lens = argument == "changes" ? .changes : argument == "freeUp" ? .freeUp : argument == "copies" ? .copies : argument == "backup" ? .backup : .map
             Motion.animate(.spring(response: 0.34, dampingFraction: 0.82)) { model.setLens(lens) }
         case "focus":
             if let node = resolve(argument, model), let tree = model.tree { model.zoom(into: RingLayout.chainTail(tree: tree, node)) }
@@ -1265,7 +1350,7 @@ enum ScriptRunner {
             // collide 860 620 asks for that size; without numbers, a little smaller than now.
             guard let w = mainWindow else { return }
             let numbers = argument.split(separator: " ").compactMap { Double($0) }
-            Motion.animate(.spring(response: 0.34, dampingFraction: 0.82)) { model.setLens(model.lens == .map ? .changes : .map) }
+            Motion.animate(.spring(response: 0.34, dampingFraction: 0.82)) { model.setView(model.view == .map ? .changes : .map) }
             var frame = w.frame
             let size = numbers.count == 2 ? CGSize(width: numbers[0], height: numbers[1]) : CGSize(width: frame.width - 40, height: frame.height - 30)
             frame.origin.y += frame.height - size.height

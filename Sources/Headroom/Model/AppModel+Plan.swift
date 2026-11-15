@@ -100,7 +100,7 @@ extension AppModel {
 
     /// Things are leaving the disk or coming back to it: a clean or a Send to Trash, emptying the Trash, or putting a clean
     /// back. Nothing else may change the map or the list meanwhile, and quitting waits for it.
-    var isCleaning: Bool { cleanProgress != nil || afterClean?.isEmptying == true || isPuttingBack }
+    var isCleaning: Bool { cleanProgress != nil || afterClean?.isEmptying == true || isPuttingBack || driveJob?.isRunning == true }
 
     /// Whether the plan may be changed now. Nothing changes while things are on their way out, and whoever tried is told so:
     /// this is for the moment of a click, never for a view to read while it draws.
@@ -321,6 +321,7 @@ extension AppModel {
     /// Everything that follows a change to the list: the ring, the numbers, and the checks if you're looking at them.
     func planChanged() {
         planVersion &+= 1
+        takeOffBackupWhatFreeUpHas()
         guard let tree else { return }
         // What's no longer planned has nothing left to say about the last clean.
         cleanFailures = cleanFailures.filter { plan.item($0.key) != nil }
@@ -382,7 +383,7 @@ extension AppModel {
     }
 
     func ghostShare() -> Float {
-        guard lens == .freeUp, let tree, !previewingAfter else { return 0 }
+        guard mode == .freeUp, let tree, !previewingAfter else { return 0 }
         return Float(planNumbers.total) / Float(max(tree.capacityBytes, 1))
     }
 
@@ -412,7 +413,7 @@ extension AppModel {
 
     /// Looks at everything that's ticked as soon as the ticking stops, so what needs a look shows before you press Clean.
     func checkSoon() {
-        guard lens == .freeUp, !isCleaning else { return }
+        guard mode == .freeUp, !isCleaning else { return }
         checkTask?.cancel()
         checkTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(180))
@@ -546,7 +547,7 @@ extension AppModel {
         }
         picks.sort { $0.score > $1.score }
         Motion.animate(.easeOut(duration: 0.14)) {
-            labels = LabelPlacer.place(layout: layout, ring: ring, lens: lens, tree: tree, model: self, only: Array(picks.prefix(7)))
+            labels = LabelPlacer.place(layout: layout, ring: ring, lens: .freeUp, tree: tree, model: self, only: Array(picks.prefix(7)))
             labelsVisible = true
         }
     }
@@ -566,6 +567,10 @@ extension AppModel {
     /// A click on the ring: this too. A second click takes it back.
     func togglePiece(_ node: UInt32) {
         guard let tree, mayEditPlan() else { return }
+        if tree.isGhost(node) {
+            showTip("Already moved. Move it back from the Moved list.")
+            return
+        }
         guard let path = planPath(node, in: tree) else {
             let cantLook = tree.nodes[Int(node)].has(NodeFlag.hidden) || tree.nodes[Int(node)].has(NodeFlag.locked)
             showTip(cantLook ? "Headroom can't read this." : "\(displayName(node)) is part of macOS.")
@@ -808,7 +813,7 @@ extension AppModel {
 
     func setPreviewAfter(_ on: Bool) {
         guard on != previewingAfter, let tree else { return }
-        if on, planNumbers.total == 0 || lens != .freeUp || planNumbers.after == nil { return }
+        if on, planNumbers.total == 0 || mode != .freeUp || planNumbers.after == nil { return }
         previewingAfter = on
         Motion.animate(.easeOut(duration: 0.12)) { labelsVisible = false }
         if on, let after = planNumbers.after {

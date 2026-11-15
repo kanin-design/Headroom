@@ -1,6 +1,13 @@
 import Darwin
 import Foundation
 
+/// Takes away the socket file a copy of the app left, and only that: anything at the path that isn't a socket stays.
+private func removeSocketFile(_ path: String) {
+    var info = stat()
+    guard lstat(path, &info) == 0, info.st_mode & S_IFMT == S_IFSOCK else { return }
+    Darwin.unlink(path)
+}
+
 /// The door agents come in by: a socket file in Headroom's own folder that only you can open. Nothing listens on the
 /// network.
 enum AgentSocket {
@@ -52,7 +59,7 @@ enum AgentSocket {
             close(other)
             return nil
         }
-        unlink(path)
+        removeSocketFile(path)
         let fd = open()
         guard fd >= 0 else { return nil }
         // Only you: set before anyone can find it, and again on the file itself.
@@ -165,6 +172,6 @@ final class AgentListener: @unchecked Sendable {
         shutdown(fd, SHUT_RDWR)
         close(fd)
         fd = -1
-        unlink(path)
+        removeSocketFile(path)
     }
 }

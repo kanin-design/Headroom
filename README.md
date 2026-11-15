@@ -61,6 +61,10 @@ writes to them.
 
 ## What you can do
 
+The toolbar has two pickers. The view, **Map**, **Changes** or **Copies**, sets how the ring is drawn. The mode, **Free Up**
+or **Backup**, sets the inspector, what a click on the ring selects and the button at the bottom. Each mode keeps its own
+selection.
+
 ### Map
 
 Every folder is a piece of the ring, sized by the space it uses and coloured by the group it belongs to, so related
@@ -83,8 +87,8 @@ at a box and its files light up on the ring. Nothing happens until you click **C
 
 What grew since the last scan, or in the last day, week or month. Each piece is coloured by how much of it is new or
 changed, from red for a little to yellow for all of it. The middle shows how much free space changed since an earlier
-scan, or, without one, the size of the files modified in that time. The inspector lists what grew or was modified in the
-folder you're in.
+scan, or, without one, the size of the files modified in that time. The time to compare with is at the top of the
+inspector.
 
 **Untouched** turns it round: what hasn't changed in a month, three months or a year, from deep blue for a little to pale
 ice for all of it. An app you opened, a film you watched or a game you played in that time counts as touched, however old
@@ -94,11 +98,11 @@ its files are.
 
 ![Copies: each set of copies in a colour of its own on the ring, with the three copies of one film lit up and named, and a short stack of sets in the inspector](docs/copies.jpg)
 
-Duplicates, by content. Each set has its own colour on the ring. Point at a set to see where every copy is, even ones too
-small to draw, with the copy to keep marked **Keep**. Open a set to pick a different one to keep, then **Delete**,
-**Hardlink** or **Symlink** the rest. Each copy is compared byte for byte first and goes to the Trash on record, so Undo puts
-it back. Or tick the set to delete the duplicates with the next Clean. Duplicates of many files in the same folders, such as
-an exported photo folder, are one set.
+Duplicates, by content. Each set has its own colour on the ring, and in Free Up the inspector lists the sets. Point at a
+set to see where every copy is, even ones too small to draw, with the copy to keep marked **Keep**. Open a set to pick a
+different one to keep, then **Delete**, **Hardlink** or **Symlink** the rest. Each copy is compared byte for byte first
+and goes to the Trash on record, so Undo puts it back. Or tick the set to delete the duplicates with the next Clean.
+Duplicates of many files in the same folders, such as an exported photo folder, are one set.
 
 Hardlinks, clones and symlinks are listed below the duplicates; they take no extra space. Files are only read when you open
 Copies, and never one that's only in iCloud.
@@ -123,6 +127,18 @@ inspector too.
 Double-click a file on the ring to open it. Right-click anything to copy its name or path, open it, show it in Finder,
 open it in Terminal or move it to the Trash.
 
+### Backup
+
+Backup moves files of 100 MB and up to another drive and leaves a small note in place of each. Choose the drive at the
+bottom right, select files in the list or on the ring, and click **Move**. Each file is copied and verified against its
+SHA-256 before the original goes to the Trash, so Undo puts it back until you empty it. Each copy gets a `name.sha256`
+that `shasum -a 256 -c` can check; the note, `name.hrmoved`, is plain text saying where the file went.
+
+**Show moved files** draws moved files where they were, even with the drive unplugged. **Compare with *drive*** splits
+the ring: this folder on the Mac on the left, on the drive on the right, coloured by where each file is. Select files on
+the drive's half to copy them to the Mac, verify them or delete them from the drive. From the Moved list you can move a
+file back, verify it or delete it from the drive. A file is on Free Up's list or Backup's, never both.
+
 ### Agents
 
 An AI agent such as Claude Code can look through your disk with its own tools and select what it thinks can go in
@@ -130,8 +146,9 @@ Headroom, so you see it on the map and decide. Add Headroom to the agent as an M
 **Headroom → Agents…**. The first time an agent connects, Headroom asks you: **Allow**, **Look Only** or **Don't Allow**.
 
 What an agent selects is listed in Free Up under its name, largest first, with its reason beside each item. It's told
-what removing each thing really frees, and which other copies a hardlinked file has. An agent can't delete anything: it
-has no command that removes, empties the Trash or presses Clean. Cleaning is always your click.
+what removing each thing really frees, and which other copies a hardlinked file has. It can also select big files for
+Backup and choose its drive. An agent can't delete or move anything: it has no command that removes, empties the Trash
+or presses Clean or Move. Those are always your clicks.
 
 ## Get started
 
@@ -163,7 +180,9 @@ click **Clean**.
 
 | | |
 |---|---|
-| ⌘1, ⌘2, ⌘3, ⌘4 | Map, Changes, Free Up, Copies |
+| ⌘1, ⌘2, ⌘3 | Map, Changes, Copies |
+| ⌘4, ⌘5 | Free Up, Backup |
+| ⇧⌘M | Show moved files (in Backup) |
 | ⇧⌘↑ | Back to the whole disk |
 | ⌃⌘I | Show or hide the inspector |
 | ⌘F | Search |
@@ -173,7 +192,7 @@ click **Clean**.
 | ⌘←, ⌘→ or ⌘[, ⌘] | Back and forward |
 | ⌘C, ⌥⌘C | Copy name, copy path |
 | ⌘O, ⌥⌘R | Open, show in Finder |
-| ⌘⌫ | Select or deselect in Free Up |
+| ⌘⌫ | Select or deselect in Free Up, or for Backup |
 | ⌘Z | Undo the last Move to Trash or clean |
 | ⌘R | Rescan at full speed |
 | Hold ⌥ in Free Up | Preview the disk after cleaning |

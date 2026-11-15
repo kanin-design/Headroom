@@ -97,6 +97,7 @@ struct RootView: View {
 
     /// Where you are, as a Finder window says it: the folder you're in, or the disk itself.
     private var title: String {
+        if model.focus == 0, let pair = model.pair, pair.tree === model.tree { return pair.folderName }
         guard model.focus != 0, model.tree != nil else { return model.volume?.shownName ?? "Headroom" }
         return model.displayName(model.focus)
     }
@@ -106,6 +107,7 @@ struct RootView: View {
     private var subtitle: String {
         if model.isScanning { return model.scanFiles > 0 ? "Scanning… \(formatCount(model.scanFiles)) files" : "Scanning…" }
         if !model.hasFullAccess, model.volume?.isBoot == true { return "Needs Full Disk Access" }
+        if let pair = model.pair, pair.tree === model.tree { return "\(model.volume?.shownName ?? "This Mac")  ·  compared with \(pair.driveName)" }
         guard let free = model.tree.map({ $0.totals[Int($0.free)] }) ?? model.volume?.free else { return "" }
         if model.focus != 0 { return "\(model.volume?.shownName ?? "Disk")  ·  \(formatBytes(free)) free" }
         let capacity = model.tree?.capacityBytes ?? model.volume?.capacity ?? 0
@@ -115,7 +117,7 @@ struct RootView: View {
     /// The real place on the disk the title stands for. Groups Headroom makes up, such as macOS's own parts, have none.
     private var proxyURL: URL? {
         guard !HiddenNames.isOn, let tree = model.tree, let volume = model.volume else { return nil }
-        if model.focus == 0 { return URL(fileURLWithPath: volume.mountPath) }
+        if model.focus == 0 { return URL(fileURLWithPath: model.pair.flatMap { $0.tree === tree ? $0.macPath : nil } ?? volume.mountPath) }
         return tree.path(model.focus).map { URL(fileURLWithPath: $0) }
     }
 }
@@ -137,8 +139,13 @@ private struct MainToolbar: ToolbarContent {
                 .disabled(!model.canGoForward)
                 .help("Forward")
         }
+        // Two pickers with space between: the view, and the mode.
         ToolbarItem(placement: .principal) {
-            LensPicker(model: model)
+            LensPicker(model: model, lenses: Lens.views, name: "View")
+        }
+        ToolbarSpacer(.fixed, placement: .principal)
+        ToolbarItem(placement: .principal) {
+            LensPicker(model: model, lenses: Lens.actions, name: "Mode")
         }
         ToolbarItem(placement: .primaryAction) {
             Button { model.scan(hurry: true) } label: { Label("Scan Again", systemImage: "arrow.clockwise") }
@@ -148,15 +155,19 @@ private struct MainToolbar: ToolbarContent {
     }
 }
 
-/// Map, Changes and Free Up. Switching never moves the ring, only what its colours say.
+/// One of the toolbar's two pickers: the view (Map, Changes, Copies) or the mode (Free Up, Backup). Each always has one
+/// chosen, and choosing in one leaves the other as it is.
 struct LensPicker: View {
     let model: AppModel
+    let lenses: [Lens]
+    let name: String
 
     var body: some View {
-        Picker("View", selection: Binding(get: { model.lens }, set: { lens in
-            Motion.animate(.spring(response: 0.34, dampingFraction: 0.82)) { model.setLens(lens) }
+        let isMode = lenses.first?.isAction == true
+        Picker(name, selection: Binding<Lens>(get: { isMode ? model.mode : model.view }, set: { lens in
+            Motion.animate(.spring(response: 0.34, dampingFraction: 0.82)) { isMode ? model.setMode(lens) : model.setView(lens) }
         })) {
-            ForEach(Lens.allCases) { lens in
+            ForEach(lenses) { lens in
                 Text(lens.title)
                     .help(lens.help)
                     .tag(lens)
@@ -164,10 +175,12 @@ struct LensPicker: View {
         }
         .pickerStyle(.segmented)
         .labelsHidden()
+        .fixedSize()
     }
 }
 
-/// The title's menu: the folders the one you're in is inside, to go straight back to one, then the disks.
+/// The title's menu: the folders the one you're in is inside, to go straight back to one. Disks are chosen at the bottom
+/// left, in the drive row.
 private struct TitleMenu: View {
     let model: AppModel
 
@@ -183,15 +196,6 @@ private struct TitleMenu: View {
                         Label(model.displayName(node), systemImage: "folder")
                     }
                 }
-            }
-            Divider()
-        }
-        ForEach(model.volumes, id: \.mountPath) { volume in
-            Button {
-                model.switchVolume(volume)
-            } label: {
-                Label("\(volume.shownName)  ·  \(formatBytes(volume.free)) free of \(formatBytes(volume.capacity))",
-                      systemImage: volume.isBoot ? "internaldrive" : "externaldrive")
             }
         }
     }
@@ -233,10 +237,8 @@ struct BottomArea: View {
             if !model.hasFullAccess && !model.accessCardDismissed, model.volume?.isBoot == true {
                 AccessCard(model: model)
                     .transition(Motion.arrival(from: .bottom))
-            } else if model.focus != 0 {
-                Breadcrumbs(model: model)
-                    .transition(.opacity)
             }
+            DriveRow(model: model)
         }
         .padding(.bottom, 12)
         .animation(.spring(response: 0.38, dampingFraction: 0.86), value: model.message)

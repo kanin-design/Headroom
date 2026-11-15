@@ -384,7 +384,16 @@ enum FinderAsk {
 /// disk called HeadroomTest, whatever the script asks, so the app can't be used to reach your files that way.
 enum Cleaner {
     static let testDisk = "/Volumes/HeadroomTest"
+    /// The second test disk, the only other place a scripted check may copy to, for Backup.
+    static let testDrive = "/Volumes/HRDrive"
     nonisolated(unsafe) static var onlyInside: String? = ScriptRunner.path == nil ? nil : testDisk
+
+    /// Whether a scripted check may act on this path: inside the test disk, or the second test disk Backup copies to.
+    /// Everywhere, when it isn't a scripted check.
+    static func mayAct(on path: String) -> Bool {
+        guard let root = onlyInside else { return true }
+        return PathMath.isInside(path, root) || PathMath.isInside(path, testDrive)
+    }
 
     enum Failure: Error {
         case notAllowed
@@ -402,7 +411,7 @@ enum Cleaner {
     }
 
     static func mayTouch(_ path: String, step: PlanStep = .trash) -> Bool {
-        if let root = onlyInside, !PathMath.isInside(path, root) { return false }
+        if !mayAct(on: path) { return false }
         if step == .uninstall { return Safety.canUninstall(path) }
         return Safety.canTrash(path)
     }
@@ -432,7 +441,7 @@ enum Cleaner {
     /// could have gone to that is the same file.
     static func findInTrash(_ wanted: String, from original: String) -> String? {
         var folders = [NSHomeDirectory() + "/.Trash", PathMath.mount(of: original) + "/.Trashes/\(getuid())"]
-        if let root = onlyInside { folders += [root + "/.Trash", root + "/.Trashes/\(getuid())"] }
+        if let root = onlyInside { folders += [root + "/.Trash", root + "/.Trashes/\(getuid())", testDrive + "/.Trashes/\(getuid())"] }
         for folder in folders {
             for name in (try? FileManager.default.contentsOfDirectory(atPath: folder)) ?? [] where identity(of: folder + "/" + name) == wanted {
                 return folder + "/" + name
@@ -531,7 +540,7 @@ enum Cleaner {
     /// Puts something back where it was. It never replaces what's there now, except the link that took a linked copy's place,
     /// and only while that is still a link to the copy that stayed.
     static func putBack(_ thing: CleanedThing) throws {
-        if let root = onlyInside, !PathMath.isInside(thing.original, root) { throw Failure.notAllowed }
+        if !mayAct(on: thing.original) { throw Failure.notAllowed }
         let fm = FileManager.default
         if let kept = thing.linkedTo, isLink(thing.original, to: kept), isStillThat(thing) { unlink(thing.original) }
         if fm.fileExists(atPath: thing.original) { throw Failure.wouldOverwrite(thing.original) }
@@ -642,7 +651,7 @@ enum Cleaner {
     /// Only for something this app moved to the Trash. Anything else in there is left alone. Says whether it was deleted.
     @discardableResult
     static func deleteForGood(_ thing: CleanedThing) throws -> Bool {
-        if let root = onlyInside, !PathMath.isInside(thing.inTrash, root) { throw Failure.notAllowed }
+        if !mayAct(on: thing.inTrash) { throw Failure.notAllowed }
         guard isInTrash(thing.inTrash) else { throw Failure.notAllowed }
         var there = stat()
         guard lstat(thing.inTrash, &there) == 0 else { return false }

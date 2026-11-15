@@ -162,10 +162,9 @@ extension AppModel {
     }
 
     private func selectAction(for thing: NamedThing, startsGroup: Bool, tree: DiskTree) -> ThingAction {
-        let isOn = plannedTest()
+        let isOn = mode == .backup ? backupPlanned() : plannedTest()
         let planned = thing.nodes.allSatisfy { isOn($0) }
-        let place = lens == .freeUp ? "" : " in Free Up"
-        return ThingAction(title: (planned ? "Deselect" : "Select") + place, symbol: planned ? "minus.circle" : "plus.circle", shortcut: .selectThing,
+        return ThingAction(title: planned ? "Deselect" : "Select", symbol: planned ? "minus.circle" : "plus.circle", shortcut: .selectThing,
                            startsGroup: startsGroup, run: stillThisScan(tree) { self.toggleSelection(of: thing) })
     }
 
@@ -275,19 +274,15 @@ extension AppModel {
             title = "\"\(searchText)\": \(searchResults.count.formatted()) found"
             rows = searchResults.prefix(most).map { (tree.friendlyPath($0), formatBytes(tree.totals[Int($0)])) }
         } else {
-            switch lens {
-            case .map:
-                let folder = RingLayout.chainTail(tree: tree, focus)
-                title = (focus == 0 ? realName(of: 0) : tree.friendlyPath(folder)) + ", " + formatBytes(tree.totals[Int(focus)])
-                rows = panelNodes(tree).prefix(most).map { (displayName($0), tree.sizeText($0)) }
-                let own = tree.nodes[Int(folder)].bytes
-                if focus != 0, own > 0 { rows.append(("Smaller items here", formatBytes(own))) }
-            case .changes:
-                title = focus == 0 ? "Changes" : "Changes in " + displayName(RingLayout.chainTail(tree: tree, focus))
-                rows = changeRows.prefix(most).map { ($0.title, "+" + formatBytes(UInt64(max($0.delta, 0)))) }
-            case .freeUp:
+            // What the panel shows: the mode's, or in Copies with Free Up, the duplicates.
+            switch mode == .backup ? Lens.backup : (view == .copies ? Lens.copies : Lens.freeUp) {
+            case .map, .changes, .freeUp:
                 title = "Free Up"
                 rows = boxes.flatMap(\.rows).prefix(most).map { ($0.title, formatBytes($0.gain)) }
+            case .backup:
+                title = "Backup" + (backup.destination.map { " to " + $0.title } ?? "")
+                rows = backup.items.prefix(most).map { (DiskTree.friendly($0.path), formatBytes($0.bytes)) }
+                    + movedNotes.prefix(most).map { ("Moved: " + DiskTree.friendly($0.originalPath) + " → " + $0.driveName, formatBytes($0.size)) }
             case .copies:
                 title = focus == 0 ? "Copies" : "Copies in " + displayName(RingLayout.chainTail(tree: tree, focus))
                 // Every copy and name of each, where it is, so the list says everything the panel does.
@@ -377,7 +372,7 @@ extension AppModel {
     /// so do the window's size and place, through the scene in `HeadroomApp`. A scripted check starts the same way every
     /// time, and leaves yours alone, unless it's started with `--remember-window`.
     static let remembersWindow = ScriptRunner.path == nil || CommandLine.arguments.contains("--remember-window")
-    private static let inspectorShownKey = "inspectorShown", inspectorWidthKey = "inspectorWidth", viewKey = "view"
+    private static let inspectorShownKey = "inspectorShown", inspectorWidthKey = "inspectorWidth", viewKey = "view", modeKey = "mode"
 
     /// How wide the inspector opens: as you last left it, or wide enough for Free Up.
     static var savedInspectorWidth: CGFloat {
@@ -390,16 +385,19 @@ extension AppModel {
     func restoreWindow() {
         guard Self.remembersWindow else { return }
         let defaults = UserDefaults.standard
-        let view = defaults.string(forKey: Self.viewKey).flatMap(Lens.init(rawValue:))
+        let saved = defaults.string(forKey: Self.viewKey).flatMap(Lens.init(rawValue:))
+        let savedMode = defaults.string(forKey: Self.modeKey).flatMap(Lens.init(rawValue:))
         let shown = defaults.object(forKey: Self.inspectorShownKey) as? Bool
-        if let view { setLens(view) }
+        if let saved { setLens(saved) }
+        if let savedMode { setMode(savedMode) }
         if let shown { panelOpen = shown }
     }
 
     func rememberWindow() {
         guard Self.remembersWindow else { return }
         UserDefaults.standard.set(panelOpen, forKey: Self.inspectorShownKey)
-        UserDefaults.standard.set(lens.rawValue, forKey: Self.viewKey)
+        UserDefaults.standard.set(view.rawValue, forKey: Self.viewKey)
+        UserDefaults.standard.set(mode.rawValue, forKey: Self.modeKey)
     }
 
     /// The inspector's width once it has settled, so neither its slide nor a drag still going on is what's kept.
@@ -545,6 +543,10 @@ extension AppModel {
             return
         }
         guard let node = thing.single, node != 0 else { return }
+        if mode == .backup {
+            Motion.animate(.snappy(duration: 0.2)) { toggleBackup(node) }
+            return
+        }
         let before = isPlanned(node)
         Motion.animate(.snappy(duration: 0.2)) { togglePiece(node) }
         guard isPlanned(node) != before else { return }

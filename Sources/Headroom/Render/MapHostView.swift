@@ -356,7 +356,7 @@ final class MapHostView: NSView {
     override func keyDown(with event: NSEvent) {
         guard let model else { return super.keyDown(with: event) }
         // In Free Up the keyboard steps through the list: nothing here does anything until you clean.
-        if model.lens == .freeUp, model.handlePlanKey(event) { return }
+        if model.mode == .freeUp, model.handlePlanKey(event) { return }
         switch event.keyCode {
         case 53, 51: model.goUp()                 // escape, delete
         case 49: model.toggleLook()               // space
