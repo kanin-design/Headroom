@@ -12,7 +12,7 @@ struct RootView: View {
             ZStack(alignment: .topLeading) {
                 MapView(model: model)
                     .frame(width: geometry.size.width, height: geometry.size.height)
-                RingPlace(center: ring.center, radius: ring.radius, size: geometry.size, model: model)
+                RingPlace(center: ring.center, radius: ring.radius, size: geometry.size, engine: model.engine, view: { [weak model] in model?.mapView })
 
                 LabelsLayer(model: model)
                     .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)

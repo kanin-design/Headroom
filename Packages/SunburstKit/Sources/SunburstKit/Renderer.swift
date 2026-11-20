@@ -43,8 +43,8 @@ struct UniformsGPU {
 
 /// Draws the ring. Pieces are one instanced quad each, shaped in the fragment shader, so the cost barely depends on
 /// how many there are, and a transition only updates one number per frame.
-final class MapRenderer {
-    let device: MTLDevice
+public final class MapRenderer {
+    public let device: MTLDevice
     private let queue: MTLCommandQueue
     private let segmentPipeline: MTLRenderPipelineState
     private let downPipeline: MTLRenderPipelineState
@@ -52,17 +52,20 @@ final class MapRenderer {
     private let compositePipeline: MTLRenderPipelineState
     private let narrowCompositePipeline: MTLRenderPipelineState?
 
+    /// The name of the shaders' source in the app's Resources: `Shaders.metal`.
+    public static let shadersName = "Shaders"
+
     static let hdrFormat: MTLPixelFormat = .rgba16Float
     /// The picture on screen, when the screen can show more than white: the glow goes up to whatever the screen allows.
-    static let outputFormat: MTLPixelFormat = .rgba16Float
+    public static let outputFormat: MTLPixelFormat = .rgba16Float
     /// The same picture in half the memory, for a screen that can go little or not at all past white. The ring never draws
     /// brighter than the screen can show, and 10 bits a colour, curved like the eye sees, hold every value up to about 1.6
     /// times white.
-    static let narrowOutputFormat: MTLPixelFormat = .bgr10_xr_srgb
+    public static let narrowOutputFormat: MTLPixelFormat = .bgr10_xr_srgb
 
     /// Which of the two the screen needs now. Up to 1.5 times white, the narrow one holds it all, with room to spare. Only
     /// Apple's own chips can draw the narrow one, so on any other Mac it's always the first.
-    func screenFormat(headroom: CGFloat) -> MTLPixelFormat {
+    public func screenFormat(headroom: CGFloat) -> MTLPixelFormat {
         headroom > 1.5 || narrowCompositePipeline == nil ? Self.outputFormat : Self.narrowOutputFormat
     }
 
@@ -79,12 +82,13 @@ final class MapRenderer {
     private var renderSize: (Int, Int) = (0, 0)
     private var isResting = false
 
-    init?(device: MTLDevice? = nil, shaders url: URL? = nil) {
+    /// `shaders` is the source of `Shaders.metal`. Without it, the copy in the app's Resources.
+    public init?(device: MTLDevice? = nil, shaders url: URL? = nil) {
         guard let device = device ?? MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else { return nil }
         self.device = device
         self.queue = queue
         queue.label = "ring"
-        let sourceURL = url ?? Bundle.main.url(forResource: "Shaders", withExtension: "metal")
+        let sourceURL = url ?? Bundle.main.url(forResource: Self.shadersName, withExtension: "metal")
         guard let sourceURL, let source = try? String(contentsOf: sourceURL, encoding: .utf8) else { return nil }
         let options = MTLCompileOptions()
         options.mathMode = .fast
@@ -317,5 +321,5 @@ final class MapRenderer {
         }
     }
 
-    var commandQueue: MTLCommandQueue { queue }
+    public var commandQueue: MTLCommandQueue { queue }
 }

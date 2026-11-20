@@ -1,127 +1,25 @@
 import AppKit
 import SwiftUI
 
-/// A name on the map: inside a piece if it fits, otherwise out at the side with a thin line to its piece.
-struct MapLabel: Identifiable, Equatable {
-    enum Place { case inside, left, right }
-    var id: UInt64
-    var pieceIndex: Int
-    var node: UInt32
-    var title: String
-    var value: String
-    var position: CGPoint
-    var anchor: CGPoint
-    var elbow: CGPoint
-    var place: Place
-    var dark: Bool
-    var large: Bool
-}
-
-enum LabelPlacer {
-    private static let titleFont = NSFont.systemFont(ofSize: 12.5, weight: .semibold)
-    private static let valueFont = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
-
-    private static func width(_ text: String, _ font: NSFont) -> CGFloat {
-        ceil((text as NSString).size(withAttributes: [.font: font]).width)
-    }
-
-    /// Where a box of this size fits inside a piece: its middle if possible, otherwise slid along the arc to where the
-    /// ring runs closer to level. A name that fits nearby is better than one out at the side.
-    private static func fit(w: CGFloat, h: CGFloat, piece p: Piece, radius R: CGFloat) -> CGFloat? {
-        let mid = CGFloat(p.midAngle)
-        let sweep = CGFloat(p.sweep)
-        // A big piece's name belongs on it, so those look harder for a place.
-        let big = p.ring <= 1
-        let steps: [CGFloat] = big ? [0, 0.08, -0.08, 0.16, -0.16, 0.24, -0.24, 0.3, -0.3, 0.36, -0.36, 0.42, -0.42]
-                                   : [0, 0.1, -0.1, 0.2, -0.2, 0.3, -0.3, 0.38, -0.38]
-        for step in steps {
-            let angle = mid + sweep * step
-            if fits(w: w, h: h, angle: angle, piece: p, radius: R, margin: big ? 2 : 3) { return angle }
-        }
-        return nil
-    }
-
-    private static func fits(w: CGFloat, h: CGFloat, angle: CGFloat, piece p: Piece, radius R: CGFloat, margin: CGFloat) -> Bool {
-        let mid = CGFloat(p.midAngle)
-        let rm = CGFloat(p.r0 + p.r1) * 0.5 * R
-        let cx = sin(angle) * rm, cy = -cos(angle) * rm
-        let inner = CGFloat(p.r0) * R + margin, outer = CGFloat(p.r1) * R - margin
-        for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
-            let x = cx + CGFloat(sx) * w / 2, y = cy + CGFloat(sy) * h / 2
-            let r = hypot(x, y)
-            if r < inner || r > outer { return false }
-            var a = atan2(x, -y)
-            if a < 0 { a += 2 * .pi }
-            // Near 12 o'clock the angle wraps around, so measure from the piece's middle.
-            var delta = a - mid
-            if delta > .pi { delta -= 2 * .pi }
-            if delta < -.pi { delta += 2 * .pi }
-            let half = CGFloat(p.sweep) * 0.5 - margin / max(r, 1)
-            if abs(delta) > half { return false }
-        }
-        return true
-    }
-
-    private static func isBright(_ c: SIMD3<Float>) -> Bool {
-        0.2289 * c.x + 0.6917 * c.y + 0.0793 * c.z > 0.40
-    }
-
-    /// A piece to name, with what to call it.
-    struct Pick {
-        var index: Int
-        var title: String
-        var value: String
-        var score: Double
-        /// Tells apart names that share a piece, such as two copies too small to show apart.
-        var salt: UInt64 = 0
-    }
-
+/// Which pieces of the ring are named, and what they're called, in each view. SunburstKit finds where the names fit.
+extension LabelPlacer {
     /// `only` names just these at the sides: what you're pointing at in the panel.
     @MainActor
     static func place(layout: RingLayout, ring: RingGeometry, lens: Lens, tree: DiskTree, model: AppModel, only: [Pick]? = nil) -> [MapLabel] {
-        let R = ring.radius
-        guard R > 0, !layout.pieces.isEmpty else { return [] }
-        var out: [MapLabel] = []
-        var labelled = Set<Int>()
-        // A folder drawn as several stretches is named once.
-        var named = Set<UInt32>()
-        let cx = ring.center.x, cy = ring.center.y
-
-        func point(_ angle: CGFloat, _ radius: CGFloat) -> CGPoint {
-            CGPoint(x: cx + sin(angle) * radius, y: cy - cos(angle) * radius)
-        }
-
+        guard ring.radius > 0, !layout.pieces.isEmpty else { return [] }
+        // The drive row at the bottom is kept clear.
+        let area = LabelArea(center: ring.center, radius: ring.radius, width: ring.mapWidth, height: ring.windowHeight,
+                             top: 78, bottom: ring.windowHeight - 26 - DriveRow.height - 14)
+        var named = Placed()
         // Inside the pieces, biggest first. Only in the Map view: elsewhere most of the ring is dimmed on purpose.
         // With both of Backup's sides, the two halves are named first, whatever they hold.
-        let order = layout.pieces.indices.sorted { a, b in
-            let pa = layout.pieces[a], pb = layout.pieces[b]
-            if tree.twoSides, (pa.ring == 0) != (pb.ring == 0) { return pa.ring == 0 }
-            return pa.bytes > pb.bytes
-        }
+        let ranked = order(layout, halvesFirst: tree.twoSides)
+        var out: [MapLabel] = []
         if lens == .map || lens == .freeUp || lens == .backup {
-            for i in order.prefix(160) {
-                let p = layout.pieces[i]
-                if p.isSmaller || p.ring > 3 || named.contains(p.node) { continue }
-                if lens == .freeUp && p.style != .free { continue }
-                let isFree = p.style == .free
-                // A ghost is drawn faint, whatever its colour, so its name is light like on the dark parts.
-                let isHidden = p.style == .hidden || p.style == .ghost
+            out = inside(layout: layout, order: ranked, area: area, halves: tree.twoSides, named: &named) { p in
+                if lens == .freeUp && p.style != .free { return nil }
                 // The top of a chain is what you'd call it. The whole chain shows when you point at it.
-                let title = isFree ? "Free" : model.displayName(p.node)
-                let value = tree.sizeText(p.node)
-                let w = max(width(title, titleFont), width(value, valueFont)) + 2
-                let h: CGFloat = 31
-                // Backup's two halves are always named, just either side of six o'clock, where the line between them is.
-                let halfSpot: CGFloat? = tree.twoSides && layout.focus == 0 && p.ring == 0 ? (p.a0 < .pi ? .pi - 0.27 : .pi + 0.27) : nil
-                if let angle = halfSpot ?? fit(w: w, h: h, piece: p, radius: R) {
-                    // Free space reads best out in the open part of the wedge, away from the crowded middle.
-                    let rm = CGFloat(p.r0 + p.r1) * 0.5 * R * (isFree ? 1.08 : 1)
-                    out.append(MapLabel(id: p.key, pieceIndex: i, node: p.node, title: title, value: value, position: point(angle, rm),
-                                        anchor: .zero, elbow: .zero, place: .inside, dark: !isFree && !isHidden && isBright(p.color), large: isFree))
-                    labelled.insert(i)
-                    named.insert(p.node)
-                    if out.count >= 36 { break }
-                }
+                return (p.style == .free ? "Free" : model.displayName(p.node), tree.sizeText(p.node))
             }
         }
 
@@ -131,24 +29,8 @@ enum LabelPlacer {
         if only == nil {
         switch lens {
         case .map, .backup:
-            let total = Double(max(tree.totals[Int(layout.focus)], 1))
-            for i in order.prefix(260) where !labelled.contains(i) {
-                let p = layout.pieces[i]
-                if p.isSmaller || p.style == .free || p.ring > 4 || named.contains(p.node) { continue }
-                let share = Double(p.bytes) / total
-                if share < 0.015 { continue }
-                if p.ring == 0 && layout.focus == 0 { continue }
-                // Skip it if the name on a piece just inside it says nearly the same thing.
-                var a = p.parent
-                var redundant = false
-                while a >= 0 {
-                    let q = layout.pieces[Int(a)]
-                    if labelled.contains(Int(a)) && Double(p.bytes) > Double(q.bytes) * 0.72 { redundant = true }
-                    a = q.parent
-                }
-                if redundant { continue }
-                candidates.append(Candidate(index: i, title: model.displayName(p.node), value: tree.sizeText(p.node), score: share * (1 - 0.13 * Double(p.ring))))
-                named.insert(p.node)
+            candidates = bigPieces(layout: layout, order: ranked, total: tree.totals[Int(layout.focus)], named: &named) { p in
+                (model.displayName(p.node), tree.sizeText(p.node))
             }
         case .changes:
             for row in model.changeRows.prefix(18) {
@@ -215,100 +97,10 @@ enum LabelPlacer {
             }
         }
         }
-        candidates.sort { $0.score > $1.score }
         // A name just outside a piece that's already named would say nearly the same thing. Not a copy's: each is a place of
         // its own, however near the others it is.
         let eachCounts = lens == .copies && model.pointedCopyGroup != nil
-        var kept: [Candidate] = []
-        for c in candidates {
-            let p = layout.pieces[c.index]
-            var a = p.parent
-            var repeats = false
-            while a >= 0 && !eachCounts {
-                let q = layout.pieces[Int(a)]
-                if kept.contains(where: { $0.index == Int(a) }) && Double(p.bytes) > Double(q.bytes) * 0.72 { repeats = true }
-                a = q.parent
-            }
-            if !repeats { kept.append(c) }
-        }
-        candidates = kept
-
-        let spacing: CGFloat = 35
-        let maxPerSide = min(max(Int((ring.windowHeight - 150) / spacing), 3), 7)
-        var rightSide: [Candidate] = [], leftSide: [Candidate] = []
-        for c in candidates {
-            let mid = layout.pieces[c.index].midAngle
-            if mid < .pi {
-                if rightSide.count < maxPerSide { rightSide.append(c) }
-            } else if leftSide.count < maxPerSide {
-                leftSide.append(c)
-            }
-        }
-
-        /// How far out this wedge reaches along its own centre line. The line to a name starts there, so it never
-        /// crosses the ring.
-        func silhouette(_ index: Int, _ angle: Float) -> Float {
-            let p = layout.pieces[index]
-            var edge = p.r1
-            var j = index + 1
-            while j < Int(p.end) {
-                let q = layout.pieces[j]
-                if angle >= q.a0 && angle < q.a1 {
-                    edge = max(edge, q.r1)
-                    j += 1
-                } else {
-                    j = Int(q.end)
-                }
-            }
-            return edge
-        }
-
-        func layoutSide(_ side: [Candidate], right: Bool) {
-            guard !side.isEmpty else { return }
-            let reach = R + 26
-            struct Slot { var c: Candidate; var y: CGFloat; var mid: CGFloat }
-            var slots = side.map { c -> Slot in
-                let mid = CGFloat(layout.pieces[c.index].midAngle)
-                return Slot(c: c, y: cy - cos(mid) * reach, mid: mid)
-            }.sorted { $0.y < $1.y }
-            // The drive row at the bottom is kept clear.
-            let top: CGFloat = 78, bottom = ring.windowHeight - 26 - DriveRow.height - 14
-            for i in slots.indices {
-                slots[i].y = max(slots[i].y, i == 0 ? top : slots[i - 1].y + spacing)
-            }
-            if let last = slots.last, last.y > bottom {
-                var limit = bottom
-                for i in slots.indices.reversed() {
-                    slots[i].y = min(slots[i].y, limit)
-                    limit = slots[i].y - spacing
-                }
-            }
-            let columnX = right ? cx + R + 34 : cx - R - 34
-            for slot in slots {
-                let p = layout.pieces[slot.c.index]
-                let edge = CGFloat(silhouette(slot.c.index, p.midAngle)) * R + 2
-                let anchor = point(slot.mid, edge)
-                // The line leaves along its wedge until it's level with the name, then runs dead level to it.
-                let side: CGFloat = right ? 1 : -1
-                let rise = slot.y - anchor.y
-                let along = -cos(slot.mid)
-                var bend = anchor.x + side * max(abs(rise) * 1.5, 14)
-                if abs(along) > 0.05, rise * along > 0 { bend = anchor.x + sin(slot.mid) * rise / along }
-                // Never back into the ring, and never past the name.
-                let nameEnd = columnX - side * 7
-                bend = right ? min(max(bend, anchor.x + 6), nameEnd - 8) : max(min(bend, anchor.x - 6), nameEnd + 8)
-                // A name that changes sides is a new label, so it fades across instead of flying over the ring.
-                out.append(MapLabel(id: p.key ^ (right ? 0xABCD : 0xDCBA) ^ slot.c.salt, pieceIndex: slot.c.index, node: p.node, title: slot.c.title, value: slot.c.value,
-                                    position: CGPoint(x: columnX, y: slot.y), anchor: anchor, elbow: CGPoint(x: bend, y: slot.y),
-                                    place: right ? .right : .left, dark: false, large: false))
-            }
-        }
-        // Only when there's room beside the ring.
-        if ring.mapWidth - R * 2 > 200 {
-            layoutSide(rightSide, right: true)
-            layoutSide(leftSide, right: false)
-        }
-        return out
+        return out + sides(candidates, layout: layout, area: area, eachCounts: eachCounts)
     }
 
     private static func visiblePiece(for node: UInt32, layout: RingLayout, tree: DiskTree) -> Int? {
@@ -319,117 +111,20 @@ enum LabelPlacer {
 struct LabelsLayer: View {
     let model: AppModel
 
-    /// Quicker than the glide of the names that stay, so a name on its way out is soon gone.
-    private static let comeAndGo = AnyTransition.opacity.animation(.easeOut(duration: 0.18))
-
     var body: some View {
-        ZStack(alignment: .topLeading) {
-            ForEach(model.labels.filter { $0.place != .inside }) { label in
-                let isOn = model.labelLight.node == label.node
-                LeaderLine(anchor: label.anchor, elbow: label.elbow,
-                           end: CGPoint(x: label.position.x + (label.place == .right ? -7 : 7), y: label.position.y))
-                    .stroke(.white.opacity(isOn ? 0.7 : 0.26), lineWidth: isOn ? 1 : 0.75)
-                    .allowsHitTesting(false)
-                    .transition(Self.comeAndGo)
-                Circle()
-                    .fill(.white.opacity(isOn ? 1 : 0.7))
-                    .frame(width: 3.2, height: 3.2)
-                    .position(label.anchor)
-                    .allowsHitTesting(false)
-                    .transition(Self.comeAndGo)
-            }
-
-            ForEach(model.labels) { label in
-                if label.place == .inside {
-                    InsideLabel(label: label)
-                        .opacity(!model.labelLight.onAnything || model.labelLight.node == label.node ? 1 : 0.5)
-                        .animation(.easeOut(duration: 0.14), value: model.labelLight)
-                        .position(label.position)
-                        .allowsHitTesting(false)
-                        .transition(Self.comeAndGo)
-                } else {
-                    let right = label.place == .right
-                    let room = max(right ? model.ring.mapWidth - label.position.x - 6 : label.position.x - 12, 60)
-                    OuterLabel(label: label, isOn: model.labelLight.node == label.node)
-                        .onHover { inside in
-                            if inside { model.enterLabel(piece: label.pieceIndex) } else { model.leaveLabel(piece: label.pieceIndex) }
-                        }
-                        .onTapGesture { model.openLabel(piece: label.pieceIndex, count: NSApp.currentEvent?.clickCount ?? 1) }
-                        .named(NamedThing(label.node), in: model)
-                        .frame(width: room, alignment: right ? .leading : .trailing)
-                        .position(x: right ? label.position.x + room / 2 : label.position.x - room / 2, y: label.position.y)
-                        .transition(Self.comeAndGo)
-                }
-            }
-        }
-        .opacity(model.labelsVisible ? 1 : 0)
+        SunburstLabels(labels: model.labels, light: model.labelLight, visible: model.labelsVisible, width: model.ring.mapWidth,
+                       onEnter: { model.enterLabel(piece: $0) }, onLeave: { model.leaveLabel(piece: $0) },
+                       onOpen: { model.openLabel(piece: $0, count: $1) },
+                       outer: { NamedLabel(model: model, node: $0.node) })
     }
 }
 
-/// The thin line from a piece to its name. It's a shape so that it can glide with the piece during a scan.
-private struct LeaderLine: Shape {
-    var anchor: CGPoint
-    var elbow: CGPoint
-    var end: CGPoint
+/// A name at the side is the thing it names: its menu, and what agents and ⌘C see.
+private struct NamedLabel: ViewModifier {
+    let model: AppModel
+    let node: UInt32
 
-    var animatableData: AnimatablePair<AnimatablePair<CGPoint.AnimatableData, CGPoint.AnimatableData>, CGPoint.AnimatableData> {
-        get { AnimatablePair(AnimatablePair(anchor.animatableData, elbow.animatableData), end.animatableData) }
-        set {
-            anchor.animatableData = newValue.first.first
-            elbow.animatableData = newValue.first.second
-            end.animatableData = newValue.second
-        }
-    }
-
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        path.move(to: anchor)
-        path.addLine(to: elbow)
-        path.addLine(to: end)
-        return path
-    }
-}
-
-private struct InsideLabel: View {
-    let label: MapLabel
-
-    var body: some View {
-        VStack(spacing: 0) {
-            Text(label.title)
-                .font(.system(size: label.large ? 14 : 12.5, weight: .semibold))
-            Text(label.value)
-                .font(.system(size: label.large ? 13 : 11, weight: .medium).monospacedDigit())
-                .opacity(label.dark ? 0.72 : 0.78)
-        }
-        // New numbers replace the old ones at once. Fading between them would leave both on screen as the label moves.
-        .contentTransition(.identity)
-        .foregroundStyle(label.dark ? Color.black.opacity(0.84) : Color.white.opacity(0.96))
-        .shadow(color: label.dark ? .clear : .black.opacity(0.45), radius: 2, y: 0.5)
-        .lineLimit(1)
-        .fixedSize()
-    }
-}
-
-private struct OuterLabel: View {
-    let label: MapLabel
-    let isOn: Bool
-
-    var body: some View {
-        VStack(alignment: label.place == .left ? .trailing : .leading, spacing: 0) {
-            Text(label.title)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.white.opacity(isOn ? 1 : 0.88))
-                // Beside the inspector there's less room: a long name gets a little smaller before it's cut short.
-                .minimumScaleFactor(0.8)
-                .truncationMode(.tail)
-            Text(label.value)
-                .font(.system(size: 11, weight: .regular).monospacedDigit())
-                .foregroundStyle(.white.opacity(isOn ? 0.85 : 0.5))
-        }
-        .contentTransition(.identity)
-        .lineLimit(1)
-        .contentShape(Rectangle())
-    }
+    func body(content: Content) -> some View { content.named(NamedThing(node), in: model) }
 }
 
 /// The middle of the ring: the one number that matters, until you point at something else.

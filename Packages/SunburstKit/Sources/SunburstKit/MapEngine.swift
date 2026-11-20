@@ -5,7 +5,7 @@ import QuartzCore
 import simd
 
 /// How a change of picture moves.
-enum RingTransition {
+public enum RingTransition {
     case appear                     // the first picture blooms out of the middle
     case zoomIn(ZoomMapping?)       // everything scales around the piece you clicked
     case zoomOut(ZoomMapping?)
@@ -15,10 +15,16 @@ enum RingTransition {
 }
 
 /// Where a zoom is headed: it maps the old ring to the new one, sliding everything else out of the way.
-struct ZoomMapping {
-    var a0: Float, a1: Float, r1: Float
+public struct ZoomMapping {
+    public var a0: Float, a1: Float, r1: Float
 
-    func apply(_ g: SIMD4<Float>) -> SIMD4<Float> {
+    public init(a0: Float, a1: Float, r1: Float) {
+        self.a0 = a0
+        self.a1 = a1
+        self.r1 = r1
+    }
+
+    public func apply(_ g: SIMD4<Float>) -> SIMD4<Float> {
         let sweep = max(a1 - a0, 0.0001)
         let scale = 2 * Float.pi / sweep
         func angle(_ a: Float) -> Float { min(max((a - a0) * scale, 0), 2 * .pi) }
@@ -33,9 +39,9 @@ struct ZoomMapping {
 ///
 /// The window changes what's shown from the main thread, and the ring is drawn on a thread of its own, so everything that
 /// moves is changed and read while holding `lock`. The picture itself, `layout`, only ever changes on the main thread.
-final class MapEngine: @unchecked Sendable {
-    let renderer: MapRenderer?
-    private(set) var layout = RingLayout()
+public final class MapEngine: @unchecked Sendable {
+    public let renderer: MapRenderer?
+    public private(set) var layout = RingLayout()
     private let lock = NSLock()
 
     private var instances: [SegmentGPU] = []
@@ -67,7 +73,7 @@ final class MapEngine: @unchecked Sendable {
     /// The window moved the ring since the last frame.
     private var placeChanged = false
     /// For a check: where the ring is drawn now, in points.
-    var placeNow: (center: SIMD2<Float>, radius: Float) { lock.withLock { (centerNow, radiusNow) } }
+    public var placeNow: (center: SIMD2<Float>, radius: Float) { lock.withLock { (centerNow, radiusNow) } }
     private var ghostNow: Float = 0
     private var ghostGoal: Float = 0
     private var ghostSlices: [(end: Float, color: SIMD3<Float>)] = []
@@ -75,7 +81,7 @@ final class MapEngine: @unchecked Sendable {
     private var previewGoal: Float = 0
     private var previewColor: SIMD3<Float> = .zero
     /// How many colours the new free space can have at once.
-    static let ghostSliceLimit = 12
+    public static let ghostSliceLimit = 12
 
     /// In the Map view, colour and glow hold back until you point at something. The other views use both to say something.
     private var calmNow: Float = 1
@@ -86,19 +92,26 @@ final class MapEngine: @unchecked Sendable {
     private static let glowAtRest: Float = 0.25
 
     /// A slower clock for checking motion by eye.
-    var timeScale: Float = 1
+    public var timeScale: Float = 1
 
-    var requestFrame: () -> Void = {}
+    /// Asks the view for frames until nothing moves. The view sets it.
+    public var requestFrame: () -> Void = {}
 
-    init() {
-        renderer = MapRenderer()
+    /// Whether Reduce Motion is on. Asked on the main thread each time a picture changes.
+    private let reducesMotion: () -> Bool
+
+    /// `shaders` is the source of `Shaders.metal`; without it, the copy in the app's Resources. `reducesMotion` says whether
+    /// pictures should dissolve instead of travel, by default as System Settings says.
+    public init(shaders: URL? = nil, reducesMotion: @escaping () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }) {
+        renderer = MapRenderer(shaders: shaders)
+        self.reducesMotion = reducesMotion
     }
 
     // MARK: Pictures
 
-    func apply(_ new: RingLayout, _ transition: RingTransition) {
+    public func apply(_ new: RingLayout, _ transition: RingTransition) {
         // Asked here, on the main thread, where System Settings can be.
-        let reduceMotion = Motion.isReduced
+        let reduceMotion = reducesMotion()
         lock.withLock { applyLocked(new, transition, reduceMotion: reduceMotion) }
         requestFrame()
     }
@@ -261,7 +274,7 @@ final class MapEngine: @unchecked Sendable {
 
     /// Lifts these pieces and lets the rest step back. Pass nothing to bring everything back. With a tint, what's lit takes on
     /// that colour, the folders it's in part of it, and a lit piece too small to see is drawn a few points across.
-    func setEmphasis(primary: Int?, related: [Range<Int>], ancestors: [Int] = [], tint: SIMD3<Float>? = nil) {
+    public func setEmphasis(primary: Int?, related: [Range<Int>], ancestors: [Int] = [], tint: SIMD3<Float>? = nil) {
         lock.lock()
         guard !emphasisGoal.isEmpty else { lock.unlock(); return }
         for i in emphasisGoal.indices { emphasisGoal[i] = 0 }
@@ -285,31 +298,31 @@ final class MapEngine: @unchecked Sendable {
     }
 
     /// How far colour and glow hold back until you point at something, from none to all.
-    func setCalm(_ amount: Float) {
+    public func setCalm(_ amount: Float) {
         lock.withLock { calmGoal = amount }
         requestFrame()
     }
 
     /// How much the ring glows. Changes keeps it low, so what's lit reads as a shape.
-    func setGlow(_ amount: Float) {
+    public func setGlow(_ amount: Float) {
         lock.withLock { glowGoal = amount }
         requestFrame()
     }
 
     /// The bytes a cleanup would free, shown as a ghost growing out of the free wedge.
-    func setGhost(_ share: Float) {
+    public func setGhost(_ share: Float) {
         lock.withLock { ghostGoal = share }
         requestFrame()
     }
 
     /// Its colours: where each one ends, as a share of the whole.
-    func setGhostColours(_ slices: [(end: Float, color: SIMD3<Float>)]) {
+    public func setGhostColours(_ slices: [(end: Float, color: SIMD3<Float>)]) {
         lock.withLock { ghostSlices = Array(slices.prefix(Self.ghostSliceLimit)) }
         requestFrame()
     }
 
     /// What the thing you're pointing at would add to it.
-    func setPreview(_ share: Float, color: SIMD3<Float>) {
+    public func setPreview(_ share: Float, color: SIMD3<Float>) {
         lock.withLock {
             previewGoal = share
             if share > 0 { previewColor = color }
@@ -323,7 +336,7 @@ final class MapEngine: @unchecked Sendable {
     /// exactly as everything drawn over it does. The last half second of a spring moves by hundredths of a point, which
     /// nobody can see, so that isn't drawn.
     @discardableResult
-    func setPlace(center: CGPoint, radius: CGFloat) -> Bool {
+    public func setPlace(center: CGPoint, radius: CGFloat) -> Bool {
         let changed = lock.withLock {
             let place = SIMD2(Float(center.x), Float(center.y)), size = Float(radius)
             let moved = max(abs(place.x - centerNow.x), abs(place.y - centerNow.y), abs(size - radiusNow))
@@ -338,7 +351,7 @@ final class MapEngine: @unchecked Sendable {
     }
 
     /// For a check: how many pieces are lit, or on their way to being.
-    var litPieces: Int { lock.withLock { emphasisGoal.filter { $0 > 0.5 }.count } }
+    public var litPieces: Int { lock.withLock { emphasisGoal.filter { $0 > 0.5 }.count } }
 
     // MARK: Frames
 
@@ -362,12 +375,12 @@ final class MapEngine: @unchecked Sendable {
     }
 
     /// While the ring is still, the memory its drawing used may be taken back.
-    func restDrawing() {
+    public func restDrawing() {
         lock.withLock { renderer?.rest() }
     }
 
     /// For a check: as if the Mac had taken that memory.
-    func loseDrawing() {
+    public func loseDrawing() {
         lock.withLock {
             renderer?.rest()
             renderer?.loseTargets()
@@ -375,7 +388,7 @@ final class MapEngine: @unchecked Sendable {
     }
 
     /// For a check: what the GPU holds for the ring.
-    func allocations() -> String {
+    public func allocations() -> String {
         lock.withLock { renderer?.allocations() ?? "no renderer" }
     }
 

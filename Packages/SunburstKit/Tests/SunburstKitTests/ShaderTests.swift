@@ -1,13 +1,13 @@
 import Metal
 import XCTest
-@testable import Headroom
+@testable import SunburstKit
 
 /// The ring's shaders are compiled when the app starts, so a mistake in them only shows as a ring that isn't there. These
 /// compile them here, and check that the numbers Swift hands the GPU each frame sit where the shaders read them.
 final class ShaderTests: XCTestCase {
     private var source: URL {
         URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("Sources/Headroom/Render/Shaders.metal")
+            .appendingPathComponent("Sources/SunburstKit/Shaders.metal")
     }
 
     func testTheShadersCompile() throws {

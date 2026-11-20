@@ -43,9 +43,9 @@ private final class RingThread: Thread {
 /// the rest of the window: a panel being laid out, names being placed, text being drawn. The main thread says what to show,
 /// through the engine, and when to start. This draws until nothing moves, then stops, and while the ring is still, the
 /// memory its drawing used may be taken back.
-final class RingDrawer: NSObject, @unchecked Sendable {
-    let engine: MapEngine
-    let layer: CAMetalLayer
+public final class RingDrawer: NSObject, @unchecked Sendable {
+    public let engine: MapEngine
+    public let layer: CAMetalLayer
     private let thread = RingThread()
 
     // Only ever touched on the ring's thread.
@@ -73,8 +73,11 @@ final class RingDrawer: NSObject, @unchecked Sendable {
     // kIOSurfacePurgeableNonVolatile, Volatile and Empty, which Swift doesn't get by name.
     private static let mustBeKept: UInt32 = 0, mayBePurged: UInt32 = 1, isEmptied: UInt32 = 2
 
+    /// For a check: where to say when the picture changes format.
+    nonisolated(unsafe) public static var log: ((String) -> Void)?
+
     /// Called on the main thread a moment after the last frame of a movement is on screen, with that frame's number.
-    var stopped: ((Int) -> Void)?
+    public var stopped: ((Int) -> Void)?
 
     init(engine: MapEngine, layer: CAMetalLayer) {
         self.engine = engine
@@ -139,7 +142,7 @@ final class RingDrawer: NSObject, @unchecked Sendable {
         }
     }
 
-    var framesDrawn: Int { lock.withLock { drawn } }
+    public var framesDrawn: Int { lock.withLock { drawn } }
 
     /// A frame now, from the main thread, in the same transaction as the rest of the window, so the ring and everything over
     /// it reach the screen together: while the window is being resized, and on each frame of SwiftUI moving the ring. The
@@ -167,7 +170,7 @@ final class RingDrawer: NSObject, @unchecked Sendable {
         guard layer.pixelFormat != format else { return }
         drawing.withLock {
             guard layer.pixelFormat != format else { return }
-            if ScriptRunner.path != nil { print("format now \(format == MapRenderer.outputFormat ? "wide" : "narrow")") }
+            Self.log?("format now \(format == MapRenderer.outputFormat ? "wide" : "narrow")")
             layer.pixelFormat = format
             layer.colorspace = CGColorSpace(name: format == MapRenderer.outputFormat ? CGColorSpace.extendedLinearDisplayP3 : CGColorSpace.extendedDisplayP3)
             retireSurfaces()
@@ -320,18 +323,18 @@ final class RingDrawer: NSObject, @unchecked Sendable {
     // MARK: For a check
 
     /// Each frame of the ring, when it was meant to reach the screen and when it did, and what it cost.
-    struct FrameNote {
-        var target: CFTimeInterval
-        var dt: Double
-        var restarted: Bool
-        var cpu: Double = 0
-        var gpu: Double = 0
-        var presented: CFTimeInterval = 0
+    public struct FrameNote {
+        public var target: CFTimeInterval
+        public var dt: Double
+        public var restarted: Bool
+        public var cpu: Double = 0
+        public var gpu: Double = 0
+        public var presented: CFTimeInterval = 0
     }
     private var notes: [FrameNote]?
 
-    func beginNotes() { lock.withLock { notes = [] } }
-    func endNotes() -> [FrameNote] { lock.withLock { defer { notes = nil }; return notes ?? [] } }
+    public func beginNotes() { lock.withLock { notes = [] } }
+    public func endNotes() -> [FrameNote] { lock.withLock { defer { notes = nil }; return notes ?? [] } }
 
     private func noteFrame(drawable: CAMetalDrawable, commands: MTLCommandBuffer, target: CFTimeInterval, dt: Double, restarted: Bool) -> Int? {
         let entry: Int? = lock.withLock {

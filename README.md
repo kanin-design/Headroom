@@ -79,7 +79,9 @@ Things you may want to delete, in boxes named for what they are, biggest first: 
 Unused apps, iPhone backups, Old installers, Screenshots and more. A Mac only gets the boxes it has something for.
 Open a box to see what's in it, one row per app or thing. **Select recommended** ticks what's safe without a second
 thought: caches not in use, and junk. **Largest files**, at the end, lists the biggest files nothing else covers. Point
-at a box and its files light up on the ring. Nothing happens until you click **Clean**.
+at a box and its files light up on the ring. What's selected is summed up at the top: how much, what it frees, and the
+disk's free space after. Nothing happens until you click **Clean**. Then the top says what went to the Trash: **Delete
+permanently** frees the space, and **Undo** puts it all back.
 
 ### Changes
 
@@ -143,10 +145,14 @@ again, and the middle to go back up. Pointing at anything lights its copy on the
 map's colours; **Backed Up**, which Copies becomes in Backup, colours each file by where it is: on both, only on the Mac,
 only on the drive, moved, or not for Backup (under 10 MB, or part of macOS or an app). A folder with files in more than
 one place is drawn in one stretch per place. Moved files are drawn as outlines where they were. The backup folder is read
-once whenever the drive is plugged in, so with it unplugged its half is what was last read there, dimmed. Select files on either half, and the middle shows how much; the panel lists what fits: Move, Copy, Keep on Mac, Copy to
-Mac, Verify, Delete. **Select** beside "Only on this Mac" picks everything the drive doesn't have. Delete reads both disks
-again first, and keeps the drive's copy if this Mac's isn't the same. From the Moved list you can move a file back,
-verify it or delete it from the drive. A file is on Free Up's list or Backup's, never both.
+once whenever the drive is plugged in, so with it unplugged its half is what was last read there, dimmed.
+
+Select files on either half, or press Space on one. What's selected is summed up at the top: how much, what it frees on
+the Mac, where it goes and the room left there, and the files by folder. The button at the bottom does the main thing,
+Move or Copy to Mac, and the panel lists the rest that fits: Copy, Keep on Mac, Verify, Delete. Moving turns the summary
+into the move's progress, file by file. **Select** beside "Only on this Mac" picks everything the drive doesn't have.
+Delete reads both disks again first, and keeps the drive's copy if this Mac's isn't the same. From the Moved list you can
+move a file back, verify it or delete it from the drive. A file is on Free Up's list or Backup's, never both.
 
 ### Agents
 
@@ -225,10 +231,11 @@ How Headroom is designed, with every measurement, is in [DESIGN.md](DESIGN.md).
 | `Advice/Sections.swift` | The Free Up boxes |
 | `Model/Duplicates.swift` | Finding duplicates: same size from the map, then files of a size read side by side in growing pieces |
 | `Model/Copies.swift` | Copies: duplicate sets, hardlinks, clones and symlinks, which copy to keep, and their colours |
-| `Render/Shaders.metal` | Each piece's shape and light, the glow and the scale |
+| `Packages/SunburstKit` | The ring: layout, Metal drawing, motion and names, as a package of its own ([README](Packages/SunburstKit/README.md)) |
+| `UI/Kit` | The shared controls: ticks, buttons, pickers, cards, file rows and folds, so a change to one reaches every use |
 | `App/Updater.swift` | New versions from GitHub's releases, taken only when signed with the same certificate |
 
-- `swift test` runs the tests, on made-up disks.
+- `swift test` runs the tests, on made-up disks. `swift test --package-path Packages/SunburstKit` runs the ring's own.
 - `build/Headroom.app/Contents/MacOS/Headroom --script steps.txt` drives the whole app from a script, without touching
   the mouse. The steps are listed at the top of `App/ScriptRunner.swift`, and a scripted run can only ever clean a
   throwaway disk image named `HeadroomTest`.

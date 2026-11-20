@@ -52,20 +52,6 @@ enum Lens: String, CaseIterable, Identifiable {
     }
 }
 
-/// Whether the pointer is on anything on the ring, and which named piece it's on, if any.
-struct LabelLight: Equatable {
-    var onAnything = false
-    var node: UInt32?
-
-    init() {}
-
-    /// For the piece the pointer is on, if any, and the pieces that have names.
-    init(hovering node: UInt32?, named: Set<UInt32>) {
-        onAnything = node != nil
-        self.node = node.flatMap { named.contains($0) ? $0 : nil }
-    }
-}
-
 /// Where the ring sits in the map's part of the window, which is all of it but the inspector. The ring stays centred there.
 struct RingGeometry: Equatable {
     var center: CGPoint
@@ -390,7 +376,15 @@ final class AppModel {
     @ObservationIgnored var backupWarningMemo: (version: Int, said: [String: String?])?
     @ObservationIgnored var backupSummaryMemo: (key: Int, summary: BackupSummary)?
 
-    @ObservationIgnored let engine = MapEngine()
+    @ObservationIgnored let engine: MapEngine = {
+        // A scripted check takes pictures of the window wherever it is, so the ring keeps drawing, and it says when the
+        // picture changes format.
+        if ScriptRunner.path != nil {
+            MapHostView.drawsWhenHidden = true
+            RingDrawer.log = { print($0) }
+        }
+        return MapEngine(reducesMotion: { Motion.isReduced })
+    }()
     @ObservationIgnored let rules = RuleBook(homePath: NSHomeDirectory())
     @ObservationIgnored var activeScan: DiskScan?
     /// The startup disk's change journal, collected from where the map on screen was read, so that a refresh only reads

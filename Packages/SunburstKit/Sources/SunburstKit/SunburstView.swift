@@ -4,39 +4,88 @@ import Metal
 import QuartzCore
 import SwiftUI
 
+/// A point on the ring: the angle clockwise from 12 o'clock in radians, and the distance from the middle as a share of the
+/// ring's radius.
+public typealias Polar = (angle: Float, radius: Float)
+
 /// The ring's window into the display. It draws only while something is moving, and it draws on a thread of its own, so
-/// the ring keeps moving whatever the rest of the window is doing.
-final class MapHostView: NSView {
-    weak var model: AppModel?
+/// the ring keeps moving whatever the rest of the window is doing. What the pointer and the keys do is up to the host: the
+/// view says where they are on the ring, through the callbacks below.
+public final class SunburstView: NSView {
+    public let engine: MapEngine
     private var metalLayer: CAMetalLayer { layer as! CAMetalLayer }
     /// Everything about drawing the ring.
-    private(set) var drawer: RingDrawer!
+    public private(set) var drawer: RingDrawer!
     private var trackingArea: NSTrackingArea?
     private var downPoint: NSPoint?
     /// A press on empty background, which moves the window if the pointer moves.
     private var backgroundDown: NSEvent?
     private var doubleClickWatch: Any?
     /// For a check: how many times the window has been told to follow the pointer.
-    private(set) var windowMovesStarted = 0
+    public private(set) var windowMovesStarted = 0
     private var pinch: CGFloat = 0
-    var framesDrawn: Int { drawer.framesDrawn }
-    /// A scripted check takes pictures of the window wherever it is, so it keeps drawing.
-    static var drawsWhenHidden = ScriptRunner.path != nil
+    public var framesDrawn: Int { drawer.framesDrawn }
+    /// Keep drawing while nobody can see the window, as for a check that takes pictures of it wherever it is.
+    nonisolated(unsafe) public static var drawsWhenHidden = false
     private var canBeSeen: Bool { Self.drawsWhenHidden || window?.occlusionState.contains(.visible) == true }
 
-    override var isFlipped: Bool { true }
-    override var acceptsFirstResponder: Bool { true }
-    override func makeBackingLayer() -> CALayer { CAMetalLayer() }
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    override var mouseDownCanMoveWindow: Bool { false }
+    // MARK: Callbacks
 
-    init(model: AppModel) {
-        self.model = model
+    /// Where a point in the view is on the ring, or nil when the ring has no size. By default from where the engine draws it.
+    public var polar: (CGPoint) -> Polar?
+    /// The pointer moved over the ring, or left it (nil).
+    public var onHover: (Polar?) -> Void = { _ in }
+    /// The pointer is over something drawn on top of the ring: to the ring that's nothing.
+    public var onHoverCovered: () -> Void = {}
+    /// A click, or a double-click, that didn't move. Nil when the ring has no size.
+    public var onClick: (Polar?, _ count: Int) -> Void = { _, _ in }
+    /// A ⌘-click.
+    public var onCommandClick: (Polar) -> Void = { _ in }
+    /// The menu for a right-click there, if any.
+    public var menuAt: (Polar) -> NSMenu? = { _ in nil }
+    /// A pinch: true to open what's under the pointer, false to go back out.
+    public var onPinch: (_ opening: Bool, Polar?) -> Void = { _, _ in }
+    /// A key. True when the host used it; otherwise it goes on up the responder chain.
+    public var onKey: (NSEvent) -> Bool = { _ in false }
+    /// The modifier keys changed.
+    public var onModifiers: (NSEvent) -> Void = { _ in }
+    /// The window was covered, minimised or hidden, or came back.
+    public var onVisibility: (Bool) -> Void = { _ in }
+
+    // MARK: VoiceOver
+
+    /// What VoiceOver calls the view, and the whole of what it shows.
+    public var accessibilityKind = "chart"
+    public var accessibilityName: () -> String = { "Chart" }
+    /// What the pieces of the first ring are now, by a key that changes when they do, and where the ring is in the view.
+    /// Nil while there's nothing to describe.
+    public var accessibilityPicture: () -> (key: String, center: CGPoint, radius: CGFloat)? = { nil }
+    /// A piece's name, and what it holds, given its share of the ring (0 to 1).
+    public var describePiece: (Piece, _ share: Double) -> (label: String, value: String) = { _, _ in ("", "") }
+    /// VoiceOver pressed a piece of the first ring: its index now.
+    public var onPress: (Int) -> Void = { _ in }
+
+    public override var isFlipped: Bool { true }
+    public override var acceptsFirstResponder: Bool { true }
+    public override func makeBackingLayer() -> CALayer { CAMetalLayer() }
+    public override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    public override var mouseDownCanMoveWindow: Bool { false }
+
+    public init(engine: MapEngine) {
+        self.engine = engine
+        polar = { _ in nil }
         super.init(frame: .zero)
+        polar = { [weak engine] p in
+            guard let place = engine?.placeNow, place.radius > 0 else { return nil }
+            let dx = Float(p.x) - place.center.x, dy = Float(p.y) - place.center.y
+            var angle = atan2(dx, -dy)
+            if angle < 0 { angle += 2 * .pi }
+            return (angle, (dx * dx + dy * dy).squareRoot() / place.radius)
+        }
         wantsLayer = true
         layerContentsRedrawPolicy = .never
         let l = metalLayer
-        l.device = model.engine.renderer?.device
+        l.device = engine.renderer?.device
         // Every Mac can draw this one. The first frame changes it if the narrow one will do.
         l.pixelFormat = MapRenderer.outputFormat
         l.colorspace = CGColorSpace(name: CGColorSpace.extendedLinearDisplayP3)
@@ -45,12 +94,12 @@ final class MapHostView: NSView {
         l.maximumDrawableCount = 3
         l.isOpaque = true
         l.backgroundColor = CGColor(gray: 0.02, alpha: 1)
-        drawer = RingDrawer(engine: model.engine, layer: l)
+        drawer = RingDrawer(engine: engine, layer: l)
         drawer.stopped = { [weak self] frame in self?.rest(after: frame) }
-        model.engine.requestFrame = { [weak self] in self?.startAnimating() }
+        engine.requestFrame = { [weak self] in self?.startAnimating() }
     }
 
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    public required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     deinit {
         drawer?.end()
@@ -59,7 +108,7 @@ final class MapHostView: NSView {
 
     private var contentScale: CGFloat { window?.backingScaleFactor ?? 2 }
 
-    override func viewDidMoveToWindow() {
+    public override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         NotificationCenter.default.removeObserver(self)
         guard let window else {
@@ -81,13 +130,13 @@ final class MapHostView: NSView {
         }
     }
 
-    override func viewDidChangeBackingProperties() {
+    public override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
         updateDrawableSize()
         startAnimating()
     }
 
-    override func setFrameSize(_ newSize: NSSize) {
+    public override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         updateDrawableSize()
         if inLiveResize {
@@ -99,7 +148,7 @@ final class MapHostView: NSView {
         }
     }
 
-    override func viewDidEndLiveResize() {
+    public override func viewDidEndLiveResize() {
         super.viewDidEndLiveResize()
         startAnimating()
     }
@@ -115,10 +164,10 @@ final class MapHostView: NSView {
     private func tellDrawer() {
         let headroom = window?.screen?.maximumExtendedDynamicRangeColorComponentValue ?? 1
         drawer.screen(scale: contentScale, headroom: headroom, hasRoom: bounds.width > 1)
-        if let renderer = model?.engine.renderer { drawer.use(Self.forcedFormat ?? renderer.screenFormat(headroom: headroom)) }
+        if let renderer = engine.renderer { drawer.use(Self.forcedFormat ?? renderer.screenFormat(headroom: headroom)) }
     }
 
-    func startAnimating() {
+    public func startAnimating() {
         // It starts again when the window can be seen, from where it had got to.
         guard window != nil, canBeSeen else { return }
         tellDrawer()
@@ -126,7 +175,7 @@ final class MapHostView: NSView {
     }
 
     /// For a check: the picture in one format, whatever the screen can do.
-    nonisolated(unsafe) static var forcedFormat: MTLPixelFormat?
+    nonisolated(unsafe) public static var forcedFormat: MTLPixelFormat?
 
     /// Once the ring has stopped and its last frame is done, it holds on to nothing but what's on screen.
     private func rest(after frame: Int) {
@@ -135,13 +184,13 @@ final class MapHostView: NSView {
     }
 
     /// For a check: what happens when the Mac is short of memory and really takes what it's allowed to.
-    func loseWhatItMayLose() {
+    public func loseWhatItMayLose() {
         drawer.loseWhatItMayLose()
     }
 
     /// The ring moved with the rest of the window: this frame of it reaches the screen with theirs. While the window is
     /// being resized, each new size draws its own frame.
-    func drawWithWindow() {
+    public func drawWithWindow() {
         guard window != nil, canBeSeen, !inLiveResize else { return }
         tellDrawer()
         drawer.drawWithWindow()
@@ -149,7 +198,7 @@ final class MapHostView: NSView {
 
     @objc private func windowCameOrWent(_ note: Notification) {
         let isVisible = window?.occlusionState.contains(.visible) == true
-        model?.windowCameOrWent(isVisible: isVisible || Self.drawsWhenHidden)
+        onVisibility(isVisible || Self.drawsWhenHidden)
         if isVisible {
             // What was on screen may be gone, so the ring is always drawn again.
             drawer.wakeSurfaces()
@@ -165,7 +214,7 @@ final class MapHostView: NSView {
 
     // MARK: Pointer
 
-    override func updateTrackingAreas() {
+    public override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let trackingArea { removeTrackingArea(trackingArea) }
         let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
@@ -173,27 +222,24 @@ final class MapHostView: NSView {
         trackingArea = area
     }
 
-    private func pointInRing(_ event: NSEvent) -> (angle: Float, radius: Float)? {
-        guard let model else { return nil }
-        let p = convert(event.locationInWindow, from: nil)
-        return model.polar(p)
+    private func pointInRing(_ event: NSEvent) -> Polar? {
+        polar(convert(event.locationInWindow, from: nil))
     }
 
-    override func mouseMoved(with event: NSEvent) {
-        guard let model else { return }
+    public override func mouseMoved(with event: NSEvent) {
         // These moves come whatever is over the ring. What's there says for itself what it lights.
         guard window?.contentView?.superview?.hitTest(event.locationInWindow) === self else {
-            model.pointerOffRing()
+            onHoverCovered()
             return
         }
-        model.pointerMoved(to: model.polar(convert(event.locationInWindow, from: nil)))
+        onHover(polar(convert(event.locationInWindow, from: nil)))
     }
 
-    override func mouseExited(with event: NSEvent) {
-        model?.pointerMoved(to: nil)
+    public override func mouseExited(with event: NSEvent) {
+        onHover(nil)
     }
 
-    override func mouseDown(with event: NSEvent) {
+    public override func mouseDown(with event: NSEvent) {
         downPoint = event.locationInWindow
         backgroundDown = nil
         window?.makeFirstResponder(self)
@@ -202,9 +248,9 @@ final class MapHostView: NSView {
             downPoint = nil
             moveWindow(with: event)
         } else if event.modifierFlags.contains(.command) {
-            // ⌘-click copies the name of what's under it, and that's all it does.
+            // ⌘-click is the host's, and that's all it does.
             downPoint = nil
-            if let model, let polar = model.polar(p), let thing = model.thing(at: polar) { model.copyName(of: thing) }
+            if let polar = polar(p) { onCommandClick(polar) }
         } else if isEmptyBackground(p) {
             backgroundDown = event
         }
@@ -212,9 +258,8 @@ final class MapHostView: NSView {
 
     /// Nothing is drawn here. The hole in the ring isn't empty: it holds the numbers, and a click there goes back up.
     private func isEmptyBackground(_ p: CGPoint) -> Bool {
-        guard let model else { return false }
-        guard let polar = model.polar(p) else { return true }
-        return polar.radius >= RingLayout.hole && model.engine.layout.hit(angle: polar.angle, radius: polar.radius) == nil
+        guard let polar = polar(p) else { return true }
+        return polar.radius >= RingLayout.hole && engine.layout.hit(angle: polar.angle, radius: polar.radius) == nil
     }
 
     /// How far down the window the toolbar reaches. The map goes on under it, and where none of the toolbar's controls are, a
@@ -247,7 +292,7 @@ final class MapHostView: NSView {
     }
 
     /// A plain click on the background still clears what's selected, so the window only moves once the pointer does.
-    override func mouseDragged(with event: NSEvent) {
+    public override func mouseDragged(with event: NSEvent) {
         guard let start = backgroundDown else { return }
         let dx = event.locationInWindow.x - start.locationInWindow.x, dy = event.locationInWindow.y - start.locationInWindow.y
         guard dx * dx + dy * dy >= 9 else { return }
@@ -256,53 +301,49 @@ final class MapHostView: NSView {
         moveWindow(with: start)
     }
 
-    override func mouseUp(with event: NSEvent) {
+    public override func mouseUp(with event: NSEvent) {
         backgroundDown = nil
         defer { downPoint = nil }
-        guard let downPoint, let model else { return }
+        guard let downPoint else { return }
         let dx = event.locationInWindow.x - downPoint.x, dy = event.locationInWindow.y - downPoint.y
         guard dx * dx + dy * dy < 16 else { return }
-        model.click(at: pointInRing(event), count: event.clickCount)
+        onClick(pointInRing(event), event.clickCount)
     }
 
-    override func menu(for event: NSEvent) -> NSMenu? {
-        guard let model, let polar = pointInRing(event), let thing = model.thing(at: polar) else { return nil }
-        return model.menu(for: thing)
+    public override func menu(for event: NSEvent) -> NSMenu? {
+        guard let polar = pointInRing(event) else { return nil }
+        return menuAt(polar)
     }
 
-    override func magnify(with event: NSEvent) {
+    public override func magnify(with event: NSEvent) {
         pinch += event.magnification
         if event.phase == .began { pinch = event.magnification }
         if pinch > 0.25 {
             pinch = 0
-            model?.click(at: pointInRing(event))
+            onPinch(true, pointInRing(event))
         } else if pinch < -0.25 {
             pinch = 0
-            model?.goUp()
+            onPinch(false, pointInRing(event))
         }
     }
 
     // MARK: VoiceOver
 
-    /// To VoiceOver the map is a group of what's in the folder you're in, biggest first, each with its size and its share
-    /// of the folder. Pressing one does what a click does: a folder opens, a file is selected.
-    override func isAccessibilityElement() -> Bool { true }
-    override func accessibilityRole() -> NSAccessibility.Role? { .group }
-    override func accessibilityRoleDescription() -> String? { "disk map" }
+    /// To VoiceOver the view is a group of the pieces of the first ring, biggest first, each with its size and its share.
+    /// Pressing one does what the host says.
+    public override func isAccessibilityElement() -> Bool { true }
+    public override func accessibilityRole() -> NSAccessibility.Role? { .group }
+    public override func accessibilityRoleDescription() -> String? { accessibilityKind }
 
-    override func accessibilityLabel() -> String? {
-        guard let model else { return "Disk map" }
-        return "Map of " + (model.focus == 0 ? (model.volume?.shownName ?? "the disk") : model.displayName(model.focus))
-    }
+    public override func accessibilityLabel() -> String? { accessibilityName() }
 
     /// The same elements while the picture stays the same, so VoiceOver keeps its place among them.
     private var piecesForVoiceOver: (key: String, elements: [Any])?
 
-    override func accessibilityChildren() -> [Any]? {
-        guard let model, model.tree != nil, model.ring.radius > 0 else { return [] }
-        let layout = model.engine.layout
-        let ring = model.ring
-        let key = "\(model.focus) \(model.treeVersion) \(layout.pieces.count) \(ring.center) \(ring.radius)"
+    public override func accessibilityChildren() -> [Any]? {
+        guard let picture = accessibilityPicture() else { return [] }
+        let layout = engine.layout
+        let key = "\(picture.key) \(layout.pieces.count) \(picture.center) \(picture.radius)"
         if let cached = piecesForVoiceOver, cached.key == key { return cached.elements }
         let inner = layout.pieces.enumerated().filter { $0.element.ring == 0 && $0.element.bytes > 0 }
         let whole = Double(max(inner.reduce(UInt64(0)) { $0 &+ $1.element.bytes }, 1))
@@ -310,18 +351,19 @@ final class MapHostView: NSView {
             let element = RingPieceElement()
             element.setAccessibilityParent(self)
             element.setAccessibilityRole(.button)
-            element.setAccessibilityLabel(model.displayName(piece: piece))
-            element.setAccessibilityValue("\(formatBytes(piece.bytes)), \(Int((Double(piece.bytes) / whole * 100).rounded()))%")
+            let said = describePiece(piece, Double(piece.bytes) / whole)
+            element.setAccessibilityLabel(said.label)
+            element.setAccessibilityValue(said.value)
             // In the view's own points, so it stays right when the window moves.
-            element.setAccessibilityFrameInParentSpace(Self.box(of: piece, in: ring))
+            element.setAccessibilityFrameInParentSpace(Self.box(of: piece, center: picture.center, radius: picture.radius))
             // Found again when pressed: the ring may have changed since VoiceOver was told about this piece, and the same
             // place in it can hold something else by then.
             let node = piece.node, smaller = piece.isSmaller
-            element.press = { [weak model] in
-                guard let model, let now = model.engine.layout.pieces.firstIndex(where: {
+            element.press = { [weak self] in
+                guard let self, let now = self.engine.layout.pieces.firstIndex(where: {
                     $0.node == node && $0.isSmaller == smaller && $0.ring == 0
                 }) else { return false }
-                model.click(piece: now)
+                self.onPress(now)
                 return true
             }
             return element
@@ -331,21 +373,21 @@ final class MapHostView: NSView {
     }
 
     /// The ring has changed: VoiceOver asks again.
-    func voiceOverLayoutChanged() {
+    public func voiceOverLayoutChanged() {
         guard NSWorkspace.shared.isVoiceOverEnabled else { return }
         piecesForVoiceOver = nil
         NSAccessibility.post(element: self, notification: .layoutChanged)
     }
 
     /// A wedge's bounding box, in the view's points.
-    private static func box(of piece: Piece, in ring: RingGeometry) -> CGRect {
+    private static func box(of piece: Piece, center: CGPoint, radius: CGFloat) -> CGRect {
         var minX = CGFloat.infinity, minY = CGFloat.infinity, maxX = -CGFloat.infinity, maxY = -CGFloat.infinity
         let steps = max(Int((piece.a1 - piece.a0) / 0.05), 1)
         for step in 0...steps {
             let angle = CGFloat(piece.a0 + (piece.a1 - piece.a0) * Float(step) / Float(steps))
             for r in [piece.r0, piece.r1] {
-                let x = ring.center.x + sin(angle) * CGFloat(r) * ring.radius
-                let y = ring.center.y - cos(angle) * CGFloat(r) * ring.radius
+                let x = center.x + sin(angle) * CGFloat(r) * radius
+                let y = center.y - cos(angle) * CGFloat(r) * radius
                 minX = min(minX, x); maxX = max(maxX, x)
                 minY = min(minY, y); maxY = max(maxY, y)
             }
@@ -353,21 +395,15 @@ final class MapHostView: NSView {
         return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
     }
 
-    override func keyDown(with event: NSEvent) {
-        guard let model else { return super.keyDown(with: event) }
-        // In Free Up the keyboard steps through the list: nothing here does anything until you clean.
-        if model.mode == .freeUp, model.handlePlanKey(event) { return }
-        switch event.keyCode {
-        case 53, 51: model.goUp()                 // escape, delete
-        case 49:                                  // space selects; with shift, the card
-            if event.modifierFlags.contains(.shift) { model.toggleLook() } else { model.spaceSelect() }
-        default: super.keyDown(with: event)
-        }
+    // MARK: Keys
+
+    public override func keyDown(with event: NSEvent) {
+        if onKey(event) { return }
+        super.keyDown(with: event)
     }
 
-    // Hold Option to see the disk as it will be after the clean. With ⌘ it's part of a shortcut.
-    override func flagsChanged(with event: NSEvent) {
-        model?.setPreviewAfter(event.modifierFlags.contains(.option) && !event.modifierFlags.contains(.command))
+    public override func flagsChanged(with event: NSEvent) {
+        onModifiers(event)
         super.flagsChanged(with: event)
     }
 }
@@ -380,29 +416,26 @@ final class RingPieceElement: NSAccessibilityElement {
     override func accessibilityPerformPress() -> Bool { press() }
 }
 
-struct MapView: NSViewRepresentable {
-    let model: AppModel
-
-    func makeNSView(context: Context) -> MapHostView {
-        let view = MapHostView(model: model)
-        model.mapView = view
-        return view
-    }
-
-    func updateNSView(_ view: MapHostView, context: Context) {}
-}
-
-/// The ring's place in the window, handed to the ring on every frame of whatever animation SwiftUI moves it with, as the
-/// panel comes and goes, and at once when nothing animates it, as while the window is resized. So the ring and everything
-/// drawn over it, such as the numbers in its middle, move as one. It shows nothing itself.
-struct RingPlace: View, Animatable {
-    var center: CGPoint
-    var radius: CGFloat
+/// The ring's place in the window, handed to the ring on every frame of whatever animation SwiftUI moves it with, and at
+/// once when nothing animates it, as while the window is resized. So the ring and everything drawn over it, such as numbers
+/// in its middle, move as one. It shows nothing itself.
+public struct RingPlace: View, Animatable {
+    public var center: CGPoint
+    public var radius: CGFloat
     /// The window's size. When it changes, the picture changes size too, and that draws a frame of its own.
     let size: CGSize
-    let model: AppModel
+    let engine: MapEngine
+    let view: () -> SunburstView?
 
-    var animatableData: AnimatablePair<CGPoint.AnimatableData, CGFloat> {
+    public init(center: CGPoint, radius: CGFloat, size: CGSize, engine: MapEngine, view: @escaping () -> SunburstView?) {
+        self.center = center
+        self.radius = radius
+        self.size = size
+        self.engine = engine
+        self.view = view
+    }
+
+    public var animatableData: AnimatablePair<CGPoint.AnimatableData, CGFloat> {
         get { AnimatablePair(center.animatableData, radius) }
         set {
             center.animatableData = newValue.first
@@ -410,8 +443,8 @@ struct RingPlace: View, Animatable {
         }
     }
 
-    var body: some View {
-        if model.engine.setPlace(center: center, radius: radius), let view = model.mapView, view.bounds.size == size { view.drawWithWindow() }
+    public var body: some View {
+        if engine.setPlace(center: center, radius: radius), let view = view(), view.bounds.size == size { view.drawWithWindow() }
         return Color.clear
             .frame(width: 0, height: 0)
             .allowsHitTesting(false)
