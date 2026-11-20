@@ -4,23 +4,33 @@ import SwiftUI
 
 /// A name on the ring: inside a piece if it fits, otherwise out at the side with a thin line to its piece.
 public struct SunburstLabel: Identifiable, Equatable, Sendable {
+    /// Inside its piece, or in the column of names to the left or right of the ring.
     public enum Place: Sendable { case inside, left, right }
     public var id: UInt64
+    /// The piece it names, in the layout it was placed for.
     public var pieceIndex: Int
     public var node: UInt32
+    /// What it says: a name, and below it a size.
     public var title: String
     public var value: String
+    /// Where the name's middle goes, inside a piece; for one at the side, where its column meets its line.
     public var position: CGPoint
+    /// For a name at the side: where its line starts, at the edge of its piece.
     public var anchor: CGPoint
+    /// For a name at the side: where its line turns level.
     public var elbow: CGPoint
     public var place: Place
+    /// Written in dark text, on a light piece.
     public var dark: Bool
+    /// Written larger, as on free space.
     public var large: Bool
 }
 
 /// Whether the pointer is on anything on the ring, and which named piece it's on, if any.
 public struct LabelLight: Equatable, Sendable {
+    /// Whether the pointer is on the ring at all: then names other than its own step back.
     public var onAnything = false
+    /// The named node the pointer is on, if any.
     public var node: UInt32?
 
     public init() {}
@@ -35,8 +45,10 @@ public struct LabelLight: Equatable, Sendable {
 /// Where names can go: the ring, the width of the part of the window it's centred in, and how far up and down the names
 /// at the sides may go.
 public struct LabelArea: Sendable {
+    /// The ring's middle and radius, in the view's points.
     public var center: CGPoint
     public var radius: CGFloat
+    /// The size of the part of the view the ring is centred in.
     public var width: CGFloat
     public var height: CGFloat
     /// The highest a name at the side may sit, and the lowest.
@@ -123,9 +135,11 @@ public enum LabelPlacer {
 
     /// A piece to name at the side, with what to call it.
     public struct Pick: Sendable {
+        /// The piece to name, in the layout.
         public var index: Int
         public var title: String
         public var value: String
+        /// How much it matters: the best are named first, as many as fit.
         public var score: Double
         /// Tells apart names that share a piece, such as two copies too small to show apart.
         public var salt: UInt64 = 0

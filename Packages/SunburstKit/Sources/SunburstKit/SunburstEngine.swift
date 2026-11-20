@@ -22,6 +22,7 @@ public enum RingTransition: Sendable {
 
 /// Where a zoom is headed: it maps the old ring to the new one, sliding everything else out of the way.
 public struct ZoomMapping: Sendable {
+    /// The piece's start and end angle, and its outer edge as a share of the radius.
     public var a0: Float, a1: Float, r1: Float
 
     public init(a0: Float, a1: Float, r1: Float) {
@@ -35,6 +36,7 @@ public struct ZoomMapping: Sendable {
         self.init(a0: piece.a0, a1: piece.a1, r1: piece.r1)
     }
 
+    /// Where a piece's place (start, end, inner, outer) goes in the zoom.
     public func apply(_ g: SIMD4<Float>) -> SIMD4<Float> {
         let sweep = max(a1 - a0, 0.0001)
         let scale = 2 * Float.pi / sweep

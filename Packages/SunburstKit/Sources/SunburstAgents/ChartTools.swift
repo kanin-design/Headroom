@@ -26,6 +26,7 @@ public enum SunburstAgentTools {
     /// The largest picture, in pixels across or down.
     public static let largestPicture = 1600
 
+    /// The chart's tools, to add to an `AgentHost`'s.
     public static let tools: [AgentTool] = [
         AgentTool(name: "chart_summary",
                   description: "What the chart shows now: the node in the middle, and the biggest pieces on the ring, biggest first, each with its node number, name, size, share of the middle, ring (0 is the innermost), the node it is inside, and where it is in degrees clockwise from 12 o'clock. Pieces that gather what is too small to draw alone are marked. The other chart tools take these node numbers.",

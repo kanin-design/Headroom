@@ -523,6 +523,7 @@ struct ReadoutView: View {
 public struct SunburstSummary: Codable, Sendable, Equatable {
     /// One piece of the ring.
     public struct Piece: Codable, Sendable, Equatable {
+        /// The node it stands for, as the other calls take it.
         public var node: UInt32
         public var name: String
         public var size: UInt64
@@ -538,6 +539,7 @@ public struct SunburstSummary: Codable, Sendable, Equatable {
         public var to: Double
         /// Whether it gathers what's too small to draw alone.
         public var isGathered: Bool
+        /// Whether it's drawn striped: one of `SunburstChart.marked`.
         public var isMarked: Bool
     }
 

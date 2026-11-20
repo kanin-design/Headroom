@@ -131,7 +131,9 @@ final class DoorTests: XCTestCase {
     func testTheDoorsCodeRemovesNothingButItsSocket() throws {
         let sources = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Sources/SunburstAgents")
-        let files = try FileManager.default.contentsOfDirectory(at: sources, includingPropertiesForKeys: nil)
+        // Every Swift file, in the folder and any folder in it: the documentation beside the code isn't code.
+        let files = (FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil)?.allObjects as? [URL] ?? [])
+            .filter { $0.pathExtension == "swift" }
         XCTAssertGreaterThanOrEqual(files.count, 8)
         let removes = ["unlink(", "Darwin.remove(", "removefile(", "rmdir(", "removeItem(", "trashItem(", "moveItem(", "replaceItem", "rename(", "performClick"]
         for file in files {

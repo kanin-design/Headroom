@@ -4,6 +4,7 @@ import simd
 
 /// Colour in OKLab, which mixes and steps the way the eye expects. Everything ends up in linear Display P3.
 public struct Lab: Sendable {
+    /// Lightness from 0 to 1, and the two colour axes: green to red, and blue to yellow.
     public var l: Float, a: Float, b: Float
 
     public init(l: Float, a: Float, b: Float) { self.l = l; self.a = a; self.b = b }
@@ -15,8 +16,10 @@ public struct Lab: Sendable {
         b = c * sin(h * .pi / 180)
     }
 
+    /// How colourful it is: the distance from grey.
     public var chroma: Float { (a * a + b * b).squareRoot() }
 
+    /// The colour in linear Display P3, as a layout's colorer gives it, kept to what a screen can show.
     public var linearP3: SIMD3<Float> {
         let c = unclampedP3
         return SIMD3(max(c.x, 0), max(c.y, 0), max(c.z, 0))
@@ -47,6 +50,7 @@ public struct Lab: Sendable {
         return Color(.displayP3, red: encode(c.x), green: encode(c.y), blue: encode(c.z))
     }
 
+    /// The colour `t` of the way from `x` to `y`.
     public static func mix(_ x: Lab, _ y: Lab, _ t: Float) -> Lab {
         Lab(l: x.l + (y.l - x.l) * t, a: x.a + (y.a - x.a) * t, b: x.b + (y.b - x.b) * t)
     }
@@ -108,6 +112,7 @@ public struct BranchColours<Tree: SunburstTree> {
     /// Where the first branch starts. Each next one is a golden angle further on, so branches next to each other in the
     /// list are always far apart in colour, and however many there are, they fill the wheel evenly.
     public static var firstHue: Float { 298 }
+    /// How far round the wheel each next branch's hue is: the golden angle, in degrees.
     public static var goldenAngle: Float { 137.508 }
     /// A branch won't take a colour this close to the one before it on the ring.
     public static var neighbourGap: Float { 50 }

@@ -15,6 +15,7 @@ public typealias Polar = (angle: Float, radius: Float)
 ///
 /// For a chart with everything wired up, use the SwiftUI view `Sunburst` instead.
 public final class SunburstView: NSView {
+    /// What it draws.
     public let engine: SunburstEngine
     private var metalLayer: CAMetalLayer { layer as! CAMetalLayer }
     /// Everything about drawing the ring.
@@ -70,6 +71,7 @@ public final class SunburstView: NSView {
 
     /// What VoiceOver calls the view, and the whole of what it shows.
     public var accessibilityKind = "chart"
+    /// What VoiceOver calls the chart as a whole.
     public var accessibilityName: () -> String = { "Chart" }
     /// What the pieces of the first ring are now, by a key that changes when they do, and where the ring is in the view.
     /// Nil while there's nothing to describe.
@@ -183,6 +185,7 @@ public final class SunburstView: NSView {
         if let renderer = engine.renderer { drawer.use(Self.forcedFormat ?? renderer.screenFormat(headroom: headroom)) }
     }
 
+    /// Draws frames again until nothing moves, as after the picture changed. The engine asks for this itself.
     public func startAnimating() {
         // It starts again when the window can be seen, from where it had got to.
         guard window != nil, canBeSeen else { return }
@@ -436,6 +439,7 @@ final class RingPieceElement: NSAccessibilityElement {
 /// once when nothing animates it, as while the window is resized. So the ring and everything drawn over it, such as numbers
 /// in its middle, move as one. It shows nothing itself.
 public struct RingPlace: View, Animatable {
+    /// The ring's middle and radius, in the `SunburstView`'s points.
     public var center: CGPoint
     public var radius: CGFloat
     /// The window's size. When it changes, the picture changes size too, and that draws a frame of its own.

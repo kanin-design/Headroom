@@ -61,6 +61,7 @@ public struct AgentReply: @unchecked Sendable {
         case image(Data, mimeType: String)
     }
 
+    /// What the answer is made of, in order: an agent gets each as its own piece of content.
     public var parts: [Part]
 
     public init(_ parts: [Part]) {
@@ -69,6 +70,7 @@ public struct AgentReply: @unchecked Sendable {
 
     /// A JSON object or array, sent as one line of JSON text.
     public static func json(_ object: Any) -> AgentReply { AgentReply([.json(object)]) }
+    /// An answer in words.
     public static func text(_ text: String) -> AgentReply { AgentReply([.text(text)]) }
     /// A PNG file's bytes.
     public static func png(_ data: Data) -> AgentReply { AgentReply([.image(data, mimeType: "image/png")]) }
@@ -103,6 +105,7 @@ public struct AgentReply: @unchecked Sendable {
 /// Why a call couldn't be answered, in words the agent can act on. Throw it from the app's answer: the agent reads the
 /// message as the call's answer, marked as an error.
 public struct AgentFailure: Error, Equatable, Sendable {
+    /// What the agent is told, in words it can act on.
     public var message: String
 
     public init(_ message: String) {

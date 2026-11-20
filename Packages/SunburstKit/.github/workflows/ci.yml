@@ -16,3 +16,25 @@ jobs:
         run: swift test
       - name: Build the example app
         run: swift build --package-path Examples/FolderMap
+
+  # The oldest Swift the README promises, with an Xcode the runner already has.
+  swift-6-2:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v5
+      - name: Pick an Xcode with Swift 6.2
+        run: |
+          for app in /Applications/Xcode_*.app; do
+            version=$(DEVELOPER_DIR="$app/Contents/Developer" xcrun swift --version 2>/dev/null | grep -o 'Swift version [0-9.]*' | awk '{print $3}')
+            echo "$app: Swift $version"
+            if [[ "$version" == 6.2* && -z "$picked" ]]; then picked="$app"; fi
+          done
+          [[ -n "$picked" ]] || { echo "No Xcode with Swift 6.2 on this runner"; exit 1; }
+          echo "Using $picked"
+          echo "DEVELOPER_DIR=$picked/Contents/Developer" >> "$GITHUB_ENV"
+      - name: Swift
+        run: swift --version
+      - name: Build and test
+        run: swift test
+      - name: Build the example app
+        run: swift build --package-path Examples/FolderMap

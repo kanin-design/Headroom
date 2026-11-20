@@ -53,7 +53,9 @@ public struct Piece: Sendable {
     /// In the outermost ring, how much of it is in rings that aren't drawn, from 0 to 1. It fades out past its edge by that much.
     public var deeper: Float = 0
 
+    /// How far around it goes, in radians.
     public var sweep: Float { a1 - a0 }
+    /// The angle of its middle.
     public var midAngle: Float { (a0 + a1) * 0.5 }
 
     @usableFromInline
@@ -84,6 +86,7 @@ public struct RingSizes: Equatable, Sendable {
     /// The most rings a picture draws, not counting the thin band around the whole tree. A picture never gets more than it
     /// can fill.
     public var depth = 6
+    /// How thick each ring is.
     public var style = RingStyle.tapered
 
     /// The most rings there can be.
@@ -153,6 +156,7 @@ public struct RingLayout: Sendable {
     public static let band: Float = 0.029
     /// Pieces shorter than this at their ring's middle, in points on a typical window, merge into "smaller items".
     public static let minimumArc: Float = 2.2
+    /// The radius, in points, that sizes in points above are measured on.
     public static let typicalRadius: Float = 400
     /// A folder at least this share one subfolder is drawn together with it.
     public static let chainShare = 0.88

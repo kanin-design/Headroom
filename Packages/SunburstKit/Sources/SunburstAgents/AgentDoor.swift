@@ -7,6 +7,7 @@ public struct AgentHost: Sendable {
     /// The app's name: the server agents see, and what the messages they're told call it, as in "FolderMap is asking in
     /// its window".
     public var name: String
+    /// The app's version, as agents are told it.
     public var version: String
     /// What every agent is told once, when it connects: what the app is for and how to use its tools.
     public var instructions: String
@@ -57,6 +58,7 @@ public final class AgentDoor {
     /// Carries out one call the user allowed: the answer, or an `AgentFailure` that says why there isn't one.
     public typealias Answer = @MainActor (AgentCall) async throws -> AgentReply
 
+    /// What agents are told about the app, and where the door is.
     public let host: AgentHost
     /// Who's asking, who's allowed, who's connected, and what they did.
     public let agents: Agents

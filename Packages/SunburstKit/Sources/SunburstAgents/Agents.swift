@@ -5,7 +5,9 @@ import Observation
 /// An agent the user allowed, and when.
 public struct AllowedAgent: Codable, Identifiable, Equatable, Sendable {
     public var identity: AgentIdentity
+    /// When the user allowed it.
     public var allowed: Date
+    /// When it last asked for something, if it has.
     public var lastUsed: Date?
     /// Whether it may call the tools that change what's shown or selected (`AgentTool.selects`), or only look.
     public var maySelect = false
@@ -47,15 +49,18 @@ public struct AgentRequest: Identifiable, Equatable, Sendable {
 public struct ConnectedAgent: Identifiable, Equatable, Sendable {
     public var id: UUID
     public var identity: AgentIdentity
+    /// When it connected.
     public var since: Date
 }
 
 /// Something an agent asked for, or something the user decided about it.
 public struct AgentActivity: Identifiable, Equatable, Sendable {
     public var id = UUID()
+    /// When it asked.
     public var date: Date
     /// The agent's name.
     public var agent: String
+    /// What it asked for, in a line.
     public var what: String
 }
 
@@ -96,6 +101,7 @@ public final class Agents {
     /// Where an agent stands with the user.
     public enum Standing: Sendable { case allowed, refused, asking }
 
+    /// Whether this agent is allowed, was turned down since the app started, or hasn't been answered about.
     public func standing(of identity: AgentIdentity) -> Standing {
         if allowed.contains(where: { $0.id == identity.key }) { return .allowed }
         return refused.contains(identity.key) ? .refused : .asking
