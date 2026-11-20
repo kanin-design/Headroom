@@ -129,18 +129,40 @@ struct LookCard: View {
     private func footer(_ tree: DiskTree) -> some View {
         let node = look.node
         let goesIn = model.lookGoesIn(node, in: tree)
-        return HStack(spacing: 8) {
+        // Every button named when the card is wide enough; otherwise the first two keep only their icons, never a cut-off name.
+        return ViewThatFits(in: .horizontal) {
+            footerRow(node, goesIn: goesIn, named: true)
+            footerRow(node, goesIn: goesIn, named: false)
+        }
+        .controlSize(.regular)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .contentShape(Rectangle())
+        .gesture(WindowDragGesture())
+    }
+
+    @ViewBuilder
+    private func footerLabel(_ title: String, _ symbol: String, named: Bool) -> some View {
+        if named {
+            Label(title, systemImage: symbol)
+        } else {
+            Label(title, systemImage: symbol).labelStyle(.iconOnly).help(title)
+        }
+    }
+
+    private func footerRow(_ node: UInt32, goesIn: Bool, named: Bool) -> some View {
+        HStack(spacing: 8) {
             Button {
                 model.openLooked()
             } label: {
-                Label(goesIn ? "Go Into" : "Open", systemImage: goesIn ? "arrow.right.circle" : "arrow.up.forward.app")
+                footerLabel(goesIn ? "Go Into" : "Open", goesIn ? "arrow.right.circle" : "arrow.up.forward.app", named: named)
             }
             .buttonStyle(.glass)
             if node != 0 {
                 Button {
                     model.reveal(node)
                 } label: {
-                    Label("Show in Finder", systemImage: "folder")
+                    footerLabel("Show in Finder", "folder", named: named)
                 }
                 .buttonStyle(.glass)
             }
@@ -155,11 +177,6 @@ struct LookCard: View {
                 DeleteMenu(model: model, node: node)
             }
         }
-        .controlSize(.regular)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        .contentShape(Rectangle())
-        .gesture(WindowDragGesture())
     }
 }
 
