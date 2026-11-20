@@ -110,8 +110,10 @@ final class AgentTests: XCTestCase {
         let sources = root.appendingPathComponent("Sources/Headroom")
         let headroom = try FileManager.default.contentsOfDirectory(at: sources.appendingPathComponent("Agents"), includingPropertiesForKeys: nil)
             + [sources.appendingPathComponent("Model/AppModel+Agents.swift"), sources.appendingPathComponent("UI/AgentsView.swift")]
-        let door = try FileManager.default.contentsOfDirectory(at: root.appendingPathComponent("Packages/SunburstKit/Sources/SunburstAgents"),
-                                                               includingPropertiesForKeys: nil)
+        // Every Swift file in the door's folder and any folder in it: its documentation is beside the code, and isn't code.
+        let doorFolder = root.appendingPathComponent("Packages/SunburstKit/Sources/SunburstAgents")
+        let door = (FileManager.default.enumerator(at: doorFolder, includingPropertiesForKeys: nil)?.allObjects as? [URL] ?? [])
+            .filter { $0.pathExtension == "swift" }
         XCTAssertGreaterThanOrEqual(headroom.count, 5, "all of Headroom's agent code is read")
         XCTAssertGreaterThanOrEqual(door.count, 8, "and all of the door's")
         XCTAssertTrue(door.contains { $0.lastPathComponent == "AgentSocket.swift" })
