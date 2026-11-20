@@ -9,7 +9,7 @@ struct Segment {
     float4 colorFrom;   // alpha fades pieces in and out
     float4 colorTo;
     float4 params;      // style, seed, how far it steps back until pointed at, how much of it goes on past the last ring
-    float4 plan;        // planned at the start of the transition, planned at the end
+    float4 plan;        // marked at the start of the transition, marked at the end
 };
 
 struct Uniforms {
@@ -22,21 +22,14 @@ struct Uniforms {
     float liftPixels;   // how far emphasis pushes a piece outward
     float bloom;        // glow strength
     float headroom;     // extra brightness the display allows, 1.0 on SDR
-    float ghost;        // share of the disk a cleanup would free
-    float freeStart;    // where the free wedge begins
-    float hideScale;    // 1 leaves out the scale around the disk
+    float hideScale;    // 1 leaves out the scale around the ring
     float restSaturation;   // how much colour a piece keeps until you point at it, 0...1
     float glowAtRest;       // how much glow a piece gives off until you point at it, 0...1
-    float previewShare;     // what the thing you're pointing at would add to the free space
-    float ghostCount;       // how many colours the new free space has
-    float freeOuter;        // how far out the free wedge reaches, as a share of the radius
     float minLit;           // points: the least a lit piece is drawn across while a tint shows, so a small one can be seen
     float layer;            // which pieces this pass draws: 0 the ones at rest, 1 the lit, 2 the lifted, 3 the one on top
     float litAbove;         // how lit a piece has to be to count as lit, for that
     float top;              // the piece pointed at, which lies over all the others; -1 when there's none
-    float4 previewColor;
     float4 tint;            // the colour lit pieces and the folders they're in take on, and in w how much
-    float4 ghostSlices[12]; // each colour, and in w where it ends, as a share of the whole
 };
 
 enum Style { StyleNormal = 0, StyleFree = 1, StyleHidden = 2, StyleSmaller = 3, StyleFile = 4, StyleGhost = 5 };
@@ -54,7 +47,7 @@ struct SegmentOut {
     float calm [[flat]];
     float deeper [[flat]];
     float emphasis [[flat]];
-    float planned [[flat]];
+    float marked [[flat]];
 };
 
 static float2 onCircle(float a, float r) { return float2(sin(a), -cos(a)) * r; }
@@ -114,7 +107,7 @@ vertex SegmentOut segment_vertex(uint vid [[vertex_id]],
     o.calm = s.params.z;
     o.deeper = s.params.w;
     o.emphasis = e;
-    o.planned = mix(s.plan.x, s.plan.y, saturate(u.t));
+    o.marked = mix(s.plan.x, s.plan.y, saturate(u.t));
     // Lit pieces lie over the ones at rest, lifted ones over those, and the one pointed at over them all, however lit it
     // is yet. Each pass draws one of the layers: a piece that isn't in it gets no area at all.
     float layer = float(iid) == u.top ? 3.0 : (e > 1.0 ? 2.0 : (e > u.litAbove ? 1.0 : 0.0));
@@ -195,8 +188,8 @@ fragment PieceOut segment_fragment(SegmentOut in [[stage_in]], constant Uniforms
         color += float3(0.20, 0.25, 0.31) * line * line * (0.75 + 0.25 * e);
         color += float3(0.05, 0.20, 0.15) * e * 0.5;
     } else if (in.style == StyleGhost) {
-        // A file that was moved to a drive, drawn from the note it left: its own colour, nearly empty inside, with a clear
-        // outline, so it reads as the shape of something that isn't here. Diagonal lines are for what's selected.
+        // Something that isn't here any more: its own colour, nearly empty inside, with a clear outline, so it reads as the
+        // shape of what was there. Diagonal lines are for what's marked.
         color = base * 0.13 * (0.85 + 0.3 * e);
         float rim = 1.0 - saturate(-d / (u.scale * 1.6));
         color += (base * 0.8 + float3(0.10)) * rim * rim;
@@ -226,14 +219,14 @@ fragment PieceOut segment_fragment(SegmentOut in [[stage_in]], constant Uniforms
         float strength = mix(u.restSaturation * (1.0 - 0.5 * in.calm), 1.0, e);
         color = mix(float3(dot(color, float3(0.3, 0.6, 0.1))), color, strength);
         color *= mix(1.0 - 0.2 * in.calm, 1.0, e);
-        // Planned to go: striped and see-through, with a thin bright edge. Solid stays, striped goes.
-        if (in.planned > 0.001) {
+        // Marked: striped and see-through, with a thin bright edge.
+        if (in.marked > 0.001) {
             float across = fract((in.p.x - in.p.y) / (u.scale * 10.0));
             float stripe = smoothstep(0.0, 0.08, across) * (1.0 - smoothstep(0.5, 0.58, across));
             float3 striped = mix(color * 0.10, color * 1.05, stripe);
-            color = mix(color, striped, in.planned);
+            color = mix(color, striped, in.marked);
             float rim = 1.0 - saturate(-d / (u.scale * 1.15));
-            color += (base * 0.75 + float3(0.10)) * rim * rim * in.planned;
+            color += (base * 0.75 + float3(0.10)) * rim * rim * in.marked;
         }
     }
 
@@ -313,7 +306,7 @@ fragment float4 composite(QuadOut in [[stage_in]],
 
     float3 color = background + near * u.bloom * 0.13 + far * u.bloom * 0.17;
 
-    // A fine scale around the disk: a mark for every 1%, a longer one for every 10%.
+    // A fine scale around the ring: a mark for every 1%, a longer one for every 10%.
     float scalePx = u.scale;
     float rPx = length(fromCenter);
     float a = atan2(fromCenter.x, -fromCenter.y);
@@ -328,51 +321,6 @@ fragment float4 composite(QuadOut in [[stage_in]],
     color += float3(0.16, 0.17, 0.20) * tick * mix(0.22, 0.60, isMajor) * (1.0 - u.hideScale);
 
     color = color * (1.0 - p.a) + p.rgb;
-
-    // What a cleanup would free, previewed as the free wedge growing back over what's there now, in the colours of what's going.
-    if (u.ghost > 0.0005 || u.previewShare > 0.0005) {
-        float full = 2.0 * M_PI_F;
-        float sweep = u.ghost * full;
-        float back = u.freeStart - a;
-        back -= full * floor(back / full);
-        float arc = back * rPx;
-        float inner = 0.34 * u.radius, outer = u.freeOuter * u.radius;
-        float rad = max(inner - rPx, rPx - outer);
-        if (u.ghost > 0.0005) {
-            float along = max(-arc, arc - sweep * rPx);
-            float d = max(rad, along);
-            float inside = saturate(0.5 - d);
-            float rim = inside * (1.0 - saturate(-d / (scalePx * 1.1)));
-            float where = back / max(sweep, 0.0001);
-            float3 tint = float3(0.16, 0.95, 0.56);
-            float seam = 1e4;
-            int count = int(u.ghostCount);
-            bool found = false;
-            for (int i = 0; i < count; i++) {
-                float end = u.ghostSlices[i].w;
-                if (!found && where <= end) {
-                    tint = u.ghostSlices[i].rgb;
-                    found = true;
-                }
-                if (i < count - 1) seam = min(seam, abs(where - end) * sweep * rPx);
-            }
-            float radial = saturate((rPx - inner) / max(outer - inner, 1.0));
-            color = mix(color, color * 0.22 + tint * mix(0.16, 0.38, radial), inside);
-            color += tint * rim * rim * 0.8;
-            color *= mix(1.0, 0.4, inside * (1.0 - smoothstep(0.4 * scalePx, 1.1 * scalePx, seam)));
-        }
-        if (u.previewShare > 0.0005) {
-            float wide = sweep + u.previewShare * full;
-            float along = max(sweep * rPx - arc, arc - wide * rPx);
-            float d = max(rad, along);
-            float inside = saturate(0.5 - d);
-            float rim = inside * (1.0 - saturate(-d / (scalePx * 1.0)));
-            float dash = step(0.5, fract((arc + rPx) / (scalePx * 9.0)));
-            float3 tint = u.previewColor.rgb;
-            color = mix(color, color * 0.45 + tint * 0.13, inside);
-            color += tint * rim * rim * 0.9 * dash;
-        }
-    }
 
     // The hole in the middle sits a little deeper than the page.
     float hole = smoothstep(0.40, 0.0, dist);

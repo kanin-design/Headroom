@@ -1,7 +1,12 @@
 import AppKit
-import IOSurface
+@preconcurrency import IOSurface
 import Metal
 import QuartzCore
+
+/// Hands something that isn't `Sendable` to the ring's thread, which from then on is the only one that touches it.
+struct HandedOver<Value>: @unchecked Sendable {
+    let value: Value
+}
 
 /// A thread of the ring's own, waiting on the display and on work handed to it.
 private final class RingThread: Thread {
@@ -43,9 +48,9 @@ private final class RingThread: Thread {
 /// the rest of the window: a panel being laid out, names being placed, text being drawn. The main thread says what to show,
 /// through the engine, and when to start. This draws until nothing moves, then stops, and while the ring is still, the
 /// memory its drawing used may be taken back.
-public final class RingDrawer: NSObject, @unchecked Sendable {
-    public let engine: MapEngine
-    public let layer: CAMetalLayer
+@_spi(Diagnostics) public final class RingDrawer: NSObject, @unchecked Sendable {
+    let engine: SunburstEngine
+    let layer: CAMetalLayer
     private let thread = RingThread()
 
     // Only ever touched on the ring's thread.
@@ -77,9 +82,9 @@ public final class RingDrawer: NSObject, @unchecked Sendable {
     nonisolated(unsafe) public static var log: ((String) -> Void)?
 
     /// Called on the main thread a moment after the last frame of a movement is on screen, with that frame's number.
-    public var stopped: ((Int) -> Void)?
+    var stopped: ((Int) -> Void)?
 
-    init(engine: MapEngine, layer: CAMetalLayer) {
+    init(engine: SunburstEngine, layer: CAMetalLayer) {
         self.engine = engine
         self.layer = layer
         super.init()
@@ -89,13 +94,14 @@ public final class RingDrawer: NSObject, @unchecked Sendable {
     // MARK: From the main thread
 
     /// Draws in step with the display this view is on.
+    @MainActor
     func attach(to view: NSView) {
-        let new = view.displayLink(target: self, selector: #selector(step(_:)))
-        new.isPaused = true
+        let new = HandedOver(value: view.displayLink(target: self, selector: #selector(step(_:))))
+        new.value.isPaused = true
         thread.perform { [self] in
             link?.invalidate()
-            link = new
-            new.add(to: .current, forMode: .default)
+            link = new.value
+            new.value.add(to: .current, forMode: .default)
         }
     }
 
@@ -142,7 +148,7 @@ public final class RingDrawer: NSObject, @unchecked Sendable {
         }
     }
 
-    public var framesDrawn: Int { lock.withLock { drawn } }
+    var framesDrawn: Int { lock.withLock { drawn } }
 
     /// A frame now, from the main thread, in the same transaction as the rest of the window, so the ring and everything over
     /// it reach the screen together: while the window is being resized, and on each frame of SwiftUI moving the ring. The
@@ -170,9 +176,9 @@ public final class RingDrawer: NSObject, @unchecked Sendable {
         guard layer.pixelFormat != format else { return }
         drawing.withLock {
             guard layer.pixelFormat != format else { return }
-            Self.log?("format now \(format == MapRenderer.outputFormat ? "wide" : "narrow")")
+            Self.log?("format now \(format == SunburstRenderer.outputFormat ? "wide" : "narrow")")
             layer.pixelFormat = format
-            layer.colorspace = CGColorSpace(name: format == MapRenderer.outputFormat ? CGColorSpace.extendedLinearDisplayP3 : CGColorSpace.extendedDisplayP3)
+            layer.colorspace = CGColorSpace(name: format == SunburstRenderer.outputFormat ? CGColorSpace.extendedLinearDisplayP3 : CGColorSpace.extendedDisplayP3)
             retireSurfaces()
         }
     }

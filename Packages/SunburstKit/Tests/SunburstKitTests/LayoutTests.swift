@@ -201,9 +201,9 @@ final class LayoutTests: XCTestCase {
     func testMarkedPiecesAreStriped() {
         let tree = TestTree([("a", 10 * mb), ("b", 20 * mb)])
         let a = tree.node("a")
-        let layout = RingLayout.build(tree: tree, focus: 0, colorer: none, planned: { $0 == a })
-        XCTAssertEqual(layout.pieces.first { $0.node == a }?.planned, 1)
-        XCTAssertEqual(layout.pieces.first { $0.node == tree.node("b") }?.planned, 0)
+        let layout = RingLayout.build(tree: tree, focus: 0, colorer: none, marked: { $0 == a })
+        XCTAssertEqual(layout.pieces.first { $0.node == a }?.marked, 1)
+        XCTAssertEqual(layout.pieces.first { $0.node == tree.node("b") }?.marked, 0)
     }
 }
 
@@ -216,11 +216,11 @@ final class LabelTests: XCTestCase {
         var placed = LabelPlacer.Placed()
         let order = LabelPlacer.order(layout, halvesFirst: false)
         let inside = LabelPlacer.inside(layout: layout, order: order, area: area, halves: false, named: &placed) { p in
-            (tree.nodes[Int(p.node)].name, "\(p.bytes / mb) MB")
+            (tree.nodes[Int(p.node)].name, "\(p.size / mb) MB")
         }
         XCTAssertTrue(inside.contains { $0.title == "big" && $0.place == .inside })
         let picks = LabelPlacer.bigPieces(layout: layout, order: order, total: tree.size(of: 0), named: &placed) { p in
-            (tree.nodes[Int(p.node)].name, "\(p.bytes / mb) MB")
+            (tree.nodes[Int(p.node)].name, "\(p.size / mb) MB")
         }
         let sides = LabelPlacer.sides(picks, layout: layout, area: area, eachCounts: false)
         for label in sides {

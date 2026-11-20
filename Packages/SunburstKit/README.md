@@ -1,25 +1,88 @@
 # SunburstKit
 
-A sunburst chart for macOS, drawn with Metal: a tree as rings around a middle, each piece's angle set by its size. It
-lays the tree out, draws it with a soft glow, moves smoothly from one picture to the next (zooming in and out, new
-sizes, new colours), lights what's under the pointer, and places names on and beside the pieces.
+A sunburst chart for macOS, drawn with Metal. Any tree, such as a disk, a budget or a library, shown as rings around a
+middle, each piece's angle set by its size. Point at a piece to light its branch, click to zoom into it, and click the
+middle to go back out.
 
-It doesn't own the tree. The host keeps its own tree and answers questions about it through a small protocol, and
-decides what the colours mean, what's marked, which node is in the middle, and what a click does.
+![A sunburst of a home folder: Movies, Pictures, Downloads and more as coloured wedges around the total in the middle, with names on the bigger pieces and beside the ring](docs/sunburst.jpg)
 
-## The input: `SunburstTree`
+<sub>The pictures show the example app's made-up sample.</sub>
 
-Nodes are `UInt32` numbers. Node 0 is the root; 0 as a child or sibling means none. Children are listed biggest first.
+- **One line to use.** `Sunburst(tree, name: …)` gives the ring, names on and beside it, a readout in the middle, pointing,
+  zooming, keys and VoiceOver.
+- **Any tree.** It doesn't own your data. Your tree answers a small protocol, and you decide what the colours mean, what's
+  marked and what a click opens.
+- **Fast.** The layout of a whole 2-million-file disk's top six rings, about 400 pieces, takes a third of a millisecond. The
+  layout is generic and `@inlinable`, so your build specialises it for your own tree. Every piece is one instanced quad
+  shaped on the GPU, so drawing barely depends on how many there are, and the ring only draws while something moves, on a
+  thread of its own.
+- **Moves well.** One spring carries every change: a zoom, new sizes arriving while something is measured, new colours.
+  Pieces glide from their old place to their new one, and with Reduce Motion they dissolve in place instead.
+- **Looks good anywhere.** Colours are worked out in OKLab, each branch gets its own hue from the whole spectrum, and the
+  glow uses the extra brightness of an XDR screen when there is one.
+- **Can be driven and read from code.** Everything a person does with the pointer has a call, the chart can describe itself
+  in words, and it can draw a picture of itself without a window. That's also how agents use it (see `SunburstAgents`).
 
-Required:
+Requirements: macOS 14 or later, Swift 6.2 or later. No dependencies.
+
+## Install
+
+Add this repository's URL as a package dependency, from version 0.1.0: in Xcode with File › Add Package Dependencies…, or in
+`Package.swift` with `.package(url:from:)`. Then add `SunburstKit` to your target's dependencies, and `SunburstAgents` too
+if you want agents.
+
+## Quick start
+
+```swift
+import SunburstKit
+import SwiftUI
+
+struct ContentView: View {
+    let tree: FileTree      // yours, conforming to SunburstTree
+
+    var body: some View {
+        Sunburst(tree, name: { tree.name(of: $0) })
+    }
+}
+```
+
+Sizes are written in bytes ("4.20 GB") unless you pass `sizeText:`. To show a tree that changes, or to drive the chart from
+code, keep a `SunburstChart` and show that:
+
+```swift
+@State private var chart = SunburstChart(tree: tree, name: { tree.name(of: $0) })
+
+var body: some View {
+    Sunburst(chart)
+}
+
+// Anywhere on the main actor:
+chart.zoom(into: node)              // into a node; a node with nothing inside is opened instead (onOpen)
+chart.zoomOut()                     // one level back out
+chart.highlight([a, b], tint: c)    // light these and the way out to them, in one colour
+chart.marked = [selected]           // drawn striped
+chart.tree = updated                // the same tree with new sizes: everything glides
+chart.show(otherTree)               // a different tree: back to its root
+chart.onOpen = { node in … }        // a click on a file, say
+```
+
+The [example app](Examples/FolderMap) is a complete Mac app in under 300 lines: it shows a folder, or a made-up sample.
+Run it with `swift run` in its folder.
+
+![The same chart zoomed into Movies: its series fill the ring, and the middle says 54.2 GB, 59% of Home](docs/zoomed.jpg)
+
+## Your tree: `SunburstTree`
+
+Nodes are `UInt32` numbers. Node 0 is the root, and 0 as a child or a sibling means there is none. Children are listed
+biggest first.
 
 | Member | What it says |
 | --- | --- |
 | `firstChild(of:)`, `nextSibling(of:)`, `parent(of:)` | The shape of the tree |
 | `size(of:)` | Everything in the node: sets its angle |
-| `ownSize(of:)` | What the node holds outside its children, drawn with what's too small to draw alone |
+| `ownSize(of:)` | What the node holds outside its children, drawn with what's too small to draw on its own |
 | `isFolder(_:)` | Only folders chain: a folder that's nearly all one subfolder is drawn as one piece with it |
-| `style(of:)` | `.folder`, `.file`, `.free`, `.hidden` (hatched), `.ghost` (faint) |
+| `style(of:)` | `.folder`, `.file`, `.free` (room not used), `.hidden` (hatched), `.ghost` (faint) |
 | `nameKey(of:)` | A number from the name, the same from one tree to the next, so pieces glide to their new places |
 
 Optional, with defaults that draw a plain sunburst:
@@ -31,66 +94,93 @@ Optional, with defaults that draw a plain sunburst:
 | `rootRank(of:)` | 0 | Around the root, lower ranks first, then biggest first |
 | `isPlainShape(_:)` | false | A shape of its own in the first ring, such as free space, reaching out as far as the rest does on average |
 | `hasGroups`, `group(of:)` | off | Things in a folder are drawn by group first, and a folder that holds more than one group is drawn as a stretch for each |
-| `isStillGrowing(_:)` | false | Still being read: doesn't chain yet |
+| `isStillGrowing(_:)` | false | Still being measured: it doesn't chain yet |
 
-The rest of a picture is given when it's made:
+## Colours
 
-```swift
-let layout = RingLayout.build(tree: tree, focus: node,           // the node in the middle
-                              colorer: { node in colour(node) },  // linear Display P3; `Lab` helps make good ones
-                              planned: { node in marked(node) },  // striped
-                              sizes: RingSizes(depth: 6, style: .tapered))
-```
-
-## The output
-
-- `MapEngine`: holds the picture on screen and everything that moves. `apply(layout, .zoomIn(mapping))` and the other
-  `RingTransition`s change the picture; `setEmphasis(primary:related:ancestors:tint:)` lights what's hovered;
-  `setCalm`, `setGlow`, `setGhost`, `setPreview` set the rest.
-- `SunburstView`: the `NSView` that draws it, on a thread of its own, only while something moves. Its callbacks:
-  `onHover`, `onHoverCovered`, `onClick`, `onCommandClick`, `menuAt`, `onPinch`, `onKey`, `onModifiers`,
-  `onVisibility`, and for VoiceOver `accessibilityName`, `accessibilityPicture`, `describePiece`, `onPress`. Points come
-  as `Polar` (angle clockwise from 12 o'clock, distance as a share of the radius); `engine.layout.hit(angle:radius:)`
-  says which piece is there.
-- `RingPlace`: a SwiftUI view that tells the engine where the ring is on each frame of an animation.
-- `LabelPlacer` and `SunburstLabels`: where names fit inside pieces and beside the ring, and the SwiftUI layer that
-  shows them. What each piece is called is the host's.
-
-## Minimal use
+By default each branch in view gets its own colour from the whole spectrum, a golden angle from the one before, and
+everything inside it stays close to that colour, a little lighter each ring out (`BranchColours`). To colour by something
+else, such as a file's kind, give the chart a colorer: a colour in linear Display P3 for each node. `Lab` makes good ones.
 
 ```swift
-import SunburstKit
-import SwiftUI
-
-struct Chart: NSViewRepresentable {
-    let engine: MapEngine
-    let tree: MyTree
-
-    func makeNSView(context: Context) -> SunburstView {
-        let view = SunburstView(engine: engine)
-        view.onHover = { polar in
-            let piece = polar.flatMap { engine.layout.hit(angle: $0.angle, radius: $0.radius) }
-            engine.setEmphasis(primary: piece, related: piece.map { [$0..<Int(engine.layout.pieces[$0].end)] } ?? [])
-        }
-        engine.apply(RingLayout.build(tree: tree, focus: 0, colorer: { _ in SIMD3(0.4, 0.5, 0.9) }), .appear)
-        return view
-    }
-
-    func updateNSView(_ view: SunburstView, context: Context) {}
-}
-
-// In the window: the view, and where the ring sits in it.
-GeometryReader { geometry in
-    ZStack {
-        Chart(engine: engine, tree: tree)
-        RingPlace(center: CGPoint(x: geometry.size.width / 2, y: geometry.size.height / 2),
-                  radius: min(geometry.size.width, geometry.size.height) * 0.4, size: geometry.size,
-                  engine: engine, view: { nil })
-    }
+chart.colours = { tree, focus in
+    { node in Lab(lch: 0.7, 0.15, kindHue(of: node)).linearP3 }
 }
 ```
 
-## The shaders
+`BranchColours` can also be painted branch by branch, for rules of your own: `paint(_:hue:)`, `paintQuietly(_:)` for
+something that should stay in the background, and `set(_:_:)`.
 
-`Shaders.metal` is compiled when the app starts, from its source, so it isn't part of the Swift target. Copy it into
-the app's `Contents/Resources` when the app is put together, or pass its URL to `MapEngine(shaders:)`.
+## Reading it from code
+
+`chart.summary(limit:)` says what's on the ring: the node in the middle, and the biggest pieces with their names, sizes,
+shares and where they sit, as a `Codable` value. `chart.picture(width:height:)` draws the ring into a `CGImage` off screen,
+without a window: for tests, exports, or an agent that wants to look.
+
+```swift
+let summary = chart.summary(limit: 10)
+print(summary.name, summary.sizeText)                      // Home 92.0 GB
+for piece in summary.pieces { print(piece.name, piece.share) }
+
+let image = chart.picture(width: 1600, height: 1200)       // nil without a GPU
+```
+
+## Building your own
+
+`Sunburst` is made of parts you can use directly, for a view of your own:
+
+- `RingLayout.build(tree:focus:colorer:marked:sizes:)` turns part of a tree into `Piece`s, depth first, with how many
+  rings to draw (`RingSizes`, `RingStyle`).
+- `SunburstEngine` holds the picture on screen and everything that moves: `apply(_:_:)` with a `RingTransition`,
+  `setEmphasis(primary:related:ancestors:tint:)` to light pieces, `setCalm(_:)`, `setGlow(_:)`, `showsScale`.
+- `SunburstView` is the `NSView` that draws it, with callbacks for the pointer, keys and VoiceOver; `RingPlace` tells it
+  where the ring is on every frame of a SwiftUI animation.
+- `LabelPlacer` works out where names fit, inside pieces and beside the ring, and `SunburstLabels` shows them.
+
+## Agents
+
+`SunburstAgents`, a second product in this package, lets AI agents such as Claude Code look at a chart and point at things
+on it, over MCP. It's separate, so an app that doesn't use it compiles none of it. Turning it on takes a few lines:
+
+```swift
+import SunburstAgents
+
+extension AgentHost {
+    static let myApp = AgentHost(
+        name: "FolderMap", version: "1.0",
+        instructions: "FolderMap shows a folder as a sunburst. Call chart_summary to see what's on it.",
+        folder: URL.applicationSupportDirectory.appendingPathComponent("FolderMap"),
+        tools: SunburstAgentTools.tools)        // + any tools of your own
+}
+
+let door = AgentDoor.open(.myApp) { call in
+    try SunburstAgentTools.answer(call, chart: chart)    // or answer your own tools first
+}
+```
+
+and, as the first thing the program does, `AgentDoor.relayIfAsked(.myApp)`: an agent starts the app's program with
+`--mcp`, and from then on that copy only relays between the agent and the running app. `AgentAccessView` shows that
+command, ready to copy into an agent's settings (`AgentDoor.command`).
+
+- **The user decides.** An agent gets nothing until the user allows it: `.agentQuestion(door)` asks in the app's window,
+  and `AgentAccessView(door)` lists who's asking, who's allowed (to look, or to look and change what's shown), and what
+  each agent did. Which program is on the other end, and who signed it, is read from the system, so an agent can't pass
+  itself off as another program.
+- **Nothing on the network.** The door is a socket file in the app's own folder that only the user can open.
+- **The chart's tools:** `chart_summary` (what's on the ring, in words), `chart_picture` (a PNG of it), `chart_zoom_in`,
+  `chart_zoom_out`, `chart_highlight` and `chart_clear_highlight`. The last four change what the user sees, so an agent
+  allowed only to look can't call them.
+- **Your own tools** are `AgentTool`s beside them, answered in the same closure with an `AgentReply`: JSON, text or an
+  image.
+
+The example app has an Agents… button that does all of this.
+
+## Working on it
+
+- `swift test` runs the tests. Tests that draw are skipped on a machine without a GPU.
+- The shaders' source is `Sources/SunburstKit/Shaders.metal`. They're built into the package as a string, so an app needs no
+  resources of its own: after changing them, run `Scripts/embed-shaders.sh`. A test fails until you do.
+
+## Licence
+
+MIT. See [LICENSE](LICENSE).

@@ -1,8 +1,9 @@
 import AppKit
+import os
 import SwiftUI
 
 /// A name on the ring: inside a piece if it fits, otherwise out at the side with a thin line to its piece.
-public struct MapLabel: Identifiable, Equatable, Sendable {
+public struct SunburstLabel: Identifiable, Equatable, Sendable {
     public enum Place: Sendable { case inside, left, right }
     public var id: UInt64
     public var pieceIndex: Int
@@ -55,12 +56,29 @@ public struct LabelArea: Sendable {
 /// Places names on and around the ring. What each piece is called, and which pieces are named at the sides, is the host's:
 /// these find where the names fit.
 public enum LabelPlacer {
-    private static let titleFont = NSFont.systemFont(ofSize: 12.5, weight: .semibold)
-    private static let valueFont = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+    // Fonts don't change once made, so any thread may measure with them.
+    nonisolated(unsafe) private static let titleFont = NSFont.systemFont(ofSize: 12.5, weight: .semibold)
+    nonisolated(unsafe) private static let valueFont = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
 
+    /// How wide text is in one of the two fonts. Names are placed again on every change of picture, many times a second while
+    /// sizes are arriving, and mostly the same names, so each width is measured once.
     private static func width(_ text: String, _ font: NSFont) -> CGFloat {
-        ceil((text as NSString).size(withAttributes: [.font: font]).width)
+        let isTitle = font === titleFont
+        if let known = widths.withLock({ (isTitle ? $0.titles : $0.values)[text] }) { return known }
+        let measured = ceil((text as NSString).size(withAttributes: [.font: font]).width)
+        widths.withLock { known in
+            // Enough for every name a window shows at once, many times over; past that it starts again.
+            if known.titles.count + known.values.count > 8192 { known = MeasuredWidths() }
+            if isTitle { known.titles[text] = measured } else { known.values[text] = measured }
+        }
+        return measured
     }
+
+    private struct MeasuredWidths {
+        var titles: [String: CGFloat] = [:]
+        var values: [String: CGFloat] = [:]
+    }
+    private static let widths = OSAllocatedUnfairLock(initialState: MeasuredWidths())
 
     /// Where a box of this size fits inside a piece: its middle if possible, otherwise slid along the arc to where the
     /// ring runs closer to level. A name that fits nearby is better than one out at the side.
@@ -136,17 +154,17 @@ public enum LabelPlacer {
         layout.pieces.indices.sorted { a, b in
             let pa = layout.pieces[a], pb = layout.pieces[b]
             if halvesFirst, (pa.ring == 0) != (pb.ring == 0) { return pa.ring == 0 }
-            return pa.bytes > pb.bytes
+            return pa.size > pb.size
         }
     }
 
     /// Names inside the pieces, biggest first, wherever they fit. `name` says what a piece is called and what it holds, or
     /// nil to leave it unnamed. With `halves`, the two halves of the root are always named, just either side of six o'clock.
     public static func inside(layout: RingLayout, order: [Int], area: LabelArea, halves: Bool, named: inout Placed,
-                              name: (Piece) -> (title: String, value: String)?) -> [MapLabel] {
+                              name: (Piece) -> (title: String, value: String)?) -> [SunburstLabel] {
         let R = area.radius
         guard R > 0, !layout.pieces.isEmpty else { return [] }
-        var out: [MapLabel] = []
+        var out: [SunburstLabel] = []
         for i in order.prefix(160) {
             let p = layout.pieces[i]
             if p.isSmaller || p.ring > 3 || named.nodes.contains(p.node) { continue }
@@ -160,7 +178,7 @@ public enum LabelPlacer {
             if let angle = halfSpot ?? fit(w: w, h: h, piece: p, radius: R) {
                 // Free space reads best out in the open part of the wedge, away from the crowded middle.
                 let rm = CGFloat(p.r0 + p.r1) * 0.5 * R * (isFree ? 1.08 : 1)
-                out.append(MapLabel(id: p.key, pieceIndex: i, node: p.node, title: said.title, value: said.value,
+                out.append(SunburstLabel(id: p.key, pieceIndex: i, node: p.node, title: said.title, value: said.value,
                                     position: point(area, angle, rm), anchor: .zero, elbow: .zero, place: .inside,
                                     dark: !isFree && !isHidden && isBright(p.color), large: isFree))
                 named.labelled.insert(i)
@@ -180,14 +198,14 @@ public enum LabelPlacer {
         for i in order.prefix(260) where !named.labelled.contains(i) {
             let p = layout.pieces[i]
             if p.isSmaller || p.style == .free || p.ring > 4 || named.nodes.contains(p.node) { continue }
-            let share = Double(p.bytes) / total
+            let share = Double(p.size) / total
             if share < 0.015 { continue }
             if p.ring == 0 && layout.focus == 0 { continue }
             var a = p.parent
             var redundant = false
             while a >= 0 {
                 let q = layout.pieces[Int(a)]
-                if named.labelled.contains(Int(a)) && Double(p.bytes) > Double(q.bytes) * 0.72 { redundant = true }
+                if named.labelled.contains(Int(a)) && Double(p.size) > Double(q.size) * 0.72 { redundant = true }
                 a = q.parent
             }
             if redundant { continue }
@@ -200,7 +218,7 @@ public enum LabelPlacer {
 
     /// Names out at the sides, best first, each with a thin line to its piece, as many as fit. Unless `eachCounts`, a name
     /// just outside a piece that's already named is left out, as it would say nearly the same thing.
-    public static func sides(_ picks: [Pick], layout: RingLayout, area: LabelArea, eachCounts: Bool) -> [MapLabel] {
+    public static func sides(_ picks: [Pick], layout: RingLayout, area: LabelArea, eachCounts: Bool) -> [SunburstLabel] {
         let R = area.radius
         guard R > 0, !layout.pieces.isEmpty else { return [] }
         let cx = area.center.x, cy = area.center.y
@@ -213,7 +231,7 @@ public enum LabelPlacer {
             var repeats = false
             while a >= 0 && !eachCounts {
                 let q = layout.pieces[Int(a)]
-                if kept.contains(where: { $0.index == Int(a) }) && Double(p.bytes) > Double(q.bytes) * 0.72 { repeats = true }
+                if kept.contains(where: { $0.index == Int(a) }) && Double(p.size) > Double(q.size) * 0.72 { repeats = true }
                 a = q.parent
             }
             if !repeats { kept.append(c) }
@@ -250,7 +268,7 @@ public enum LabelPlacer {
             return edge
         }
 
-        var out: [MapLabel] = []
+        var out: [SunburstLabel] = []
         func layoutSide(_ side: [Pick], right: Bool) {
             guard !side.isEmpty else { return }
             let reach = R + 26
@@ -285,7 +303,7 @@ public enum LabelPlacer {
                 let nameEnd = columnX - side * 7
                 bend = right ? min(max(bend, anchor.x + 6), nameEnd - 8) : max(min(bend, anchor.x - 6), nameEnd + 8)
                 // A name that changes sides is a new label, so it fades across instead of flying over the ring.
-                out.append(MapLabel(id: p.key ^ (right ? 0xABCD : 0xDCBA) ^ slot.c.salt, pieceIndex: slot.c.index, node: p.node, title: slot.c.title, value: slot.c.value,
+                out.append(SunburstLabel(id: p.key ^ (right ? 0xABCD : 0xDCBA) ^ slot.c.salt, pieceIndex: slot.c.index, node: p.node, title: slot.c.title, value: slot.c.value,
                                     position: CGPoint(x: columnX, y: slot.y), anchor: anchor, elbow: CGPoint(x: bend, y: slot.y),
                                     place: right ? .right : .left, dark: false, large: false))
             }
@@ -306,7 +324,7 @@ public enum LabelPlacer {
 /// The names: inside the pieces, and out at the sides with their lines. `outer` dresses each name at the side, such as
 /// with a menu of its own.
 public struct SunburstLabels<Outer: ViewModifier>: View {
-    let labels: [MapLabel]
+    let labels: [SunburstLabel]
     let light: LabelLight
     let visible: Bool
     /// The width of the part of the window the ring is centred in.
@@ -314,11 +332,11 @@ public struct SunburstLabels<Outer: ViewModifier>: View {
     let onEnter: (Int) -> Void
     let onLeave: (Int) -> Void
     let onOpen: (_ piece: Int, _ clicks: Int) -> Void
-    let outer: (MapLabel) -> Outer
+    let outer: (SunburstLabel) -> Outer
 
-    public init(labels: [MapLabel], light: LabelLight, visible: Bool, width: CGFloat, onEnter: @escaping (Int) -> Void,
+    public init(labels: [SunburstLabel], light: LabelLight, visible: Bool, width: CGFloat, onEnter: @escaping (Int) -> Void,
                 onLeave: @escaping (Int) -> Void, onOpen: @escaping (_ piece: Int, _ clicks: Int) -> Void,
-                outer: @escaping (MapLabel) -> Outer) {
+                outer: @escaping (SunburstLabel) -> Outer) {
         self.labels = labels
         self.light = light
         self.visible = visible
@@ -376,7 +394,7 @@ public struct SunburstLabels<Outer: ViewModifier>: View {
     }
 }
 
-/// The thin line from a piece to its name. It's a shape so that it can glide with the piece during a scan.
+/// The thin line from a piece to its name. It's a shape so that it can glide with the piece while sizes change.
 private struct LeaderLine: Shape {
     var anchor: CGPoint
     var elbow: CGPoint
@@ -401,7 +419,7 @@ private struct LeaderLine: Shape {
 }
 
 private struct InsideLabel: View {
-    let label: MapLabel
+    let label: SunburstLabel
 
     var body: some View {
         VStack(spacing: 0) {
@@ -421,7 +439,7 @@ private struct InsideLabel: View {
 }
 
 private struct OuterLabel: View {
-    let label: MapLabel
+    let label: SunburstLabel
     let isOn: Bool
 
     var body: some View {

@@ -1,6 +1,7 @@
 import Foundation
 import ImageIO
 import Metal
+import os
 import simd
 
 struct SegmentGPU {
@@ -9,7 +10,7 @@ struct SegmentGPU {
     var colorFrom: SIMD4<Float>
     var colorTo: SIMD4<Float>
     var params: SIMD4<Float>
-    var plan: SIMD4<Float> = .zero      // planned at the start of the transition, planned at the end
+    var plan: SIMD4<Float> = .zero      // marked at the start of the transition, marked at the end
 }
 
 struct UniformsGPU {
@@ -22,38 +23,26 @@ struct UniformsGPU {
     var liftPixels: Float = 0
     var bloom: Float = 1
     var headroom: Float = 1
-    var ghost: Float = 0            // share of the disk a cleanup would free
-    var freeStart: Float = 0        // where the free wedge begins
-    var hideScale: Float = 0
+    var hideScale: Float = 0        // 1 leaves out the scale around the ring
     var restSaturation: Float = 1
     var glowAtRest: Float = 1
-    var previewShare: Float = 0     // what the thing you're pointing at would add to that
-    var ghostCount: Float = 0       // how many colours it has
-    var freeOuter: Float = 1        // how far out the free wedge reaches, as a share of the radius
     var minLit: Float = 0           // points: the least a lit piece is drawn across while a tint shows
     var layer: Float = 0            // which pieces this pass draws: 0 the ones at rest, 1 the lit, 2 the lifted, 3 the one on top
     var litAbove: Float = 1         // how lit a piece has to be to count as lit, for that
     var top: Float = -1             // the piece pointed at, which lies over all the others; -1 when there's none
-    var previewColor: SIMD4<Float> = .zero
     var tint: SIMD4<Float> = .zero  // the colour lit pieces take on, and in w how much
-    // Each colour's RGB, and in w where it ends, as a share of the whole. As long as `MapEngine.ghostSliceLimit`.
-    var ghostSlices: (SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>)
-        = (.zero, .zero, .zero, .zero, .zero, .zero, .zero, .zero, .zero, .zero, .zero, .zero)
 }
 
 /// Draws the ring. Pieces are one instanced quad each, shaped in the fragment shader, so the cost barely depends on
 /// how many there are, and a transition only updates one number per frame.
-public final class MapRenderer {
-    public let device: MTLDevice
+@_spi(Diagnostics) public final class SunburstRenderer {
+    let device: MTLDevice
     private let queue: MTLCommandQueue
     private let segmentPipeline: MTLRenderPipelineState
     private let downPipeline: MTLRenderPipelineState
     private let upPipeline: MTLRenderPipelineState
     private let compositePipeline: MTLRenderPipelineState
     private let narrowCompositePipeline: MTLRenderPipelineState?
-
-    /// The name of the shaders' source in the app's Resources: `Shaders.metal`.
-    public static let shadersName = "Shaders"
 
     static let hdrFormat: MTLPixelFormat = .rgba16Float
     /// The picture on screen, when the screen can show more than white: the glow goes up to whatever the screen allows.
@@ -65,7 +54,7 @@ public final class MapRenderer {
 
     /// Which of the two the screen needs now. Up to 1.5 times white, the narrow one holds it all, with room to spare. Only
     /// Apple's own chips can draw the narrow one, so on any other Mac it's always the first.
-    public func screenFormat(headroom: CGFloat) -> MTLPixelFormat {
+    func screenFormat(headroom: CGFloat) -> MTLPixelFormat {
         headroom > 1.5 || narrowCompositePipeline == nil ? Self.outputFormat : Self.narrowOutputFormat
     }
 
@@ -82,23 +71,16 @@ public final class MapRenderer {
     private var renderSize: (Int, Int) = (0, 0)
     private var isResting = false
 
-    /// `shaders` is the source of `Shaders.metal`. Without it, the copy in the app's Resources.
-    public init?(device: MTLDevice? = nil, shaders url: URL? = nil) {
+    /// The shaders are built in: their source, `Shaders.metal`, is compiled when the first renderer is made. `shaders` is a
+    /// file of that source to use instead, for working on them.
+    init?(device: MTLDevice? = nil, shaders url: URL? = nil) {
         guard let device = device ?? MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else { return nil }
         self.device = device
         self.queue = queue
         queue.label = "ring"
-        let sourceURL = url ?? Bundle.main.url(forResource: Self.shadersName, withExtension: "metal")
-        guard let sourceURL, let source = try? String(contentsOf: sourceURL, encoding: .utf8) else { return nil }
-        let options = MTLCompileOptions()
-        options.mathMode = .fast
-        let library: MTLLibrary
-        do {
-            library = try device.makeLibrary(source: source, options: options)
-        } catch {
-            print("shaders didn't compile: \(error)")
-            return nil
-        }
+        let given = url.flatMap { try? String(contentsOf: $0, encoding: .utf8) }
+        if url != nil, given == nil { return nil }
+        guard let library = Self.library(source: given ?? ShaderSource.metal, device: device) else { return nil }
 
         func pipeline(_ vertex: String, _ fragment: String, format: MTLPixelFormat, blended: Bool, targets: Int = 1) -> MTLRenderPipelineState? {
             let d = MTLRenderPipelineDescriptor()
@@ -135,6 +117,25 @@ public final class MapRenderer {
         instanceBuffer = instances
         emphasisBuffer = emphasis
     }
+
+    /// The shaders compiled for a GPU. The built-in ones are compiled once per GPU and shared, so every chart after the first
+    /// starts at once.
+    private static func library(source: String, device: MTLDevice) -> MTLLibrary? {
+        let key = "\(device.registryID) \(source.hashValue)"
+        if let known = compiled.withLock({ $0[key] }) { return known }
+        let options = MTLCompileOptions()
+        if #available(macOS 15.0, *) { options.mathMode = .fast } else { options.fastMathEnabled = true }
+        do {
+            let library = try device.makeLibrary(source: source, options: options)
+            compiled.withLock { $0[key] = library }
+            return library
+        } catch {
+            print("SunburstKit: the shaders didn't compile: \(error)")
+            return nil
+        }
+    }
+
+    private static let compiled = OSAllocatedUnfairLock(initialState: [String: MTLLibrary]())
 
     /// Hands over this transition's pieces. Frames still being drawn keep the old buffer until they finish.
     func setInstances(_ instances: [SegmentGPU]) {
@@ -321,5 +322,5 @@ public final class MapRenderer {
         }
     }
 
-    public var commandQueue: MTLCommandQueue { queue }
+    var commandQueue: MTLCommandQueue { queue }
 }

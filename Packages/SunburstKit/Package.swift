@@ -3,26 +3,36 @@ import PackageDescription
 
 let package = Package(
     name: "SunburstKit",
-    platforms: [.macOS(.v26)],
+    platforms: [.macOS(.v14)],
     products: [
         .library(name: "SunburstKit", targets: ["SunburstKit"]),
+        // Optional: the door agents come in by, and tools for the chart. An app that doesn't want agents leaves it out.
+        .library(name: "SunburstAgents", targets: ["SunburstAgents"]),
     ],
     targets: [
         .target(
             name: "SunburstKit",
-            // Compiled when the app starts, from the source: the app copies it into its Resources (see README).
+            // The shaders' readable source. ShaderSource.swift builds it into the package (Scripts/embed-shaders.sh), so an app
+            // needs no resources of its own.
             exclude: ["Shaders.metal"],
             swiftSettings: [
-                .swiftLanguageMode(.v5),
-                // The layout is generic over the host's tree. Cross-module optimisation lets the host's build specialise it
-                // for its own tree, so it runs as fast as code written for that tree.
-                .unsafeFlags(["-Ounchecked", "-enforce-exclusivity=unchecked", "-cross-module-optimization"], .when(configuration: .release)),
+                .swiftLanguageMode(.v6),
             ]
         ),
         .testTarget(
             name: "SunburstKitTests",
             dependencies: ["SunburstKit"],
-            swiftSettings: [.swiftLanguageMode(.v5)]
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .target(
+            name: "SunburstAgents",
+            dependencies: ["SunburstKit"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .testTarget(
+            name: "SunburstAgentsTests",
+            dependencies: ["SunburstAgents", "SunburstKit"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
         ),
     ]
 )

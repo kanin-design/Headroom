@@ -8,26 +8,40 @@ import SwiftUI
 /// ring's radius.
 public typealias Polar = (angle: Float, radius: Float)
 
-/// The ring's window into the display. It draws only while something is moving, and it draws on a thread of its own, so
+/// The view that draws an engine's ring. It draws only while something is moving, and it draws on a thread of its own, so
 /// the ring keeps moving whatever the rest of the window is doing. What the pointer and the keys do is up to the host: the
-/// view says where they are on the ring, through the callbacks below.
+/// view says where they are on the ring, through the callbacks below. Tell it where the ring is with a `RingPlace`, or call
+/// `engine.setPlace(center:radius:)`.
+///
+/// For a chart with everything wired up, use the SwiftUI view `Sunburst` instead.
 public final class SunburstView: NSView {
-    public let engine: MapEngine
+    public let engine: SunburstEngine
     private var metalLayer: CAMetalLayer { layer as! CAMetalLayer }
     /// Everything about drawing the ring.
-    public private(set) var drawer: RingDrawer!
+    @_spi(Diagnostics) public private(set) var drawer: RingDrawer!
     private var trackingArea: NSTrackingArea?
     private var downPoint: NSPoint?
     /// A press on empty background, which moves the window if the pointer moves.
     private var backgroundDown: NSEvent?
-    private var doubleClickWatch: Any?
+    // Only set on the main thread; read once more as the view goes, when nothing else can touch it.
+    nonisolated(unsafe) private var doubleClickWatch: Any?
     /// For a check: how many times the window has been told to follow the pointer.
-    public private(set) var windowMovesStarted = 0
+    @_spi(Diagnostics) public private(set) var windowMovesStarted = 0
     private var pinch: CGFloat = 0
-    public var framesDrawn: Int { drawer.framesDrawn }
-    /// Keep drawing while nobody can see the window, as for a check that takes pictures of it wherever it is.
-    nonisolated(unsafe) public static var drawsWhenHidden = false
+    /// For a check: how many frames have been drawn.
+    @_spi(Diagnostics) public var framesDrawn: Int { drawer.framesDrawn }
+    /// For a check: keep drawing while nobody can see the window, as for pictures taken of it wherever it is.
+    @_spi(Diagnostics) nonisolated(unsafe) public static var drawsWhenHidden = false
     private var canBeSeen: Bool { Self.drawsWhenHidden || window?.occlusionState.contains(.visible) == true }
+
+    // MARK: Behaviour
+
+    /// For a window whose content reaches under its title bar: a press along the top or on empty background moves the window,
+    /// and a double-click along the top does what System Settings says a title bar's does. Off by default.
+    public var movesWindow = false
+    /// Whether the view takes the keyboard when it appears in a window, so keys reach `onKey` at once. Off by default; a
+    /// click on the view always gives it the keyboard.
+    public var takesKeyboardFocus = false
 
     // MARK: Callbacks
 
@@ -71,7 +85,7 @@ public final class SunburstView: NSView {
     public override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     public override var mouseDownCanMoveWindow: Bool { false }
 
-    public init(engine: MapEngine) {
+    public init(engine: SunburstEngine) {
         self.engine = engine
         polar = { _ in nil }
         super.init(frame: .zero)
@@ -87,7 +101,7 @@ public final class SunburstView: NSView {
         let l = metalLayer
         l.device = engine.renderer?.device
         // Every Mac can draw this one. The first frame changes it if the narrow one will do.
-        l.pixelFormat = MapRenderer.outputFormat
+        l.pixelFormat = SunburstRenderer.outputFormat
         l.colorspace = CGColorSpace(name: CGColorSpace.extendedLinearDisplayP3)
         l.wantsExtendedDynamicRangeContent = true
         l.framebufferOnly = true
@@ -115,7 +129,7 @@ public final class SunburstView: NSView {
             drawer.detach()
             return
         }
-        watchForDoubleClicksOnTop()
+        if movesWindow { watchForDoubleClicksOnTop() }
         let center = NotificationCenter.default
         center.addObserver(self, selector: #selector(windowCameOrWent(_:)), name: NSWindow.didChangeOcclusionStateNotification, object: window)
         center.addObserver(self, selector: #selector(windowCameOrWent(_:)), name: NSWindow.didMiniaturizeNotification, object: window)
@@ -123,10 +137,12 @@ public final class SunburstView: NSView {
         drawer.attach(to: self)
         updateDrawableSize()
         startAnimating()
-        // The map has the keyboard from the start, so Esc and Space simply work.
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.window?.makeFirstResponder(self)
+        // With the keyboard from the start, keys simply work.
+        if takesKeyboardFocus {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.window?.makeFirstResponder(self)
+            }
         }
     }
 
@@ -175,7 +191,7 @@ public final class SunburstView: NSView {
     }
 
     /// For a check: the picture in one format, whatever the screen can do.
-    nonisolated(unsafe) public static var forcedFormat: MTLPixelFormat?
+    @_spi(Diagnostics) nonisolated(unsafe) public static var forcedFormat: MTLPixelFormat?
 
     /// Once the ring has stopped and its last frame is done, it holds on to nothing but what's on screen.
     private func rest(after frame: Int) {
@@ -184,7 +200,7 @@ public final class SunburstView: NSView {
     }
 
     /// For a check: what happens when the Mac is short of memory and really takes what it's allowed to.
-    public func loseWhatItMayLose() {
+    @_spi(Diagnostics) public func loseWhatItMayLose() {
         drawer.loseWhatItMayLose()
     }
 
@@ -244,14 +260,14 @@ public final class SunburstView: NSView {
         backgroundDown = nil
         window?.makeFirstResponder(self)
         let p = convert(event.locationInWindow, from: nil)
-        if p.y < titleBarHeight {
+        if movesWindow, p.y < titleBarHeight {
             downPoint = nil
             moveWindow(with: event)
         } else if event.modifierFlags.contains(.command) {
             // ⌘-click is the host's, and that's all it does.
             downPoint = nil
             if let polar = polar(p) { onCommandClick(polar) }
-        } else if isEmptyBackground(p) {
+        } else if movesWindow, isEmptyBackground(p) {
             backgroundDown = event
         }
     }
@@ -262,8 +278,8 @@ public final class SunburstView: NSView {
         return polar.radius >= RingLayout.hole && engine.layout.hit(angle: polar.angle, radius: polar.radius) == nil
     }
 
-    /// How far down the window the toolbar reaches. The map goes on under it, and where none of the toolbar's controls are, a
-    /// press comes through to the map. So along the top, the map does what a title bar does.
+    /// How far down the window the toolbar reaches. With `movesWindow`, the chart goes on under it, and where none of the
+    /// toolbar's controls are, a press comes through to the chart. So along the top, the chart does what a title bar does.
     private var titleBarHeight: CGFloat {
         guard let window else { return 0 }
         return window.frame.height - window.contentLayoutRect.maxY
@@ -345,13 +361,13 @@ public final class SunburstView: NSView {
         let layout = engine.layout
         let key = "\(picture.key) \(layout.pieces.count) \(picture.center) \(picture.radius)"
         if let cached = piecesForVoiceOver, cached.key == key { return cached.elements }
-        let inner = layout.pieces.enumerated().filter { $0.element.ring == 0 && $0.element.bytes > 0 }
-        let whole = Double(max(inner.reduce(UInt64(0)) { $0 &+ $1.element.bytes }, 1))
-        let elements: [Any] = inner.sorted { $0.element.bytes > $1.element.bytes }.map { _, piece in
+        let inner = layout.pieces.enumerated().filter { $0.element.ring == 0 && $0.element.size > 0 }
+        let whole = Double(max(inner.reduce(UInt64(0)) { $0 &+ $1.element.size }, 1))
+        let elements: [Any] = inner.sorted { $0.element.size > $1.element.size }.map { _, piece in
             let element = RingPieceElement()
             element.setAccessibilityParent(self)
             element.setAccessibilityRole(.button)
-            let said = describePiece(piece, Double(piece.bytes) / whole)
+            let said = describePiece(piece, Double(piece.size) / whole)
             element.setAccessibilityLabel(said.label)
             element.setAccessibilityValue(said.value)
             // In the view's own points, so it stays right when the window moves.
@@ -424,10 +440,11 @@ public struct RingPlace: View, Animatable {
     public var radius: CGFloat
     /// The window's size. When it changes, the picture changes size too, and that draws a frame of its own.
     let size: CGSize
-    let engine: MapEngine
+    let engine: SunburstEngine
     let view: () -> SunburstView?
 
-    public init(center: CGPoint, radius: CGFloat, size: CGSize, engine: MapEngine, view: @escaping () -> SunburstView?) {
+    /// `size` is the size of the `SunburstView`; `view` finds it, so each frame of an animation can draw with the window's.
+    public init(center: CGPoint, radius: CGFloat, size: CGSize, engine: SunburstEngine, view: @escaping () -> SunburstView?) {
         self.center = center
         self.radius = radius
         self.size = size
@@ -435,7 +452,7 @@ public struct RingPlace: View, Animatable {
         self.view = view
     }
 
-    public var animatableData: AnimatablePair<CGPoint.AnimatableData, CGFloat> {
+    public nonisolated var animatableData: AnimatablePair<CGPoint.AnimatableData, CGFloat> {
         get { AnimatablePair(center.animatableData, radius) }
         set {
             center.animatableData = newValue.first

@@ -1,0 +1,163 @@
+import ImageIO
+import Metal
+import XCTest
+@_spi(Diagnostics) import SunburstKit
+@testable @_spi(Diagnostics) import SunburstAgents
+
+/// The chart's own tools: what an agent can read off a chart, and how it can move it.
+@MainActor
+final class ChartToolsTests: XCTestCase {
+    private let mb: UInt64 = 1_000_000
+    private let agent = AgentIdentity(name: "Test Agent", program: "/Applications/Test.app", signer: nil)
+
+    private func chart() -> (SunburstChart<PathTree>, PathTree) {
+        let tree = PathTree([("Films/a.mov", 400 * mb), ("Films/b.mov", 200 * mb), ("Music/Album/1.flac", 150 * mb),
+                             ("Music/Album/2.flac", 120 * mb), ("notes.txt", 30 * mb)])
+        let chart = SunburstChart(tree: tree, name: { tree.nodes[Int($0)].name.isEmpty ? "All" : tree.nodes[Int($0)].name },
+                                  engine: SunburstEngine(reducesMotion: { false }))
+        return (chart, tree)
+    }
+
+    private func answer(_ chart: SunburstChart<PathTree>, _ tool: String, _ arguments: [String: Any] = [:]) throws -> AgentReply {
+        try SunburstAgentTools.answer(AgentCall(tool: tool, arguments: arguments, agent: agent), chart: chart)
+    }
+
+    /// An answer read back as the agent reads it.
+    private func json(_ reply: AgentReply) throws -> [String: Any] {
+        let text = try XCTUnwrap(reply.content()?.first?["text"] as? String)
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
+    }
+
+    func testTheToolsThatMoveTheChartNeedMoreThanLooking() {
+        XCTAssertEqual(SunburstAgentTools.tools.map(\.name),
+                       ["chart_summary", "chart_picture", "chart_zoom_in", "chart_zoom_out", "chart_highlight", "chart_clear_highlight"])
+        XCTAssertEqual(SunburstAgentTools.tools.filter(\.selects).map(\.name),
+                       ["chart_zoom_in", "chart_zoom_out", "chart_highlight", "chart_clear_highlight"], "only looking and the picture are for agents that only look")
+        for tool in SunburstAgentTools.tools {
+            XCTAssertNotNil(AgentJSON.line(tool.schema), "\(tool.name)'s schema is JSON")
+            XCTAssertFalse(tool.description.isEmpty)
+        }
+    }
+
+    func testTheSummarySaysWhatIsOnTheRingInFewWords() throws {
+        let (chart, tree) = chart()
+        let reply = try answer(chart, "chart_summary", ["limit": 3])
+        guard case .text(let text)? = reply.parts.first else { return XCTFail("the summary is text") }
+        XCTAssertFalse(text.contains("\n"), "one line")
+        let summary = try json(reply)
+        XCTAssertEqual(summary["focus"] as? Int, 0)
+        XCTAssertEqual(summary["size_text"] as? String, "900 MB", "names as agents write them")
+        let pieces = try XCTUnwrap(summary["pieces"] as? [[String: Any]])
+        XCTAssertEqual(pieces.compactMap { $0["name"] as? String }, ["Films", "a.mov", "Music"], "biggest first, as many as asked")
+        XCTAssertEqual(pieces[0]["node"] as? Int, Int(tree.node("Films")))
+        XCTAssertEqual(pieces[0]["share"] as? Double, 0.6667, "no more digits than help")
+        XCTAssertEqual(pieces[0]["from"] as? Double, 0)
+        XCTAssertEqual(pieces[0]["to"] as? Double ?? 0, 240, accuracy: 0.5, "its angle is its share of the circle")
+        XCTAssertNotNil(pieces[0]["is_gathered"])
+        XCTAssertGreaterThan(summary["more"] as? Int ?? 0, 0)
+    }
+
+    func testZoomingInAndOutMovesTheMiddle() throws {
+        let (chart, tree) = chart()
+        let into = try json(answer(chart, "chart_zoom_in", ["node": Int(tree.node("Films"))]))
+        XCTAssertEqual(chart.focus, tree.node("Films"))
+        XCTAssertEqual(into["name"] as? String, "Films")
+        XCTAssertEqual(into["size"] as? Int, 600 * 1_000_000)
+        XCTAssertEqual(try json(answer(chart, "chart_zoom_in", ["node": "\(tree.node("Films"))"]))["note"] as? String, "Already in the middle.",
+                       "a number written as text is a number")
+
+        let out = try json(answer(chart, "chart_zoom_out"))
+        XCTAssertEqual(chart.focus, 0)
+        XCTAssertEqual(out["name"] as? String, "All")
+        XCTAssertEqual(try json(answer(chart, "chart_zoom_out"))["note"] as? String, "Already showing the whole tree.")
+
+        _ = try answer(chart, "chart_zoom_in", ["node": Int(tree.node("Music"))])
+        XCTAssertEqual(chart.focus, tree.node("Music/Album"), "Music is nearly all one album, so the zoom goes to the album")
+        _ = try answer(chart, "chart_zoom_out", ["to_root": true])
+        XCTAssertEqual(chart.focus, 0)
+    }
+
+    /// A file has nothing to zoom into. Zooming into one would open it, which is the app's to do, not an agent's.
+    func testZoomingIntoAFileOpensNothing() throws {
+        let (chart, tree) = chart()
+        var opened: UInt32?
+        chart.onOpen = { opened = $0 }
+        XCTAssertThrowsError(try answer(chart, "chart_zoom_in", ["node": Int(tree.node("notes.txt"))])) { error in
+            XCTAssertEqual((error as? AgentFailure)?.message, "notes.txt has nothing inside it to zoom into.")
+        }
+        XCTAssertNil(opened)
+        XCTAssertEqual(chart.focus, 0)
+    }
+
+    /// Only a node on the ring is taken: one the tree may not have is never asked about.
+    func testANodeThatIsntOnTheRingIsRefused() throws {
+        let (chart, tree) = chart()
+        for node in [99_999, Int(UInt32.max)] {
+            XCTAssertThrowsError(try answer(chart, "chart_zoom_in", ["node": node])) { error in
+                XCTAssertTrue((error as? AgentFailure)?.message.hasPrefix("Not on the ring now: \(node).") ?? false)
+            }
+        }
+        for bad: Any in [-1, 1.5, "Films", Int(UInt32.max) + 1] {
+            XCTAssertThrowsError(try answer(chart, "chart_zoom_in", ["node": bad]), "\(bad)")
+        }
+        XCTAssertThrowsError(try answer(chart, "chart_highlight", ["nodes": [99_999]]))
+        XCTAssertThrowsError(try answer(chart, "chart_highlight", ["nodes": []]))
+        _ = try answer(chart, "chart_zoom_in", ["node": Int(tree.node("Films"))])
+        XCTAssertThrowsError(try answer(chart, "chart_zoom_in", ["node": Int(tree.node("Music"))]), "outside the middle is off the ring")
+        XCTAssertThrowsError(try answer(chart, "delete_everything")) { error in
+            XCTAssertEqual((error as? AgentFailure)?.message, "No such tool: delete_everything")
+        }
+    }
+
+    func testLightingNodesAndClearingThem() throws {
+        let (chart, tree) = chart()
+        XCTAssertEqual(chart.engine.litPieces, 0)
+        let lit = try json(answer(chart, "chart_highlight", ["nodes": [Int(tree.node("Films/b.mov")), 99_999]]))
+        XCTAssertEqual(lit["lit"] as? Int, 1)
+        XCTAssertEqual(lit["not_on_the_ring"] as? [Int], [99_999], "what isn't on the ring is said, and the rest is lit")
+        XCTAssertGreaterThan(chart.engine.litPieces, 0)
+        _ = try answer(chart, "chart_clear_highlight")
+        XCTAssertEqual(chart.engine.litPieces, 0)
+    }
+
+    func testThePictureIsAPNGImage() throws {
+        try XCTSkipIf(MTLCreateSystemDefaultDevice() == nil, "no GPU here")
+        let (chart, _) = chart()
+        let reply = try answer(chart, "chart_picture", ["width": 300, "height": 200])
+        guard case .image(let data, let type)? = reply.parts.first else { return XCTFail("an image") }
+        XCTAssertEqual(type, "image/png")
+        XCTAssertEqual(Array(data.prefix(8)), [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A], "a PNG file")
+        let image = try XCTUnwrap(CGImageSourceCreateWithData(data as CFData, nil).flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) })
+        XCTAssertEqual(image.width, 300)
+        XCTAssertEqual(image.height, 200)
+        let content = try XCTUnwrap(reply.content())
+        XCTAssertEqual(content.first?["type"] as? String, "image")
+        XCTAssertEqual(content.first?["mimeType"] as? String, "image/png")
+
+        let huge = try answer(chart, "chart_picture", ["width": 100_000, "height": 10])
+        guard case .image(let big, _)? = huge.parts.first, let sized = CGImageSourceCreateWithData(big as CFData, nil).flatMap({ CGImageSourceCreateImageAtIndex($0, 0, nil) })
+        else { return XCTFail("an image") }
+        XCTAssertEqual(sized.width, SunburstAgentTools.largestPicture, "kept to a size an agent can take")
+        XCTAssertEqual(sized.height, 64)
+    }
+
+    /// Through a door, as an app gives them: an agent allowed only to look can read the chart but not move it.
+    func testAnAgentAllowedToLookCanReadTheChartButNotMoveIt() async throws {
+        let (chart, tree) = chart()
+        let folder = TestPlace.folder()
+        defer { TestPlace.remove(folder) }
+        let host = AgentHost(name: "FolderMap", version: "1", instructions: "", folder: folder, tools: SunburstAgentTools.tools)
+        let door = AgentDoor(host) { call in try SunburstAgentTools.answer(call, chart: chart) }
+        let session = door.session(program: "/Applications/Test.app", signer: nil)
+        _ = await session.handle(Lines.message(0, "initialize", ["clientInfo": ["name": "Test Agent"]]))
+        door.agents.answer(try XCTUnwrap(door.agents.requests.first), .lookOnly)
+
+        let summary = Lines.object(await session.handle(Lines.message(1, "tools/call", ["name": "chart_summary"])))
+        XCTAssertEqual(Lines.isError(summary), false)
+        XCTAssertTrue(Lines.text(of: summary)?.contains("\"Films\"") ?? false)
+        let zoom = Lines.object(await session.handle(Lines.message(2, "tools/call", ["name": "chart_zoom_in", "arguments": ["node": Int(tree.node("Films"))]])))
+        XCTAssertEqual(Lines.isError(zoom), true)
+        XCTAssertEqual(chart.focus, 0, "and the chart didn't move")
+        XCTAssertEqual(door.agents.activity.last?.what, "chart_summary")
+    }
+}
