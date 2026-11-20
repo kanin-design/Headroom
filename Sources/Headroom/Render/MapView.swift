@@ -9,6 +9,10 @@ struct MapView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> MapHostView {
         let view = MapHostView(engine: model.engine)
+        // The map reaches under the toolbar, so along the top and on empty background it moves the window. It has the
+        // keyboard from the start, so Esc and Space simply work.
+        view.movesWindow = true
+        view.takesKeyboardFocus = true
         Self.connect(view, to: model)
         model.mapView = view
         return view
@@ -62,7 +66,7 @@ struct MapView: NSViewRepresentable {
             return ("\(model.focus) \(model.treeVersion)", model.ring.center, model.ring.radius)
         }
         view.describePiece = { [weak model] piece, share in
-            (model?.displayName(piece: piece) ?? "", "\(formatBytes(piece.bytes)), \(Int((share * 100).rounded()))%")
+            (model?.displayName(piece: piece) ?? "", "\(formatBytes(piece.size)), \(Int((share * 100).rounded()))%")
         }
         view.onPress = { [weak model] index in model?.click(piece: index) }
     }

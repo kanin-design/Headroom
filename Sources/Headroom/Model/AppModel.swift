@@ -1,6 +1,7 @@
 import AppKit
 import Observation
 import SwiftUI
+@_spi(Diagnostics) import SunburstKit
 
 /// Something you asked to send to the Trash, and what's using it.
 struct BusyThing {
@@ -256,7 +257,7 @@ final class AppModel {
     /// Where everything planned is on the map on screen. See `PlanPlaces`.
     @ObservationIgnored var planPlaces = PlanPlaces() { didSet { planner = nil } }
     /// Whether a node goes at the next clean, made once for the plan, the map and the Trash as they are, and asked many times.
-    @ObservationIgnored var planner: RingLayout.Planner?
+    @ObservationIgnored var planner: RingLayout.Marker?
     /// You unticked these, so they don't tick themselves again.
     @ObservationIgnored var refusedRows: Set<String> = []
     /// Each thing's colour on the ring for the picture on screen, and the same by the map's numbering.
@@ -321,7 +322,7 @@ final class AppModel {
     var history: [HistoryPoint] = []
 
     // Names around the ring
-    var labels: [MapLabel] = [] {
+    var labels: [SunburstLabel] = [] {
         didSet {
             labelledNodes = Set(labels.map(\.node))
             noteLabelLight()
@@ -376,14 +377,14 @@ final class AppModel {
     @ObservationIgnored var backupWarningMemo: (version: Int, said: [String: String?])?
     @ObservationIgnored var backupSummaryMemo: (key: Int, summary: BackupSummary)?
 
-    @ObservationIgnored let engine: MapEngine = {
+    @ObservationIgnored let engine: SunburstEngine = {
         // A scripted check takes pictures of the window wherever it is, so the ring keeps drawing, and it says when the
         // picture changes format.
         if ScriptRunner.path != nil {
             MapHostView.drawsWhenHidden = true
             RingDrawer.log = { print($0) }
         }
-        return MapEngine(reducesMotion: { Motion.isReduced })
+        return SunburstEngine(reducesMotion: { Motion.isReduced })
     }()
     @ObservationIgnored let rules = RuleBook(homePath: NSHomeDirectory())
     @ObservationIgnored var activeScan: DiskScan?
@@ -1027,14 +1028,14 @@ final class AppModel {
     func drawing(_ tree: DiskTree, after: AfterPlan? = nil) -> RingLayout {
         // Whatever the view, the ring stripes what the mode has selected.
         let planned = mode == .backup ? backupPlanned() : plannedTest()
-        var layout = RingLayout.build(tree: tree, focus: focus, colorer: colorer(tree), planned: after == nil ? planned : nil, after: after,
+        var layout = RingLayout.build(tree: tree, focus: focus, colorer: colorer(tree), marked: after == nil ? planned : nil, after: after,
                                       sizes: ringSizes)
         // The picture on screen, rather than the one while ⌥ is held, sets what the Rings menu offers.
         if after == nil {
             if ringsDrawn != layout.rings { ringsDrawn = layout.rings }
             if ringReach != layout.reach { ringReach = layout.reach }
         }
-        if view == .map || showsPair { layout.calmTinyPieces(viewBytes: tree.totals[Int(focus)]) }
+        if view == .map || showsPair { layout.calmTinyPieces(total: tree.totals[Int(focus)]) }
         return layout
     }
 
@@ -1105,7 +1106,7 @@ final class AppModel {
         }
     }
 
-    func makeLabels() -> [MapLabel] {
+    func makeLabels() -> [SunburstLabel] {
         guard let tree else { return [] }
         return LabelPlacer.place(layout: engine.layout, ring: ring, lens: showsPair || (view == .copies && mode == .backup) ? .map : view, tree: tree, model: self)
     }
@@ -1239,7 +1240,7 @@ final class AppModel {
         // the moment the pointer arrives, and the line shows them when they're ready. Pointing at something else stops it.
         let wantsLinks = !info.inTrash && !p.isSmaller && p.style != .free && p.style != .hidden && !tree.links.isEmpty && tree.nodes[Int(p.node)].flags & NodeFlag.synthetic == 0
         if hasFullAccess, wantsLinks || info.tellsUse {
-            let node = p.node, bytes = p.bytes, tellsUse = info.tellsUse
+            let node = p.node, bytes = p.size, tellsUse = info.tellsUse
             linksTask = Task { [weak self] in
                 let work = Task.detached(priority: .userInitiated) {
                     LastUse.find(node, bytes: bytes, links: wantsLinks, use: tellsUse, in: tree)
@@ -1263,7 +1264,7 @@ final class AppModel {
                let first = pair.places[pieces[index + 1].node] {
                 place = first
             }
-            return HoverInfo(pieceIndex: index, node: p.node, title: displayName(piece: p), bytes: p.bytes, share: "",
+            return HoverInfo(pieceIndex: index, node: p.node, title: displayName(piece: p), bytes: p.size, share: "",
                              note: place.title(drive: pair.driveName), links: nil)
         }
         // A moved file, drawn from its note: where it is now.
@@ -1273,12 +1274,12 @@ final class AppModel {
                              note: "Moved " + LastUse.ago(ghost.moved, now: Date()), links: nil)
         }
         // In Copies the line under the size says what it is there: an extra copy, the copy that stays, how much is extra.
-        if view == .copies, mode == .freeUp, !p.isSmaller, let copies, copies.scanID == tree.scanID, let text = copies.note(for: p.node, total: p.bytes, in: tree) {
-            return HoverInfo(pieceIndex: index, node: p.node, title: displayName(piece: p), bytes: p.bytes, share: "", note: text, links: nil)
+        if view == .copies, mode == .freeUp, !p.isSmaller, let copies, copies.scanID == tree.scanID, let text = copies.note(for: p.node, total: p.size, in: tree) {
+            return HoverInfo(pieceIndex: index, node: p.node, title: displayName(piece: p), bytes: p.size, share: "", note: text, links: nil)
         }
         let n = tree.nodes[Int(p.node)]
         let base = tree.totals[Int(focus)]
-        let percent = base > 0 ? Double(p.bytes) / Double(base) * 100 : 0
+        let percent = base > 0 ? Double(p.size) / Double(base) * 100 : 0
         let percentText = percent >= 10 ? String(format: "%.0f%%", percent) : String(format: "%.1f%%", percent)
         let scope = focus == 0 ? "of the disk" : "of \(displayName(focus))"
         var share = "\(percentText) \(scope)"
@@ -1295,7 +1296,7 @@ final class AppModel {
             let untouched = changes.value(of: p.node)
             if untouched > 0 {
                 // The window is in the panel, so a part only needs saying how much: the whole line has to fit in the middle.
-                note = Double(untouched) >= Double(p.bytes) * 0.999 ? "Untouched \(changeWindow.span)" : "\(formatBytes(UInt64(untouched))) untouched"
+                note = Double(untouched) >= Double(p.size) * 0.999 ? "Untouched \(changeWindow.span)" : "\(formatBytes(UInt64(untouched))) untouched"
             } else if !ownShape, !p.isSmaller, p.style != .hidden, !(tree.isPartial && tree.isStillGrowing(p.node)) {
                 share = ""
                 tellsUse = !(n.has(NodeFlag.synthetic) || (n.rule != 0 && rules.rule(n.rule).tier == .handsOff))
@@ -1312,13 +1313,13 @@ final class AppModel {
             // macOS's own parts, which have nothing to add.
             share = ""
             if let path = tree.path(p.node), LastUse.isInTrash(PathMath.visible(path), home: NSHomeDirectory()) {
-                return HoverInfo(pieceIndex: index, node: p.node, title: displayName(piece: p), bytes: p.bytes,
+                return HoverInfo(pieceIndex: index, node: p.node, title: displayName(piece: p), bytes: p.size,
                                  share: "", note: LastUse.trashLine, links: nil, inTrash: true)
             }
             let leftAlone = n.has(NodeFlag.synthetic) || (n.rule != 0 && rules.rule(n.rule).tier == .handsOff)
             tellsUse = !leftAlone
         }
-        return HoverInfo(pieceIndex: index, node: p.node, title: displayName(piece: p), bytes: p.bytes,
+        return HoverInfo(pieceIndex: index, node: p.node, title: displayName(piece: p), bytes: p.size,
                          share: share, note: note, links: nil, tellsUse: tellsUse, shrank: shrank)
     }
 
@@ -1602,8 +1603,6 @@ final class AppModel {
         pointedThing = nil
         hotBox = nil
         hotRow = nil
-        engine.setPreview(0, color: .zero)
-        refreshGhost()
         if new == .freeUp, !plan.isEmpty { runChecks() }
         applyCalm()
         if new == .freeUp, view == .copies { refreshCopies() }

@@ -1,5 +1,5 @@
 #!/bin/zsh
-# Builds Headroom.app in ./build: compiles the Swift code, copies the shaders (macOS compiles them at launch), then
+# Builds Headroom.app in ./build: compiles the Swift code, puts the app together, then
 # signs the bundle.
 # Signing with a stable identity keeps Full Disk Access across rebuilds. It falls back to an ad-hoc signature.
 set -e
@@ -25,7 +25,8 @@ BUILD=$(( $(cat .build-number 2>/dev/null || echo 0) + 1 ))
 echo $BUILD > .build-number
 plutil -replace CFBundleVersion -string "$BUILD" $APP/Contents/Info.plist
 cp Resources/Assets.car Resources/AppIcon.icns Resources/logo.png $APP/Contents/Resources/
-cp Packages/SunburstKit/Sources/SunburstKit/Shaders.metal $APP/Contents/Resources/Shaders.metal
+# The shaders are built into SunburstKit now; a copy left by an older build is never read.
+rm -f $APP/Contents/Resources/Shaders.metal
 # The Headroom certificate signs every version the same way, so macOS keeps its permissions from one to the next and the
 # updater can tell a real update. It's made for this, so nobody needs to trust it. Without it, a development certificate.
 ID=$(security find-identity -p codesigning 2>/dev/null | awk -F'"' '$2 == "Headroom" {print $2; exit}')

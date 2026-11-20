@@ -29,42 +29,6 @@ enum Palette {
 
     static func color(_ kind: Kind) -> Lab { kinds[Int(kind.rawValue)] }
 
-    /// Around the wheel, each hue at its own best lightness: yellow can only look yellow when it's light, and blue only
-    /// looks blue when it's deep.
-    private static let spectrumStops: [(h: Float, l: Float)] = [
-        (25, 0.66), (60, 0.74), (95, 0.86), (130, 0.82), (158, 0.80), (195, 0.78), (235, 0.68), (265, 0.58), (298, 0.58),
-        (330, 0.62), (355, 0.66),
-    ]
-
-    static func spectrumLightness(_ hue: Float) -> Float {
-        var h = hue.truncatingRemainder(dividingBy: 360)
-        if h < 0 { h += 360 }
-        let stops = spectrumStops
-        var from = stops[stops.count - 1], to = stops[0]
-        var position = h < stops[0].h ? h + 360 : h
-        var start = from.h
-        var end = to.h + 360
-        for i in 0..<stops.count - 1 where h >= stops[i].h && h < stops[i + 1].h {
-            from = stops[i]
-            to = stops[i + 1]
-            start = from.h
-            end = to.h
-            position = h
-        }
-        return from.l + (to.l - from.l) * (position - start) / (end - start)
-    }
-
-    /// The strongest colour a Display P3 screen can show at this lightness and hue.
-    static func strongestChroma(lightness l: Float, hue h: Float) -> Float {
-        var low: Float = 0, high: Float = 0.4
-        for _ in 0..<9 {
-            let middle = (low + high) / 2
-            let c = Lab(lch: l, middle, h).unclampedP3
-            if min(c.x, c.y, c.z) < 0 || max(c.x, c.y, c.z) > 1 { high = middle } else { low = middle }
-        }
-        return low
-    }
-
     /// The colour of something made of these kinds. Mixing dulls colours, so chroma is restored toward the strongest
     /// share: a folder that's mostly video still reads as video, and a true mix sits somewhere calmer.
     static func blend(_ bytes: UnsafePointer<UInt32>) -> Lab {
@@ -153,25 +117,10 @@ enum Palette {
 }
 
 /// Decimal units, the ones Finder uses. Three significant figures at most, so numbers stay readable.
-func splitBytes(_ bytes: UInt64) -> (value: String, unit: String) {
-    let units = ["B", "KB", "MB", "GB", "TB", "PB"]
-    var value = Double(bytes)
-    var index = 0
-    while value >= 999.5 && index < units.count - 1 {
-        value /= 1000
-        index += 1
-    }
-    let text: String
-    if index == 0 || value >= 99.95 { text = String(format: "%.0f", value) }
-    else if value >= 9.995 { text = String(format: "%.1f", value) }
-    else { text = String(format: "%.2f", value) }
-    return (text, units[index])
-}
+/// Sizes are written as SunburstKit writes them, so the ring, its names and the panels agree: "3.20 GB".
+func splitBytes(_ bytes: UInt64) -> (value: String, unit: String) { SunburstFormat.splitBytes(bytes) }
 
-func formatBytes(_ bytes: UInt64) -> String {
-    let (value, unit) = splitBytes(bytes)
-    return "\(value) \(unit)"
-}
+func formatBytes(_ bytes: UInt64) -> String { SunburstFormat.bytes(bytes) }
 
 func formatCount(_ n: Int) -> String {
     if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1_000_000) }

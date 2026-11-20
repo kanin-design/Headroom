@@ -369,7 +369,7 @@ final class BackupTests: XCTestCase {
                                                    notes: [], ghosts: false))
         let emptyHalves = RingLayout.build(tree: none.tree, focus: 0, colorer: { none.colour($0) }).pieces.filter { $0.ring == 0 }
         XCTAssertEqual(emptyHalves.count, 2)
-        XCTAssertEqual(emptyHalves.first?.bytes, 0)
+        XCTAssertEqual(emptyHalves.first?.size, 0)
     }
 
     func testTheDrivesHalfIsDrawnFromWhatWasReadWhenItsUnplugged() throws {

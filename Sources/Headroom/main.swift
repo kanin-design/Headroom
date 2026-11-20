@@ -2,7 +2,7 @@ import Foundation
 
 let args = CommandLine.arguments
 // An agent's way in: this only relays to the app that's running, and never becomes the app itself.
-if args.contains("--mcp") { AgentRelay.run() }
+if args.contains(AgentDoor.relayFlag) { AgentServer.relay() }
 if args.contains("--bench") {
     // How fast the picture gets right: when each share of the bytes was known, what the quiet part cost, and the total.
     let env = ProcessInfo.processInfo.environment

@@ -5,7 +5,7 @@ import SwiftUI
 extension LabelPlacer {
     /// `only` names just these at the sides: what you're pointing at in the panel.
     @MainActor
-    static func place(layout: RingLayout, ring: RingGeometry, lens: Lens, tree: DiskTree, model: AppModel, only: [Pick]? = nil) -> [MapLabel] {
+    static func place(layout: RingLayout, ring: RingGeometry, lens: Lens, tree: DiskTree, model: AppModel, only: [Pick]? = nil) -> [SunburstLabel] {
         guard ring.radius > 0, !layout.pieces.isEmpty else { return [] }
         // The drive row at the bottom is kept clear.
         let area = LabelArea(center: ring.center, radius: ring.radius, width: ring.mapWidth, height: ring.windowHeight,
@@ -14,7 +14,7 @@ extension LabelPlacer {
         // Inside the pieces, biggest first. Only in the Map view: elsewhere most of the ring is dimmed on purpose.
         // With both of Backup's sides, the two halves are named first, whatever they hold.
         let ranked = order(layout, halvesFirst: tree.twoSides)
-        var out: [MapLabel] = []
+        var out: [SunburstLabel] = []
         if lens == .map || lens == .freeUp || lens == .backup {
             out = inside(layout: layout, order: ranked, area: area, halves: tree.twoSides, named: &named) { p in
                 if lens == .freeUp && p.style != .free { return nil }

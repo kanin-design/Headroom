@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import SwiftUI
+@_spi(Diagnostics) import SunburstKit
 
 /// Runs the real app through a written list of steps and photographs its window, so the whole interface can be
 /// checked by eye without anyone at the mouse. Started with `--script steps.txt`, and it keeps its data apart from yours.
@@ -409,7 +410,7 @@ enum ScriptRunner {
         func line(_ identity: AgentIdentity) -> String { "\(identity.name) (\(identity.program), \(identity.signer ?? "not signed"))" }
         switch command {
         case "agents":
-            print("agents: socket \(AgentSocket.path)")
+            print("agents: socket \(AgentServer.door.host.socketPath)")
             print("  connected: " + (agents.connected.isEmpty ? "none" : agents.connected.map { line($0.identity) }.joined(separator: "; ")))
             print("  asking: " + (agents.requests.isEmpty ? "none" : agents.requests.map { line($0.identity) }.joined(separator: "; ")))
             print("  allowed: " + (agents.allowed.isEmpty ? "none" : agents.allowed.map { line($0.identity) }.joined(separator: "; ")))
@@ -821,7 +822,7 @@ enum ScriptRunner {
             print("off the row: lit \(model.hover?.title ?? "nothing")")
         case "ringpoint":
             // The pointer on the biggest piece of the ring itself.
-            guard let w = mainWindow, let piece = model.engine.layout.pieces.filter({ !$0.isSmaller && $0.style == .folder }).max(by: { $0.bytes < $1.bytes }) else { return }
+            guard let w = mainWindow, let piece = model.engine.layout.pieces.filter({ !$0.isSmaller && $0.style == .folder }).max(by: { $0.size < $1.size }) else { return }
             let angle = Double(piece.a0 + piece.a1) / 2, radius = Double(piece.r0 + piece.r1) / 2 * model.ring.radius
             let p = NSPoint(x: model.ring.center.x + sin(angle) * radius, y: w.frame.height - (model.ring.center.y - cos(angle) * radius))
             print("ring: lands on \(w.contentView?.superview?.hitTest(p).map { String(describing: type(of: $0)).prefix(24) } ?? "nothing")")
@@ -1271,8 +1272,8 @@ enum ScriptRunner {
             findLeaks(in: model)
         case "format":
             // format wide|narrow|auto: the picture on screen in one format, for comparing them.
-            MapHostView.forcedFormat = argument == "wide" ? MapRenderer.outputFormat : argument == "narrow" ? MapRenderer.narrowOutputFormat : nil
-            model.engine.requestFrame()
+            MapHostView.forcedFormat = argument == "wide" ? SunburstRenderer.outputFormat : argument == "narrow" ? SunburstRenderer.narrowOutputFormat : nil
+            model.mapView?.startAnimating()
             try? await Task.sleep(for: .milliseconds(400))
         case "gpu":
             // What the GPU holds for the ring, texture by texture.
@@ -1498,7 +1499,7 @@ enum ScriptRunner {
             if parts.first == "piece" {
                 parts.removeFirst()
                 let layout = model.engine.layout
-                guard let piece = layout.pieces.filter({ !$0.isSmaller && $0.style == .folder }).max(by: { $0.bytes < $1.bytes }) else {
+                guard let piece = layout.pieces.filter({ !$0.isSmaller && $0.style == .folder }).max(by: { $0.size < $1.size }) else {
                     print("press: no piece among \(layout.pieces.count)")
                     return
                 }
@@ -1621,7 +1622,7 @@ enum ScriptRunner {
 
     /// Somewhere on a name around the ring, by its number among those names.
     @MainActor
-    private static func labelPoint(_ argument: String, _ model: AppModel) -> (label: MapLabel, x: Double, y: Double)? {
+    private static func labelPoint(_ argument: String, _ model: AppModel) -> (label: SunburstLabel, x: Double, y: Double)? {
         let names = model.labels.filter { $0.place != .inside }
         guard let at = Int(argument), names.indices.contains(at) else { return nil }
         let label = names[at]

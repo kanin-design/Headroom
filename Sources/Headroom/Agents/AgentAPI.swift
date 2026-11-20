@@ -1,25 +1,5 @@
 import Foundation
 
-/// One thing an agent can ask for: its name, what it's for, and what it takes, as the JSON Schema an agent reads.
-struct AgentTool {
-    var name: String
-    var description: String
-    var properties: [String: [String: Any]] = [:]
-    var required: [String] = []
-    /// It changes what's selected or what the window shows, so looking isn't enough to be allowed it.
-    var selects = false
-
-    var schema: [String: Any] {
-        ["type": "object", "properties": properties, "required": required, "additionalProperties": false]
-    }
-}
-
-/// Why a request couldn't be answered, in words the agent can act on.
-struct AgentFailure: Error, Equatable {
-    var message: String
-    init(_ message: String) { self.message = message }
-}
-
 /// Reading the map for an agent. Everything in this type only looks: nothing changes the map, the plan or the disk. The
 /// three tools that select and show are carried out by the model, in `AgentAPI`.
 ///

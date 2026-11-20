@@ -637,7 +637,7 @@ extension AppModel {
     }
 
     /// What the ring stripes in Backup: the files on its list.
-    func backupPlanned() -> RingLayout.Planner {
+    func backupPlanned() -> RingLayout.Marker {
         // Found in the picture that's drawn, whose numbers may not be the real map's.
         guard let tree, !backup.items.isEmpty || !driveSelection.isEmpty else { return { _ in false } }
         let showsBoth = pair?.tree === tree

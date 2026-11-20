@@ -915,7 +915,7 @@ enum Lenses {
     }
 
     /// Each thing wears its box's colour. What isn't part of the question stays quiet.
-    static func reclaimColorer(map: ReclaimMap, colours: [SIMD3<Float>?], planned: @escaping RingLayout.Planner) -> RingLayout.Colorer {
+    static func reclaimColorer(map: ReclaimMap, colours: [SIMD3<Float>?], planned: @escaping RingLayout.Marker) -> RingLayout.Colorer {
         let hand = Palette.Box.hand.linearP3
         let quiet = Palette.quiet.linearP3
         return { node in

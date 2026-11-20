@@ -75,10 +75,10 @@ struct AfterTree: SunburstTree {
 
 extension RingLayout {
     /// The picture of the disk, or of the disk as it will be after the plan has run.
-    static func build(tree: DiskTree, focus: UInt32, colorer: Colorer, planned: Planner? = nil, after: AfterPlan?,
+    static func build(tree: DiskTree, focus: UInt32, colorer: Colorer, marked: Marker? = nil, after: AfterPlan?,
                       sizes: RingSizes = .saved) -> RingLayout {
-        if let after { return build(tree: AfterTree(tree: tree, after: after), focus: focus, colorer: colorer, planned: planned, sizes: sizes) }
-        return build(tree: tree, focus: focus, colorer: colorer, planned: planned, sizes: sizes)
+        if let after { return build(tree: AfterTree(tree: tree, after: after), focus: focus, colorer: colorer, marked: marked, sizes: sizes) }
+        return build(tree: tree, focus: focus, colorer: colorer, marked: marked, sizes: sizes)
     }
 
     /// What lights up for these things. Whatever has a piece of its own lights that piece, with everything inside it. What's too
@@ -134,7 +134,7 @@ extension RingLayout {
     /// The biggest piece that stands for these things, or what holds them if they have none.
     func bestPiece(for nodes: [UInt32], tree: DiskTree) -> Int? {
         let found = lit(by: nodes, tree: tree)
-        if let best = found.full.map(\.lowerBound).max(by: { pieces[$0].bytes < pieces[$1].bytes }) { return best }
+        if let best = found.full.map(\.lowerBound).max(by: { pieces[$0].size < pieces[$1].size }) { return best }
         return found.holding.max { pieces[$0].r0 < pieces[$1].r0 }
     }
 }

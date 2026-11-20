@@ -125,12 +125,12 @@ extension AppModel {
 
     /// Whether a node goes at the next clean. Made once for the plan, the map and the Trash as they are, and kept until one
     /// of them changes: views ask this for every row they draw.
-    func plannedTest() -> RingLayout.Planner {
+    func plannedTest() -> RingLayout.Marker {
         if let planner { return planner }
         // What's in the Trash goes when it's emptied, so it stays striped until then.
         var waitingTrash: NodeSet?
         if let afterClean, afterClean.state == .waiting, let tree, let trash = trashNode(in: tree) { waitingTrash = NodeSet([trash], in: tree) }
-        let made: RingLayout.Planner
+        let made: RingLayout.Marker
         if let set = planPlaces.set {
             let back = planPlaces.back
             made = { node in (set.contains(node) && !(back?.contains(node) ?? false)) || (waitingTrash?.contains(node) ?? false) }
@@ -349,7 +349,6 @@ extension AppModel {
         let loose = planPlaces.loose
         guard !tops.isEmpty || !loose.isEmpty else {
             planNumbers = PlanNumbers()
-            engine.setGhost(0)
             checks = [:]
             return
         }
@@ -377,17 +376,10 @@ extension AppModel {
                 guard self.effectGeneration == generation, self.tree === tree else { return }
                 // A few leftover kilobytes in a folder aren't space anyone gets back.
                 self.planNumbers = PlanNumbers(total: total < 1_000_000 ? 0 : total, byItem: byItemNow.mapValues { $0 < 1_000_000 ? 0 : $0 }, after: after)
-                self.refreshGhost()
                 // The checks say what you'd get back, so they follow these numbers.
                 self.checkSoon()
             }
         }
-    }
-
-    /// Free Up's preview of the free space after cleaning, drawn onto the Free wedge, is off: over the views' own colours it
-    /// covered the pieces beside it. The middle of the ring says what cleaning frees instead.
-    func refreshGhost() {
-        engine.setGhost(0)
     }
 
     /// Looks at everything that's ticked as soon as the ticking stops, so what needs a look shows before you press Clean.
@@ -502,7 +494,6 @@ extension AppModel {
                 guard let self, !Task.isCancelled else { return }
                 self.pointing = nil
                 self.highlight(nodes: [])
-                self.engine.setPreview(0, color: .zero)
                 Motion.animate(.easeOut(duration: 0.16)) { self.labels = self.makeLabels() }
             }
             return
@@ -519,7 +510,7 @@ extension AppModel {
         let layout = engine.layout
         for one in rows.prefix(40) {
             guard let at = layout.bestPiece(for: one.nodes, tree: tree), !picks.contains(where: { $0.index == at }) else { continue }
-            picks.append(LabelPlacer.Pick(index: at, title: one.title, value: formatBytes(one.gain), score: Double(layout.pieces[at].bytes)))
+            picks.append(LabelPlacer.Pick(index: at, title: one.title, value: formatBytes(one.gain), score: Double(layout.pieces[at].size)))
         }
         picks.sort { $0.score > $1.score }
         Motion.animate(.easeOut(duration: 0.14)) {
@@ -793,10 +784,8 @@ extension AppModel {
         previewingAfter = on
         Motion.animate(.easeOut(duration: 0.12)) { labelsVisible = false }
         if on, let after = planNumbers.after {
-            engine.setGhost(0)
             engine.apply(drawing(tree, after: after), .settle)
         } else {
-            engine.setGhost(0)
             engine.apply(drawing(tree), .settle)
             placeLabels(after: 0.3)
         }

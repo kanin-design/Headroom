@@ -645,9 +645,9 @@ final class LayoutTests: XCTestCase {
         disk.file("/Volumes/Fake/B/other.bin", 100_000_000_000)
         disk.finish()
         let target = disk.node("/Volumes/Fake/A")
-        let layout = RingLayout.build(tree: disk.tree, focus: 0, colorer: { _ in .zero }, planned: { $0 == target })
-        XCTAssertEqual(layout.pieces.first { $0.node == target }?.planned, 1)
-        XCTAssertEqual(layout.pieces.first { $0.node == disk.node("/Volumes/Fake/B") }?.planned, 0)
+        let layout = RingLayout.build(tree: disk.tree, focus: 0, colorer: { _ in .zero }, marked: { $0 == target })
+        XCTAssertEqual(layout.pieces.first { $0.node == target }?.marked, 1)
+        XCTAssertEqual(layout.pieces.first { $0.node == disk.node("/Volumes/Fake/B") }?.marked, 0)
     }
 
     func testTheAfterPictureIsARealRing() {
@@ -661,7 +661,7 @@ final class LayoutTests: XCTestCase {
         let layout = RingLayout.build(tree: disk.tree, focus: 0, colorer: { _ in .zero }, after: after)
         XCTAssertNil(layout.pieces.first { $0.node == ids[0] })
         let free = layout.pieces.first { $0.node == disk.tree.free }
-        XCTAssertEqual(free?.bytes, 200_000_000_000)
+        XCTAssertEqual(free?.size, 200_000_000_000)
     }
 
     func testFreeAndHiddenCoverTheirShareOfTheRing() {

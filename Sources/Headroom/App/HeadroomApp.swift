@@ -23,11 +23,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         ScriptRunner.startIfAsked()
         Updater.shared.checkAtLaunch()
-        AgentServer.shared.start()
+        AgentServer.door.open()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        MainActor.assumeIsolated { AgentServer.shared.stop() }
+        MainActor.assumeIsolated { AgentServer.door.close() }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }

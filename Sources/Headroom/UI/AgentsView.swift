@@ -1,42 +1,23 @@
 import AppKit
 import SwiftUI
 
-/// What the question and the list both say about an agent: the program behind it, and who signed that.
+/// What the question and the list say about an agent.
 enum AgentText {
-    static func origin(_ identity: AgentIdentity) -> String {
-        "Started by \(identity.programName). " + (identity.signer.map { "Signed by \($0)." } ?? "Not signed by a known developer.")
-    }
-
-    /// The same in a list: the program, and who signed it.
+    /// The program behind an agent in a list, and who signed it.
     static func originLabel(_ identity: AgentIdentity) -> String {
         identity.programName + "  ·  " + (identity.signer ?? "Unsigned")
     }
 
     static let whatAllowingMeans = "It can see the names and sizes of your files and folders, and select them for Free Up or Backup. Only you can clean or move them."
-
-    /// The command an agent is given to reach this copy of Headroom.
-    static var command: String {
-        let program = Bundle.main.executablePath ?? "/Applications/Headroom.app/Contents/MacOS/Headroom"
-        return (program.contains(" ") ? "\"\(program)\"" : program) + " --mcp"
-    }
 }
 
-/// Asks about an agent that wants in, one at a time. It has no size of its own: it only carries the question.
+/// Asks about an agent that wants in, one at a time, with the question SunburstAgents asks. It has no size of its own: it
+/// only carries the question.
 struct AgentQuestion: View {
-    private let agents = Agents.shared
-
     var body: some View {
-        let request = agents.requests.first
         Color.clear
             .frame(width: 0, height: 0)
-            .alert("“\(request?.identity.name ?? "An agent")” would like to work with Headroom",
-                   isPresented: Binding(get: { request != nil }, set: { _ in }), presenting: request) { request in
-                Button("Allow") { agents.answer(request, .allow) }
-                Button("Look Only") { agents.answer(request, .lookOnly) }
-                Button("Don’t Allow", role: .cancel) { agents.answer(request, .deny) }
-            } message: { request in
-                Text(AgentText.origin(request.identity) + "\n\n" + AgentText.whatAllowingMeans)
-            }
+            .agentQuestion(AgentServer.door, explaining: AgentText.whatAllowingMeans)
     }
 }
 
@@ -121,7 +102,7 @@ struct AgentsView: View {
             }
             section("MCP server command") {
                 HStack(spacing: 8) {
-                    Text(AgentText.command)
+                    Text(AgentDoor.command)
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.85))
                         .lineLimit(1)
@@ -134,7 +115,7 @@ struct AgentsView: View {
                         .overlay(RoundedRectangle(cornerRadius: Kit.rowRadius, style: .continuous).strokeBorder(Kit.cardStroke))
                     Button(copied ? "Copied" : "Copy") {
                         AppModel.clipboard.clearContents()
-                        AppModel.clipboard.setString(AgentText.command, forType: .string)
+                        AppModel.clipboard.setString(AgentDoor.command, forType: .string)
                         copied = true
                     }
                     .buttonStyle(.pill)

@@ -11,7 +11,7 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "Headroom",
-            dependencies: [.product(name: "SunburstKit", package: "SunburstKit")],
+            dependencies: [.product(name: "SunburstKit", package: "SunburstKit"), .product(name: "SunburstAgents", package: "SunburstKit")],
             path: "Sources/Headroom",
             swiftSettings: [
                 .swiftLanguageMode(.v5),
