@@ -9,7 +9,7 @@
 
 ![Headroom's map of a whole disk: a glowing ring of folders, each group in its own colour, with free space as an open wedge and the biggest folders listed beside the ring](docs/map.jpg)
 
-<sub>The names in these screenshots are made up, using `--hide-names`.</sub>
+<sub>The names in these screenshots are made up, with `--hide-names` or on a throwaway test disk.</sub>
 
 ## Fast, all the way through
 
@@ -73,7 +73,7 @@ click the middle to go back up.
 
 ### Free Up
 
-![Free Up: a short stack of boxes, such as installers, caches and films, with the files of the box being pointed at lit up on the ring](docs/free-up.jpg)
+![Free Up: the Trash selected and summed up at the top with the free space after, a short stack of boxes below it, and the files of the box being pointed at lit up on the ring](docs/free-up.jpg)
 
 Things you may want to delete, in boxes named for what they are, biggest first: Caches, Junk, Developer, AI models,
 Unused apps, iPhone backups, Old installers, Screenshots and more. A Mac only gets the boxes it has something for.
@@ -85,7 +85,7 @@ permanently** frees the space, and **Undo** puts it all back.
 
 ### Changes
 
-![Changes: what was new or changed in the last seven days, each folder coloured from red for a little to yellow for all of it, with a list of the folders responsible](docs/changes.jpg)
+![Changes: what was new or changed in the last seven days, each folder coloured from red for a little to yellow for all of it, with the folders responsible named around the ring](docs/changes.jpg)
 
 What grew since the last scan, or in the last day, week or month. Each piece is coloured by how much of it is new or
 changed, from red for a little to yellow for all of it. The middle shows how much free space changed since an earlier
@@ -111,7 +111,7 @@ Copies, and never one that's only in iCloud.
 
 ### Search
 
-![Search: 69 matches for "mkv", each with its path and size, all of them lit up on the ring](docs/search.jpg)
+![Search: 80 matches for "mkv", each with its path and size, all of them lit up on the ring](docs/search.jpg)
 
 Press ⌘F and type. Matches are listed as you type, largest first, with their path and size, and light up on the ring.
 Search ignores case and accents, in any alphabet.
@@ -130,6 +130,8 @@ Double-click a file on the ring to open it. Right-click anything to copy its nam
 open it in Terminal or move it to the Trash.
 
 ### Backup
+
+![Backup: a disk and its backup drive as the two halves of the ring, with four files selected and summed up at the top of the inspector, ready to move to the drive](docs/backup.jpg)
 
 Backup moves files of 10 MB and up to another drive and leaves a small note in place of each. Choose the drive at the
 bottom right, select files in the list or on the ring, and click **Move**. On the drive, each file goes in a folder named
