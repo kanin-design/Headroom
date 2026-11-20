@@ -4,7 +4,7 @@ A sunburst chart for macOS, drawn with Metal. Any tree, such as a disk, a budget
 middle, each piece's angle set by its size. Point at a piece to light its branch, click to zoom into it, and click the
 middle to go back out.
 
-![A sunburst of a home folder: Movies, Pictures, Downloads and more as coloured wedges around the total in the middle, with names on the bigger pieces and beside the ring](docs/sunburst.jpg)
+![A sunburst of a made-up home folder with Photos pointed at: its golden branch glows from the middle to the edge while Videos, Games, Library and Projects step back, with names beside the ring and 77.2 GB in the middle](docs/sunburst.jpg)
 
 <sub>The pictures show the example app's made-up sample.</sub>
 
@@ -66,10 +66,11 @@ chart.show(otherTree)               // a different tree: back to its root
 chart.onOpen = { node in … }        // a click on a file, say
 ```
 
-The [example app](Examples/FolderMap) is a complete Mac app in under 300 lines: it shows a folder, or a made-up sample.
+The [example app](Examples/FolderMap) is a complete Mac app: it shows a folder, or a made-up sample shaped like a real home
+folder, and lets agents in when you ask.
 Run it with `swift run` in its folder.
 
-![The same chart zoomed into Movies: its series fill the ring, and the middle says 54.2 GB, 59% of Home](docs/zoomed.jpg)
+![The same chart zoomed into Photos: years in the first ring, albums and their videos outside them, and the middle saying 77.2 GB, 23% of Home](docs/zoomed.jpg)
 
 ## Your tree: `SunburstTree`
 
