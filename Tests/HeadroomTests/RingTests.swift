@@ -172,10 +172,21 @@ final class RingTests: XCTestCase {
             let layout = RingLayout.build(tree: d.tree, focus: focus, colorer: { _ in .zero })
             let pieces = layout.pieces
             XCTAssertGreaterThan(pieces.count, 30)
+            // A chain like only › chain › of › folders is one piece, and every folder in it is found there.
+            func inChain(_ p: Piece, _ node: UInt32) -> Bool {
+                var at = p.tail
+                while true {
+                    if at == node { return true }
+                    if at == p.node || at == 0 { return false }
+                    at = d.tree.nodes[Int(at)].parent
+                }
+            }
             for node in 0..<UInt32(d.tree.count) {
-                let slow = pieces.firstIndex { !$0.isSmaller && ($0.node == node || $0.tail == node) }
+                let slow = pieces.firstIndex { !$0.isSmaller && inChain($0, node) }
                 XCTAssertEqual(layout.piece(of: node), slow, "node \(node)")
             }
+            XCTAssertEqual(layout.piece(of: d.node("/Volumes/Fake/only/chain/of")), layout.piece(of: d.node("/Volumes/Fake/only")),
+                           "a folder in the middle of a chain")
             for (at, p) in pieces.enumerated() where !p.isSmaller {
                 XCTAssertEqual(layout.smallerPiece(in: at), pieces.firstIndex { $0.isSmaller && Int($0.parent) == at })
             }

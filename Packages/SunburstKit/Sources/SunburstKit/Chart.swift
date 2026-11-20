@@ -15,9 +15,10 @@ public final class SunburstChart<Tree: SunburstTree> {
     @ObservationIgnored public let engine: SunburstEngine
 
     /// The tree on the ring. Setting it again, as after sizes changed, moves every piece to its new place and keeps what's in
-    /// the middle, so its node numbers must mean the same things. For a different tree altogether, use `show(_:)`.
+    /// the middle and what's pointed at, so its node numbers must mean the same things. It can be set many times a second, as
+    /// while something is measured: each piece glides on from where it is. For a different tree altogether, use `show(_:)`.
     public var tree: Tree {
-        didSet { if !replacing { redraw(.settle) } }
+        didSet { if !replacing { redraw(.live) } }
     }
     /// The node in the middle: 0, the root, until something is zoomed into.
     public private(set) var focus: UInt32 = 0
@@ -25,7 +26,7 @@ public final class SunburstChart<Tree: SunburstTree> {
     public private(set) var hovered: UInt32?
     /// Nodes drawn striped, such as what's selected.
     public var marked: Set<UInt32> = [] {
-        didSet { if marked != oldValue, !replacing { redraw(.recolor) } }
+        didSet { if marked != oldValue, !replacing { redraw(.live) } }
     }
     /// How many rings, and how thick.
     public var sizes = RingSizes() {
@@ -43,15 +44,33 @@ public final class SunburstChart<Tree: SunburstTree> {
     /// The colour of each piece, given the node in the middle. By default each branch in view gets its own colour from the
     /// whole spectrum, with everything inside it close to that colour (`BranchColours`).
     @ObservationIgnored public var colours: ((_ tree: Tree, _ focus: UInt32) -> RingLayout.Colorer)? {
-        didSet { redraw(.recolor) }
+        didSet { redraw(.live) }
     }
     /// A click on a piece that has nothing inside to zoom into, such as a file.
     @ObservationIgnored public var onOpen: ((UInt32) -> Void)?
     /// The node in the middle changed.
     @ObservationIgnored public var onFocus: ((UInt32) -> Void)?
+    /// A key pressed while the chart has the keyboard (a click on it gives it the keyboard), before the chart's own keys:
+    /// Escape and Delete back out. Return true when the key is handled. `hovered` says what's under the pointer.
+    @ObservationIgnored public var onKey: ((NSEvent) -> Bool)?
+    /// The menu for a right-click on a node, such as one with Reveal in Finder. Nil for no menu.
+    @ObservationIgnored public var menu: ((UInt32) -> NSMenu?)?
+    /// A ⌘-click on a node. It does nothing else.
+    @ObservationIgnored public var onCommandClick: ((UInt32) -> Void)?
+    /// Whether the view takes the keyboard as soon as it appears, so keys work without a click first. Off by default.
+    @ObservationIgnored public var takesKeyboardFocus = false {
+        didSet { view?.takesKeyboardFocus = takesKeyboardFocus }
+    }
+    /// For a window whose content reaches under its title bar: a press along the top or on empty background moves the window.
+    /// Off by default.
+    @ObservationIgnored public var movesWindow = false {
+        didSet { view?.movesWindow = movesWindow }
+    }
 
     // What the view shows. Kept here so names and the readout follow the ring.
     var labels: [SunburstLabel] = []
+    /// Names wait while the pieces fly to their places after a zoom or a first picture, then fade in.
+    var labelsVisible = true
     var light = LabelLight()
     var readout = SunburstReadout()
     @ObservationIgnored private(set) var place = (center: CGPoint.zero, radius: CGFloat(0), size: CGSize.zero)
@@ -60,6 +79,11 @@ public final class SunburstChart<Tree: SunburstTree> {
     @ObservationIgnored private var hoveredPiece: Int?
     @ObservationIgnored private var lit: (nodes: [UInt32], tint: SIMD3<Float>?)?
     @ObservationIgnored private var replacing = false
+    /// Where the pointer last was over the ring, so what's under it can be lit again after the picture changes.
+    @ObservationIgnored private var lastPointer: Polar?
+    @ObservationIgnored private var zoomedAt = Date.distantPast
+    @ObservationIgnored private var labelTask: Task<Void, Never>?
+    @ObservationIgnored private var hoverTask: Task<Void, Never>?
 
     /// `name` says what each node is called. `sizeText` writes a size: by default in bytes, as `SunburstFormat.bytes`.
     public init(tree: Tree, name: @escaping (UInt32) -> String, sizeText: @escaping (UInt64) -> String = SunburstFormat.bytes,
@@ -118,9 +142,16 @@ public final class SunburstChart<Tree: SunburstTree> {
         onFocus?(focus)
     }
 
-    /// Back to the root.
+    /// Back to the root, in one move.
     public func zoomToRoot() {
-        while focus != 0 { zoomOut() }
+        guard focus != 0 else { return }
+        let old = focus
+        focus = 0
+        lit = nil
+        let layout = makeLayout()
+        let mapping = layout.nearestPiece(to: old, tree: tree).map { ZoomMapping(layout.pieces[$0]) }
+        show(layout, .zoomOut(mapping))
+        onFocus?(0)
     }
 
     /// Lights these nodes, and what holds them, and lets everything else step back. In `tint`, if given, they and the way out
@@ -147,8 +178,10 @@ public final class SunburstChart<Tree: SunburstTree> {
     }
 
     /// The ring as it is now, settled, in an image of `width` by `height` pixels. Names aren't in it. Nil without a GPU.
-    public func picture(width: Int, height: Int, scale: CGFloat = 2) -> CGImage? {
-        engine.picture(width: width, height: height, scale: scale)
+    /// Without `dithered`, the faint noise that keeps dark gradients smooth on screen is left out: as a PNG it's about half
+    /// the size, for sending somewhere rather than looking at.
+    public func picture(width: Int, height: Int, scale: CGFloat = 2, dithered: Bool = true) -> CGImage? {
+        engine.picture(width: width, height: height, scale: scale, dithered: dithered)
     }
 
     /// What's on the ring, in words: the node in the middle, and the biggest pieces with their names, sizes, shares and where
@@ -161,7 +194,7 @@ public final class SunburstChart<Tree: SunburstTree> {
             let p = layout.pieces[at]
             return SunburstSummary.Piece(node: p.node, name: pieceName(p), size: p.size, sizeText: sizeText(p.size),
                                          share: Double(p.size) / Double(max(whole, 1)), ring: Int(p.ring),
-                                         inside: p.parent >= 0 ? layout.pieces[Int(p.parent)].node : focus,
+                                         inside: p.parent >= 0 ? layout.pieces[Int(p.parent)].tail : focus,
                                          from: Double(p.a0) * 180 / .pi, to: Double(p.a1) * 180 / .pi,
                                          isGathered: p.isSmaller, isMarked: p.marked > 0)
         }
@@ -187,22 +220,50 @@ public final class SunburstChart<Tree: SunburstTree> {
     private func show(_ layout: RingLayout, _ transition: RingTransition) {
         engine.apply(layout, transition)
         version += 1
+        // The same index may be another piece now.
         hoveredPiece = nil
         hovered = nil
-        placeLabels()
+        light = LabelLight()
+        let flies: Bool
+        switch transition {
+        case .appear, .zoomIn, .zoomOut: flies = true
+        case .recolor, .live, .settle: flies = false
+        }
+        if flies {
+            // Names and what's under the pointer wait until the pieces are nearly where they're going.
+            zoomedAt = Date()
+            placeLabels(after: 0.34)
+            hoverTask?.cancel()
+            hoverTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(0.42))
+                guard let self, !Task.isCancelled else { return }
+                self.rehover()
+            }
+        } else {
+            placeLabels(after: transition.isLive ? 0 : 0.18)
+            rehover()
+        }
+        if hoveredPiece == nil, lit != nil { applyLight() }
         updateReadout()
-        if lit != nil { applyLight() }
-        view?.voiceOverLayoutChanged()
+        // New numbers many times a second would keep VoiceOver starting over.
+        if !transition.isLive { view?.voiceOverLayoutChanged() }
     }
 
     // MARK: Pointer
 
+    /// Lights what's under the pointer now, in the picture as it is.
+    private func rehover() {
+        hover(piece: lastPointer.flatMap { engine.layout.hit(angle: $0.angle, radius: $0.radius) }, force: true)
+    }
+
     func pointerMoved(to point: Polar?) {
+        lastPointer = point
         hover(piece: point.flatMap { engine.layout.hit(angle: $0.angle, radius: $0.radius) })
     }
 
-    func hover(piece index: Int?) {
-        guard index != hoveredPiece else { return }
+    /// `force` lights it again even if it was lit before, as after the picture changed under the pointer.
+    func hover(piece index: Int?, force: Bool = false) {
+        guard force || index != hoveredPiece else { return }
         hoveredPiece = index
         let layout = engine.layout
         guard let index, index < layout.pieces.count else {
@@ -216,17 +277,19 @@ public final class SunburstChart<Tree: SunburstTree> {
         var ancestors: [Int] = []
         var up = p.parent
         while up >= 0 {
-            ancestors.append(Int(up))
+            ancestors.append(contentsOf: layout.stretches(around: Int(up)))
             up = layout.pieces[Int(up)].parent
         }
-        engine.setEmphasis(primary: index, related: [index..<max(Int(p.end), index + 1)], ancestors: ancestors)
+        engine.setEmphasis(primary: index, related: [layout.extent(of: index)], ancestors: ancestors)
         hovered = p.node
         light = LabelLight(hovering: p.node, named: Set(labels.map(\.node)))
         updateReadout()
     }
 
+    /// A click acts once: the second click of a double-click is part of the first, and whatever is under the pointer by
+    /// then (after a zoom, something else) isn't what was meant.
     func click(at point: Polar?, count: Int) {
-        guard let point else { return }
+        guard let point, count < 2 else { return }
         if point.radius < RingLayout.hole {
             zoomOut()
         } else if let index = engine.layout.hit(angle: point.angle, radius: point.radius) {
@@ -234,15 +297,32 @@ public final class SunburstChart<Tree: SunburstTree> {
         }
     }
 
-    func click(piece index: Int) {
-        guard index < engine.layout.pieces.count else { return }
+    func click(piece index: Int, count: Int = 1) {
+        guard count < 2, index < engine.layout.pieces.count else { return }
         let p = engine.layout.pieces[index]
         // "Smaller items" stand for what holds them, which is already in view.
         if p.isSmaller { return }
         zoom(into: p.tail)
     }
 
+    /// Spreading two fingers over a piece zooms into it. It never opens anything, and over the middle it does nothing.
+    func pinchOpen(at point: Polar?) {
+        guard let point, let index = engine.layout.hit(angle: point.angle, radius: point.radius) else { return }
+        let p = engine.layout.pieces[index]
+        guard !p.isSmaller, tree.firstChild(of: RingLayout.chainTail(tree: tree, p.tail)) != 0 else { return }
+        zoom(into: p.tail)
+    }
+
+    /// The node of the piece at a point, unless it's "smaller items".
+    private func ownNode(at point: Polar) -> UInt32? {
+        guard let index = engine.layout.hit(angle: point.angle, radius: point.radius), !engine.layout.pieces[index].isSmaller else {
+            return nil
+        }
+        return engine.layout.pieces[index].node
+    }
+
     func key(_ event: NSEvent) -> Bool {
+        if onKey?(event) == true { return true }
         switch event.keyCode {
         case 53, 51:                     // escape, delete: back out
             guard focus != 0 else { return false }
@@ -262,20 +342,38 @@ public final class SunburstChart<Tree: SunburstTree> {
         var full: [Range<Int>] = []
         var holding = Set<Int>()
         for node in lit.nodes {
-            guard let at = layout.nearestPiece(to: node, tree: tree) else { continue }
+            guard let at = layout.nearestPiece(to: node, tree: tree) else {
+                // Gathered into the "smaller items" around the middle.
+                if node != focus, let outer = layout.outerSmaller, isInside(node, focus) { full.append(outer..<outer + 1) }
+                continue
+            }
             let p = layout.pieces[at]
-            if p.node == node || p.tail == node {
-                full.append(at..<max(Int(p.end), at + 1))
-            } else {
+            if layout.piece(of: node) == at {
+                full.append(layout.extent(of: at))
+            } else if let smaller = layout.smallerPiece(in: at) {
+                // Too small to draw on its own: it's in the piece's "smaller items".
+                full.append(smaller..<smaller + 1)
                 holding.insert(at)
+            } else {
+                // Deeper than the rings go: the outermost piece that holds it.
+                full.append(at..<at + 1)
             }
             var up = p.parent
             while up >= 0 {
-                holding.insert(Int(up))
+                holding.formUnion(layout.stretches(around: Int(up)))
                 up = layout.pieces[Int(up)].parent
             }
         }
         engine.setEmphasis(primary: nil, related: full, ancestors: Array(holding), tint: lit.tint)
+    }
+
+    private func isInside(_ node: UInt32, _ folder: UInt32) -> Bool {
+        var at = node
+        while at != 0 {
+            if at == folder { return true }
+            at = tree.parent(of: at)
+        }
+        return folder == 0
     }
 
     // MARK: Names and the readout
@@ -288,6 +386,23 @@ public final class SunburstChart<Tree: SunburstTree> {
 
     private func pieceName(_ p: Piece) -> String {
         p.isSmaller ? (p.smallerCount == 1 ? "1 smaller item" : "\(p.smallerCount) smaller items") : name(p.node)
+    }
+
+    /// Names for the picture as it is now, after `delay` seconds; until then the old names fade away.
+    private func placeLabels(after delay: Double) {
+        labelTask?.cancel()
+        guard delay > 0 else {
+            labelsVisible = true
+            placeLabels()
+            return
+        }
+        labelsVisible = false
+        labelTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard let self, !Task.isCancelled else { return }
+            self.placeLabels()
+            self.labelsVisible = true
+        }
     }
 
     func placeLabels() {
@@ -303,7 +418,7 @@ public final class SunburstChart<Tree: SunburstTree> {
         let inside = LabelPlacer.inside(layout: layout, order: order, area: area, halves: tree.hasHalves, named: &named) { p in
             p.isSmaller ? nil : (self.name(p.node), self.sizeText(p.size))
         }
-        let picks = LabelPlacer.bigPieces(layout: layout, order: order, total: tree.size(of: focus), named: &named) { p in
+        let picks = LabelPlacer.bigPieces(layout: layout, order: order, named: &named) { p in
             (self.name(p.node), self.sizeText(p.size))
         }
         labels = inside + LabelPlacer.sides(picks, layout: layout, area: area, eachCounts: false)
@@ -335,9 +450,19 @@ public final class SunburstChart<Tree: SunburstTree> {
         view.onHover = { [weak self] point in self?.pointerMoved(to: point) }
         view.onClick = { [weak self] point, count in self?.click(at: point, count: count) }
         view.onPinch = { [weak self] opening, point in
-            if opening { self?.click(at: point, count: 1) } else { self?.zoomOut() }
+            if opening { self?.pinchOpen(at: point) } else { self?.zoomOut() }
         }
         view.onKey = { [weak self] event in self?.key(event) ?? false }
+        view.menuAt = { [weak self] point in
+            guard let self, let menu = self.menu, let node = self.ownNode(at: point) else { return nil }
+            return menu(node)
+        }
+        view.onCommandClick = { [weak self] point in
+            guard let self, let node = self.ownNode(at: point) else { return }
+            self.onCommandClick?(node)
+        }
+        view.takesKeyboardFocus = takesKeyboardFocus
+        view.movesWindow = movesWindow
         view.accessibilityName = { [weak self] in
             guard let self else { return "Chart" }
             return "Chart of " + self.name(self.focus)
@@ -363,7 +488,8 @@ public final class SunburstChart<Tree: SunburstTree> {
 /// Sunburst(tree, name: { tree.name(of: $0) })
 /// ```
 ///
-/// To drive it from code, keep a `SunburstChart` and show that: `Sunburst(chart)`.
+/// To drive it from code, keep a `SunburstChart` and show that: `Sunburst(chart)`. A chart is shown in one view at a time,
+/// so give each window its own chart.
 public struct Sunburst<Tree: SunburstTree>: View {
     private let given: SunburstChart<Tree>?
     private let make: (@MainActor () -> SunburstChart<Tree>)?
@@ -393,13 +519,17 @@ public struct Sunburst<Tree: SunburstTree>: View {
             ZStack(alignment: .topLeading) {
                 SunburstCanvas(chart: chart)
                 RingPlace(center: ring.center, radius: ring.radius, size: size, engine: chart.engine, view: { [chart] in chart.view })
-                SunburstLabels(labels: chart.labels, light: chart.light, visible: true, width: size.width,
+                SunburstLabels(labels: chart.labels, light: chart.light, visible: chart.labelsVisible, width: size.width,
                                onEnter: { [chart] in chart.hover(piece: $0) }, onLeave: { [chart] _ in chart.hover(piece: nil) },
-                               onOpen: { [chart] piece, _ in chart.click(piece: piece) }, outer: { _ in EmptyModifier() })
+                               onOpen: { [chart] piece, clicks in chart.click(piece: piece, count: clicks) },
+                               outer: { _ in EmptyModifier() })
+                    .animation(.easeOut(duration: chart.labelsVisible ? 0.28 : 0.1), value: chart.labelsVisible)
                 ReadoutView(readout: chart.readout, sizeText: chart.sizeText, diameter: ring.radius * CGFloat(RingLayout.hole) * 2 * 0.86)
                     .position(ring.center)
                     .allowsHitTesting(false)
             }
+            // A different chart is a different view: the ring's own view draws one engine for its whole life.
+            .id(ObjectIdentifier(chart))
             .onAppear { chart.setPlace(center: ring.center, radius: ring.radius, size: size) }
             .onChange(of: size) { _, new in
                 let ring = Self.ring(in: new)

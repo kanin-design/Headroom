@@ -18,6 +18,12 @@ public enum RingTransition: Sendable {
     case live
     /// A new picture of the same place, as after something changed or was removed.
     case settle
+
+    /// New sizes arriving: what's pointed at stays lit and pieces glide on.
+    public var isLive: Bool {
+        if case .live = self { return true }
+        return false
+    }
 }
 
 /// Where a zoom is headed: it maps the old ring to the new one, sliding everything else out of the way.
@@ -52,13 +58,13 @@ public struct ZoomMapping: Sendable {
 /// ends, and each frame only advances one number, so a zoom costs the same however many pieces it moves, and nothing is
 /// drawn once it's done.
 ///
-/// Change it from the main thread. The ring is drawn on a thread of its own, so everything that moves is changed and read
-/// while holding a lock. The picture itself, `layout`, only ever changes on the main thread.
+/// Change it on the main actor, as the compiler checks. The ring is drawn on a thread of its own, so everything that moves
+/// is changed and read while holding a lock. The picture itself, `layout`, only ever changes on the main thread.
 public final class SunburstEngine: @unchecked Sendable {
     /// Nil when there's no GPU to draw with.
     let renderer: SunburstRenderer?
     /// The picture now: what `apply(_:_:)` was last given.
-    public private(set) var layout = RingLayout()
+    @MainActor public private(set) var layout = RingLayout()
     private let lock = NSLock()
 
     private var instances: [SegmentGPU] = []
@@ -127,14 +133,14 @@ public final class SunburstEngine: @unchecked Sendable {
     // MARK: Pictures
 
     /// Shows a new picture, moving to it as `transition` says.
-    public func apply(_ new: RingLayout, _ transition: RingTransition) {
+    @MainActor public func apply(_ new: RingLayout, _ transition: RingTransition) {
         // Asked here, on the main thread, where System Settings can be.
         let reduceMotion = reducesMotion()
         lock.withLock { applyLocked(new, transition, reduceMotion: reduceMotion) }
         requestFrame()
     }
 
-    private func applyLocked(_ new: RingLayout, _ transition: RingTransition, reduceMotion: Bool) {
+    @MainActor private func applyLocked(_ new: RingLayout, _ transition: RingTransition, reduceMotion: Bool) {
         let t = x
         let colorT = min(max(x, 0), 1)
         var currentIndex = [UInt64: Int](minimumCapacity: keys.count)
@@ -292,7 +298,7 @@ public final class SunburstEngine: @unchecked Sendable {
 
     /// Lifts these pieces and lets the rest step back. Pass nothing to bring everything back. With a tint, what's lit takes on
     /// that colour, the folders it's in part of it, and a lit piece too small to see is drawn a few points across.
-    public func setEmphasis(primary: Int?, related: [Range<Int>], ancestors: [Int] = [], tint: SIMD3<Float>? = nil) {
+    @MainActor public func setEmphasis(primary: Int?, related: [Range<Int>], ancestors: [Int] = [], tint: SIMD3<Float>? = nil) {
         lock.lock()
         guard !emphasisGoal.isEmpty else { lock.unlock(); return }
         for i in emphasisGoal.indices { emphasisGoal[i] = 0 }
@@ -317,19 +323,19 @@ public final class SunburstEngine: @unchecked Sendable {
 
     /// How far colour and glow hold back until something is pointed at, from 0 (not at all) to 1 (all the way, the default).
     /// At 1, pieces at rest sit a step below full colour with a faint glow, so whatever is pointed at stands out.
-    public func setCalm(_ amount: Float) {
+    @MainActor public func setCalm(_ amount: Float) {
         lock.withLock { calmGoal = amount }
         requestFrame()
     }
 
     /// How much the ring glows, from 0 to 1 (the default). Lower keeps what's lit reading as a shape.
-    public func setGlow(_ amount: Float) {
+    @MainActor public func setGlow(_ amount: Float) {
         lock.withLock { glowGoal = amount }
         requestFrame()
     }
 
     /// Whether a fine scale is drawn around the ring: a mark for every 1%, a longer one for every 10%. On by default.
-    public var showsScale: Bool {
+    @MainActor public var showsScale: Bool {
         get { lock.withLock { scaleShown } }
         set {
             lock.withLock { scaleShown = newValue }
@@ -343,7 +349,7 @@ public final class SunburstEngine: @unchecked Sendable {
     /// exactly as everything drawn over it does. The last half second of a spring moves by hundredths of a point, which
     /// nobody can see, so that isn't drawn.
     @discardableResult
-    public func setPlace(center: CGPoint, radius: CGFloat) -> Bool {
+    @MainActor public func setPlace(center: CGPoint, radius: CGFloat) -> Bool {
         let changed = lock.withLock {
             let place = SIMD2(Float(center.x), Float(center.y)), size = Float(radius)
             let moved = max(abs(place.x - centerNow.x), abs(place.y - centerNow.y), abs(size - radiusNow))
@@ -398,7 +404,8 @@ public final class SunburstEngine: @unchecked Sendable {
 
     /// The ring as it is now, settled, in an image of `width` by `height` pixels with the ring in the middle: Display P3, 8 bits
     /// a channel. Names and anything else drawn over the ring aren't in it. Nil without a GPU. Works without a window.
-    public func picture(width: Int, height: Int, scale: CGFloat = 2) -> CGImage? {
+    /// Without `dithered`, the faint noise that keeps dark gradients smooth is left out, for a PNG about half the size.
+    @MainActor public func picture(width: Int, height: Int, scale: CGFloat = 2, dithered: Bool = true) -> CGImage? {
         guard let renderer, width > 0, height > 0 else { return nil }
         let device = renderer.device
         let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: SunburstRenderer.outputFormat, width: width, height: height, mipmapped: false)
@@ -411,6 +418,7 @@ public final class SunburstEngine: @unchecked Sendable {
             u.t = 1
             u.center = SIMD2(Float(width), Float(height)) * 0.5
             u.radius = max(Float(min(width, height)) * 0.5 - Float(scale) * 22, 1)
+            u.dither = dithered ? 1 : 0
             renderer.writeEmphasis(emphasisNow, top: emphasisGoal.firstIndex { $0 > 1 })
             renderer.encode(into: commands, target: target, uniforms: u)
         }

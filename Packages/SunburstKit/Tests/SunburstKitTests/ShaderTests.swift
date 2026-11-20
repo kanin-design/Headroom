@@ -48,7 +48,7 @@ final class ShaderTests: XCTestCase {
             "restSaturation": MemoryLayout<UniformsGPU>.offset(of: \.restSaturation), "glowAtRest": MemoryLayout<UniformsGPU>.offset(of: \.glowAtRest),
             "minLit": MemoryLayout<UniformsGPU>.offset(of: \.minLit),
             "layer": MemoryLayout<UniformsGPU>.offset(of: \.layer), "litAbove": MemoryLayout<UniformsGPU>.offset(of: \.litAbove),
-            "top": MemoryLayout<UniformsGPU>.offset(of: \.top),
+            "top": MemoryLayout<UniformsGPU>.offset(of: \.top), "dither": MemoryLayout<UniformsGPU>.offset(of: \.dither),
             "tint": MemoryLayout<UniformsGPU>.offset(of: \.tint),
         ]
         XCTAssertEqual(members.count, swift.count, "the same numbers on both sides")

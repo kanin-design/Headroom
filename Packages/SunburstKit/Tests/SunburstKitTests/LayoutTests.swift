@@ -17,6 +17,8 @@ struct TestTree: SunburstTree {
     var hasHalves = false
     var hasBand = false
     var plain: Set<UInt32> = []
+    var always: Set<UInt32> = []
+    var cut: [UInt32: [SunburstStretch]] = [:]
 
     /// Files at these paths, of these sizes. Folders are made on the way.
     init(_ files: [(String, UInt64)], halves: Bool = false) {
@@ -75,6 +77,8 @@ struct TestTree: SunburstTree {
     func isPlainShape(_ node: UInt32) -> Bool { plain.contains(node) }
     var hasGroups: Bool { nodes.contains { $0.group != nil } }
     func group(of node: UInt32) -> UInt8? { nodes[Int(node)].group }
+    func isAlwaysDrawn(_ node: UInt32) -> Bool { always.contains(node) }
+    func stretches(of node: UInt32) -> [SunburstStretch]? { cut[node] }
 }
 
 final class LayoutTests: XCTestCase {
@@ -136,6 +140,80 @@ final class LayoutTests: XCTestCase {
         XCTAssertEqual(layout.pieces[smaller].smallerCount, 30)
         XCTAssertNil(layout.piece(of: tree.node("big/tiny3")))
         XCTAssertEqual(layout.nearestPiece(to: tree.node("big/tiny3"), tree: tree), nil, "the folder in view has no piece of its own")
+    }
+
+    func testWhatIsAlwaysDrawnIsNeverGatheredIntoSmallerItems() throws {
+        var files: [(String, UInt64)] = [("big/one", 1000 * mb)]
+        for i in 0..<30 { files.append(("big/tiny\(i)", 1 * mb)) }
+        var tree = TestTree(files)
+        tree.always = [tree.node("big/tiny3")]
+        let layout = RingLayout.build(tree: tree, focus: tree.node("big"), colorer: none)
+        XCTAssertNotNil(layout.piece(of: tree.node("big/tiny3")), "drawn, however thin")
+        XCTAssertEqual(layout.pieces[try XCTUnwrap(layout.outerSmaller)].smallerCount, 29)
+
+        // The same in a folder drawn as stretches of its groups.
+        var grouped = TestTree([("top/f/a", 400 * mb), ("top/f/b", 300 * mb), ("top/f/tiny", 1 * mb), ("top/f/tiny2", 1 * mb),
+                               ("top/g", 300 * mb), ("other", 100 * mb)])
+        grouped.nodes[Int(grouped.node("top/f/a"))].group = 0
+        grouped.nodes[Int(grouped.node("top/f/b"))].group = 1
+        grouped.nodes[Int(grouped.node("top/f/tiny"))].group = 1
+        grouped.nodes[Int(grouped.node("top/f/tiny2"))].group = 1
+        grouped.always = [grouped.node("top/f/tiny")]
+        let stretched = RingLayout.build(tree: grouped, focus: 0, colorer: none)
+        XCTAssertEqual(stretched.pieces.filter { $0.node == grouped.node("top/f") && !$0.isSmaller }.count, 2, "drawn as stretches")
+        XCTAssertNotNil(stretched.piece(of: grouped.node("top/f/tiny")))
+        XCTAssertNil(stretched.piece(of: grouped.node("top/f/tiny2")), "the rest are still gathered")
+    }
+
+    func testATreeCanCutAPieceIntoStretchesWithWhatsInsideUnderThemAll() throws {
+        var tree = TestTree([("top/f/a", 60 * mb), ("top/f/b", 40 * mb), ("top/g", 100 * mb), ("other", 100 * mb)])
+        let f = tree.node("top/f")
+        tree.cut[f] = [SunburstStretch(size: 1, color: [1, 0, 0], key: 3),
+                       SunburstStretch(size: 2, color: [0, 1, 0], isMarked: true, key: 1),
+                       SunburstStretch(size: 1, key: 2)]
+        let layout = RingLayout.build(tree: tree, focus: 0, colorer: { _ in [0.5, 0.5, 0.5] })
+        let at = try XCTUnwrap(layout.piece(of: f))
+        let parts = Array(layout.pieces[at..<at + 3])
+        XCTAssertTrue(parts.allSatisfy { $0.node == f && !$0.isSmaller })
+        let sweep = parts[2].a1 - parts[0].a0
+        XCTAssertEqual((parts[0].a1 - parts[0].a0) / sweep, 0.25, accuracy: 0.0001)
+        XCTAssertEqual((parts[1].a1 - parts[1].a0) / sweep, 0.5, accuracy: 0.0001, "each takes its share of the piece")
+        XCTAssertEqual(parts.map(\.color), [[1, 0, 0], [0, 1, 0], [0.5, 0.5, 0.5]], "its own colour, or the node's")
+        XCTAssertEqual(parts.map(\.marked), [0, 1, 0])
+        XCTAssertEqual(Set(parts.map(\.key)).count, 3)
+        let inside = layout.pieces.indices.filter { layout.pieces[$0].node == tree.node("top/f/a") || layout.pieces[$0].node == tree.node("top/f/b") }
+        XCTAssertEqual(inside.count, 2)
+        for i in inside {
+            XCTAssertEqual(Int(layout.pieces[i].parent), at)
+            XCTAssertGreaterThanOrEqual(layout.pieces[i].a0, parts[0].a0 - 0.0001)
+            XCTAssertLessThanOrEqual(layout.pieces[i].a1, parts[2].a1 + 0.0001)
+        }
+        XCTAssertEqual(layout.pieces[inside[0]].a0, parts[0].a0, accuracy: 0.0001, "what's inside runs under the whole piece")
+        XCTAssertEqual(layout.extent(of: at + 1), at..<inside.max()! + 1, "a stretch stands for the whole node and what's inside")
+        XCTAssertEqual(layout.stretches(around: at + 2), at...at + 2)
+        let a = layout.pieces[inside[0]], b = layout.pieces[inside[1]]
+        XCTAssertEqual(layout.hit(angle: (parts[2].a0 + parts[2].a1) / 2, radius: (parts[2].r0 + parts[2].r1) / 2), at + 2, "every stretch can be pointed at")
+        XCTAssertEqual(layout.hit(angle: (b.a0 + b.a1) / 2, radius: (b.r0 + b.r1) / 2), inside[1], "and what's inside")
+        XCTAssertEqual(layout.hit(angle: (a.a0 + a.a1) / 2, radius: (a.r0 + a.r1) / 2), inside[0])
+
+        // The same stretches in the next tree glide to their places.
+        let again = RingLayout.build(tree: tree, focus: 0, colorer: { _ in [0.5, 0.5, 0.5] })
+        XCTAssertEqual(again.pieces.map(\.key), layout.pieces.map(\.key))
+    }
+
+    func testThingsOfTheSameSizeKeepTheTreesOrder() {
+        var tree = TestTree([("top/f/c", 10 * mb), ("top/f/a", 10 * mb), ("top/f/b", 10 * mb), ("top/g", 5 * mb)])
+        for name in ["a", "b", "c"] { tree.nodes[Int(tree.node("top/f/" + name))].group = 0 }
+        let f = Int(tree.node("top/f"))
+        func drawn() -> [String] {
+            RingLayout.build(tree: tree, focus: 0, colorer: none).pieces.filter { $0.parent >= 0 && $0.ring == 2 }
+                .map { tree.nodes[Int($0.node)].name }
+        }
+        let names = tree.nodes.map(\.name)
+        tree.nodes[f].children.sort { names[Int($0)] < names[Int($1)] }
+        XCTAssertEqual(drawn(), ["a", "b", "c"])
+        tree.nodes[f].children.reverse()
+        XCTAssertEqual(drawn(), ["c", "b", "a"])
     }
 
     func testTwoHalvesTakeHalfTheRingWhateverTheirSizes() throws {
@@ -219,7 +297,7 @@ final class LabelTests: XCTestCase {
             (tree.nodes[Int(p.node)].name, "\(p.size / mb) MB")
         }
         XCTAssertTrue(inside.contains { $0.title == "big" && $0.place == .inside })
-        let picks = LabelPlacer.bigPieces(layout: layout, order: order, total: tree.size(of: 0), named: &placed) { p in
+        let picks = LabelPlacer.bigPieces(layout: layout, order: order, named: &placed) { p in
             (tree.nodes[Int(p.node)].name, "\(p.size / mb) MB")
         }
         let sides = LabelPlacer.sides(picks, layout: layout, area: area, eachCounts: false)
@@ -228,5 +306,29 @@ final class LabelTests: XCTestCase {
             XCTAssertGreaterThan(abs(label.position.x - area.center.x), area.radius, "out beside the ring")
         }
         XCTAssertFalse(sides.contains { $0.title == "big" }, "a piece named inside isn't named again")
+    }
+
+    func testASideNameIsForWhatTakesUpTheRingNotForItsSizeAlone() {
+        let mb: UInt64 = 1_000_000
+        let tree = TestTree([("mac/films", 1960 * mb), ("mac/notes", 20 * mb), ("mac/rest", 20 * mb),
+                             ("drive/films", 60 * mb), ("drive/notes", 20 * mb), ("drive/rest", 20 * mb)], halves: true)
+        let layout = RingLayout.build(tree: tree, focus: 0, colorer: { _ in [0.2, 0.2, 0.2] })
+        var placed = LabelPlacer.Placed()
+        let picks = LabelPlacer.bigPieces(layout: layout, order: LabelPlacer.order(layout, halvesFirst: true), named: &placed) { p in
+            (tree.nodes[Int(p.node)].name + "@" + tree.nodes[Int(tree.nodes[Int(p.node)].parent)].name, "")
+        }
+        let titles = picks.map(\.title)
+        // 20 MB of 2.1 GB is under 1%, but on the drive's half it takes a tenth of the ring.
+        XCTAssertTrue(titles.contains("notes@drive"), "named: \(titles)")
+        XCTAssertFalse(titles.contains("notes@mac"), "the same size on the big half is a sliver")
+    }
+
+    func testWithoutHalvesAPiecesAngleIsItsShare() {
+        let mb: UInt64 = 1_000_000
+        let tree = TestTree([("a/x", 500 * mb), ("a/y", 120 * mb), ("b/z", 300 * mb), ("c", 33 * mb), ("d/e/f", 47 * mb)])
+        let layout = RingLayout.build(tree: tree, focus: 0, colorer: { _ in .zero })
+        for p in layout.pieces {
+            XCTAssertEqual(Double(p.a1 - p.a0) / (2 * .pi), Double(p.size) / Double(tree.size(of: 0)), accuracy: 1e-5)
+        }
     }
 }

@@ -27,7 +27,7 @@ Requirements: macOS 14 or later, Swift 6.2 or later. No dependencies.
 
 ## Install
 
-Add this repository's URL as a package dependency, from version 0.1.0: in Xcode with File › Add Package Dependencies…, or in
+Add this repository's URL as a package dependency, from version 0.2.0: in Xcode with File › Add Package Dependencies…, or in
 `Package.swift` with `.package(url:from:)`. Then add `SunburstKit` to your target's dependencies, and `SunburstAgents` too
 if you want agents.
 
@@ -61,10 +61,17 @@ chart.zoom(into: node)              // into a node; a node with nothing inside i
 chart.zoomOut()                     // one level back out
 chart.highlight([a, b], tint: c)    // light these and the way out to them, in one colour
 chart.marked = [selected]           // drawn striped
-chart.tree = updated                // the same tree with new sizes: everything glides
+chart.tree = updated                // the same tree with new sizes, as often as they come: everything glides
 chart.show(otherTree)               // a different tree: back to its root
 chart.onOpen = { node in … }        // a click on a file, say
+chart.onKey = { event in … }        // your keys first; return true when handled (Escape and Delete back out)
+chart.menu = { node in … }          // a right-click menu, such as Reveal in Finder
+chart.onCommandClick = { node in … }
+chart.takesKeyboardFocus = true     // keys work without a click first
 ```
+
+A chart is shown in one view at a time, so give each window its own. What the pointer is on stays lit while sizes,
+marks and colours change under it.
 
 The [example app](Examples/FolderMap) is a complete Mac app: it shows a folder, or a made-up sample shaped like a real home
 folder, and lets agents in when you ask.
@@ -75,7 +82,7 @@ Run it with `swift run` in its folder.
 ## Your tree: `SunburstTree`
 
 Nodes are `UInt32` numbers. Node 0 is the root, and 0 as a child or a sibling means there is none. Children are listed
-biggest first.
+biggest first, and things of the same size are drawn in the order you list them, such as by name.
 
 | Member | What it says |
 | --- | --- |
@@ -83,7 +90,7 @@ biggest first.
 | `size(of:)` | Everything in the node: sets its angle |
 | `ownSize(of:)` | What the node holds outside its children, drawn with what's too small to draw on its own |
 | `isFolder(_:)` | Only folders chain: a folder that's nearly all one subfolder is drawn as one piece with it |
-| `style(of:)` | `.folder`, `.file`, `.free` (room not used), `.hidden` (hatched), `.ghost` (faint) |
+| `style(of:)` | `.folder`, `.file`, `.free` (room not used), `.hidden` (hatched), `.ghost` (faint), `.shared` (a bright dashed outer edge) |
 | `nameKey(of:)` | A number from the name, the same from one tree to the next, so pieces glide to their new places |
 
 Optional, with defaults that draw a plain sunburst:
@@ -96,6 +103,8 @@ Optional, with defaults that draw a plain sunburst:
 | `isPlainShape(_:)` | false | A shape of its own in the first ring, such as free space, reaching out as far as the rest does on average |
 | `hasGroups`, `group(of:)` | off | Things in a folder are drawn by group first, and a folder that holds more than one group is drawn as a stretch for each |
 | `isStillGrowing(_:)` | false | Still being measured: it doesn't chain yet |
+| `isAlwaysDrawn(_:)` | false | Drawn as its own piece however thin, never gathered into "smaller items", such as every film in a library |
+| `stretches(of:)` | nil | The node's piece cut into stretches side by side, each with its own size, colour and mark, such as by where its files are and which are selected; what's inside is drawn under the whole piece |
 
 ## Colours
 
@@ -116,7 +125,8 @@ something that should stay in the background, and `set(_:_:)`.
 
 `chart.summary(limit:)` says what's on the ring: the node in the middle, and the biggest pieces with their names, sizes,
 shares and where they sit, as a `Codable` value. `chart.picture(width:height:)` draws the ring into a `CGImage` off screen,
-without a window: for tests, exports, or an agent that wants to look.
+without a window: for tests, exports, or an agent that wants to look. With `dithered: false` it leaves out the faint
+noise that keeps dark gradients smooth on screen, for a PNG about half the size.
 
 ```swift
 let summary = chart.summary(limit: 10)
@@ -131,7 +141,7 @@ let image = chart.picture(width: 1600, height: 1200)       // nil without a GPU
 `Sunburst` is made of parts you can use directly, for a view of your own:
 
 - `RingLayout.build(tree:focus:colorer:marked:sizes:)` turns part of a tree into `Piece`s, depth first, with how many
-  rings to draw (`RingSizes`, `RingStyle`).
+  rings to draw (`RingSizes`, `RingStyle`). `piece(of:)`, `hit(angle:radius:)` and `extent(of:)` find pieces in it.
 - `SunburstEngine` holds the picture on screen and everything that moves: `apply(_:_:)` with a `RingTransition`,
   `setEmphasis(primary:related:ancestors:tint:)` to light pieces, `setCalm(_:)`, `setGlow(_:)`, `showsScale`.
 - `SunburstView` is the `NSView` that draws it, with callbacks for the pointer, keys and VoiceOver; `RingPlace` tells it

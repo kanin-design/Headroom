@@ -119,7 +119,8 @@ final class AgentRelay: @unchecked Sendable {
             }
         }
         guard let fd else { return nil }
-        let made = AgentConnection(fd: fd)
+        // The app's answers come from the user's own app, and a picture in one can be several megabytes.
+        let made = AgentConnection(fd: fd, longestLine: 64 << 20)
         lock.withLock {
             connection = made
             saidHello = false

@@ -15,6 +15,9 @@ public enum PieceStyle: Float, Sendable {
     case file = 4
     /// Something that isn't here any more, shown where it was: its colour, nearly empty inside, with a clear outline.
     case ghost = 5
+    /// Something being shared, such as a file a torrent is seeding: drawn as a folder or file is, with a bright dashed line
+    /// along its outer edge.
+    case shared = 6
 }
 
 /// One drawn piece of the ring. Pieces are listed depth first: a piece's descendants follow it, up to `end`.
@@ -186,6 +189,8 @@ public struct RingLayout: Sendable {
 
     // Where things are in `pieces`, worked out once when the picture is made, so nothing has to search it.
     @usableFromInline var pieceOf: [UInt32: Int32] = [:]
+    /// The folders between the ends of each chain, and the piece the chain is drawn as.
+    @usableFromInline var chainLinks: [(node: UInt32, piece: Int32)] = []
     @usableFromInline var smallerIn: [Int32: Int32] = [:]
     /// The "smaller items" piece of the node in the middle itself.
     public var outerSmaller: Int? { _outerSmaller }
@@ -198,6 +203,30 @@ public struct RingLayout: Sendable {
 
     /// The piece that stands for a node: its own, or the one a chain like Media › TV is drawn as, for any folder in the chain.
     public func piece(of node: UInt32) -> Int? { pieceOf[node].map(Int.init) }
+
+    /// The pieces a piece's node is drawn as side by side: just the piece, unless the tree cuts the node into stretches
+    /// (`SunburstTree.stretches(of:)`).
+    public func stretches(around piece: Int) -> ClosedRange<Int> {
+        let p = _pieces[piece]
+        guard !p.isSmaller else { return piece...piece }
+        func same(_ i: Int) -> Bool {
+            let q = _pieces[i]
+            return q.node == p.node && q.ring == p.ring && q.parent == p.parent && !q.isSmaller
+        }
+        var first = piece, last = piece
+        while first > 0, same(first - 1) { first -= 1 }
+        while last + 1 < _pieces.count, same(last + 1) { last += 1 }
+        return first...last
+    }
+
+    /// Everything a piece stands for, as a range of `pieces`: its node's piece or stretches, and everything drawn inside.
+    public func extent(of piece: Int) -> Range<Int> {
+        let span = stretches(around: piece)
+        guard span.count > 1 else { return piece..<max(Int(_pieces[piece].end), piece + 1) }
+        var end = span.upperBound + 1
+        while end < _pieces.count, span.contains(Int(_pieces[end].parent)) { end = max(Int(_pieces[end].end), end + 1) }
+        return span.lowerBound..<end
+    }
 
     /// The "smaller items" piece directly inside a piece.
     public func smallerPiece(in piece: Int) -> Int? { smallerIn[Int32(piece)].map(Int.init) }
@@ -229,6 +258,7 @@ public struct RingLayout: Sendable {
                 if p.style == .free, _freePiece == nil { _freePiece = at }
             }
         }
+        for link in chainLinks where pieceOf[link.node] == nil { pieceOf[link.node] = link.piece }
     }
 
     /// The picture of `focus` and what's inside it. It gets as many rings as asked for, but never more than it can fill, so
@@ -425,14 +455,17 @@ public struct RingLayout: Sendable {
         return Float(Double(inFolders) / Double(max(tree.size(of: id), 1)))
     }
 
-    /// What's in a folder in the order it's drawn: by the tree's own order when it has one, then biggest first.
+    /// What's in a folder in the order it's drawn: by the tree's own order when it has one, then biggest first. Things of
+    /// the same size keep the order the tree lists them in, such as by name.
     @inlinable
     static func ordered<T: SunburstTree>(_ tree: T, _ kids: [UInt32]) -> [UInt32] {
         guard tree.hasGroups else { return kids }
-        return kids.sorted { x, y in
-            let rx = tree.group(of: x) ?? .max, ry = tree.group(of: y) ?? .max
-            return rx != ry ? rx < ry : tree.size(of: x) > tree.size(of: y)
-        }
+        return kids.enumerated().sorted { x, y in
+            let rx = tree.group(of: x.element) ?? .max, ry = tree.group(of: y.element) ?? .max
+            if rx != ry { return rx < ry }
+            let sx = tree.size(of: x.element), sy = tree.size(of: y.element)
+            return sx != sy ? sx > sy : x.offset < y.offset
+        }.map(\.element)
     }
 
     /// One stretch of a folder cut by the tree's order: the things in it, its share of the folder, and its colour, which is
@@ -468,7 +501,7 @@ public struct RingLayout: Sendable {
         var rest = visible.ownBytes, restCount: Int32 = 0
         for kid in Self.ordered(tree, visible.kids) {
             let bytes = total(kid)
-            if Float(bytes) * perByte * midArc < Self.minimumArc {
+            if Float(bytes) * perByte * midArc < Self.minimumArc && !tree.isAlwaysDrawn(kid) {
                 rest &+= bytes
                 restCount += 1
                 continue
@@ -525,13 +558,16 @@ public struct RingLayout: Sendable {
                     link = tree.parent(of: link)
                 }
                 for link in chain.reversed() { kidsKey = Self.key(tree, link, in: kidsKey) }
+                if parentPiece >= 0 { for link in chain { chainLinks.append((link, parentPiece)) } }
             }
         } else if !tree.hasHalves {
             // Around the root, the host's ranks first: in a disk, free space closes the circle, right after what's hidden.
-            kids.sort { x, y in
-                let rx = tree.rootRank(of: x), ry = tree.rootRank(of: y)
-                return rx != ry ? rx < ry : total(x) > total(y)
-            }
+            kids = kids.enumerated().sorted { x, y in
+                let rx = tree.rootRank(of: x.element), ry = tree.rootRank(of: y.element)
+                if rx != ry { return rx < ry }
+                let sx = total(x.element), sy = total(y.element)
+                return sx != sy ? sx > sy : x.offset < y.offset
+            }.map(\.element)
         }
 
         let perByte = (a1 - a0) / Float(parentTotal)
@@ -543,7 +579,7 @@ public struct RingLayout: Sendable {
             let bytes = total(id)
             let sweep = halves ? (a1 - a0) / Float(max(kids.count, 1)) : Float(bytes) * perByte
             let special = parentNode == 0
-            if sweep * midArc < Self.minimumArc && !special {
+            if sweep * midArc < Self.minimumArc && !special && !tree.isAlwaysDrawn(id) {
                 smallerBytes &+= bytes
                 smallerCount += 1
                 continue
@@ -563,6 +599,33 @@ public struct RingLayout: Sendable {
             let style = tree.style(of: id)
             let key = Self.key(tree, id, in: kidsKey)
             let seed = Self.seed(key)
+            // The tree's own stretches: one piece for each, side by side, with what's inside under them all.
+            if let stretches = tree.stretches(of: id), stretches.count > 1 {
+                let whole = Float(max(stretches.reduce(UInt64(0)) { $0 &+ $1.size }, 1))
+                let first = _pieces.count
+                var at = angle
+                // Each stretch ends at itself, so a search that misses one goes on to the next; what's inside follows the last,
+                // sitting on the first. `extent(of:)` gives all of it.
+                for (n, stretch) in stretches.enumerated() {
+                    let to = n == stretches.count - 1 ? angle + sweep : at + sweep * Float(stretch.size) / whole
+                    _pieces.append(Piece(node: id, tail: id, key: key ^ ((UInt64(stretch.key) &+ 1) << 48), a0: at, a1: to, r0: r0, r1: r1,
+                                         ring: Int32(ring), parent: parentPiece, end: Int32(_pieces.count + 1), isSmaller: false, smallerCount: 0,
+                                         color: stretch.color ?? color, style: style, seed: seed, size: stretch.size,
+                                         marked: stretch.isMarked ? 1 : 0))
+                    at = to
+                }
+                if hasChildren {
+                    if ring + 2 < edges.count {
+                        place(tree, marker: marker, parentNode: id, parentPiece: Int32(first), parentKey: key, a0: angle,
+                              a1: angle + sweep, ring: ring + 1, edges: edges, colorer: colorer)
+                    } else if marksDeeper {
+                        let deeper = Self.folderShare(tree, of: id)
+                        for i in first..<first + stretches.count { _pieces[i].deeper = deeper }
+                    }
+                }
+                angle += sweep
+                continue
+            }
             // A folder whose contents are in more than one place is drawn as one stretch for each, over what it's made of.
             if tree.hasGroups, parentNode != 0, hasChildren, ring + 2 < edges.count,
                let runs = runs(tree, of: id, a0: angle, a1: angle + sweep, childRing: ring + 1, edges: edges, colorer: colorer) {

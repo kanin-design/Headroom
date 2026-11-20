@@ -29,10 +29,11 @@ struct Uniforms {
     float layer;            // which pieces this pass draws: 0 the ones at rest, 1 the lit, 2 the lifted, 3 the one on top
     float litAbove;         // how lit a piece has to be to count as lit, for that
     float top;              // the piece pointed at, which lies over all the others; -1 when there's none
+    float dither;           // 1 adds the pixel of noise that keeps dark gradients smooth, 0 leaves it out
     float4 tint;            // the colour lit pieces and the folders they're in take on, and in w how much
 };
 
-enum Style { StyleNormal = 0, StyleFree = 1, StyleHidden = 2, StyleSmaller = 3, StyleFile = 4, StyleGhost = 5 };
+enum Style { StyleNormal = 0, StyleFree = 1, StyleHidden = 2, StyleSmaller = 3, StyleFile = 4, StyleGhost = 5, StyleShared = 6 };
 
 struct SegmentOut {
     float4 position [[position]];
@@ -219,6 +220,12 @@ fragment PieceOut segment_fragment(SegmentOut in [[stage_in]], constant Uniforms
         float strength = mix(u.restSaturation * (1.0 - 0.5 * in.calm), 1.0, e);
         color = mix(float3(dot(color, float3(0.3, 0.6, 0.1))), color, strength);
         color *= mix(1.0 - 0.2 * in.calm, 1.0, e);
+        // Shared: a dashed bright line along the outer edge, so it reads at a glance without taking the colour.
+        if (in.style == StyleShared) {
+            float dash = step(0.5, fract(theta * r / (u.scale * 7.0)));
+            float band = 1.0 - saturate((in.r1 - radialGap - r) / (u.scale * 2.6));
+            color = mix(color, float3(0.80, 0.95, 1.0), band * dash * 0.9);
+        }
         // Marked: striped and see-through, with a thin bright edge.
         if (in.marked > 0.001) {
             float across = fract((in.p.x - in.p.y) / (u.scale * 10.0));
@@ -337,6 +344,6 @@ fragment float4 composite(QuadOut in [[stage_in]],
 
     // One pixel of noise removes banding from the dark gradients.
     float n = hash21(pixel) - 0.5;
-    color += n * (0.0018 + 0.004 * sqrt(max(dot(color, float3(0.33)), 0.0)));
+    color += n * (0.0018 + 0.004 * sqrt(max(dot(color, float3(0.33)), 0.0))) * u.dither;
     return float4(max(color, 0.0), 1.0);
 }

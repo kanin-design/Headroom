@@ -68,33 +68,39 @@ public struct LabelArea: Sendable {
 /// Places names on and around the ring. What each piece is called, and which pieces are named at the sides, is the host's:
 /// these find where the names fit.
 public enum LabelPlacer {
-    // Fonts don't change once made, so any thread may measure with them.
-    nonisolated(unsafe) private static let titleFont = NSFont.systemFont(ofSize: 12.5, weight: .semibold)
-    nonisolated(unsafe) private static let valueFont = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+    /// The fonts names are drawn in, as `InsideLabel` and `OuterLabel` draw them: a name above, its size below, and both
+    /// larger on free space.
+    private enum Font: Int {
+        case title, value, largeTitle, largeValue
 
-    /// How wide text is in one of the two fonts. Names are placed again on every change of picture, many times a second while
+        // Fonts don't change once made, so any thread may measure with them.
+        nonisolated(unsafe) private static let made: [NSFont] = [
+            .systemFont(ofSize: 12.5, weight: .semibold), .monospacedDigitSystemFont(ofSize: 11, weight: .medium),
+            .systemFont(ofSize: 14, weight: .semibold), .monospacedDigitSystemFont(ofSize: 13, weight: .medium),
+        ]
+        var font: NSFont { Self.made[rawValue] }
+    }
+
+    /// How wide text is in one of the fonts. Names are placed again on every change of picture, many times a second while
     /// sizes are arriving, and mostly the same names, so each width is measured once.
-    private static func width(_ text: String, _ font: NSFont) -> CGFloat {
-        let isTitle = font === titleFont
-        if let known = widths.withLock({ (isTitle ? $0.titles : $0.values)[text] }) { return known }
-        let measured = ceil((text as NSString).size(withAttributes: [.font: font]).width)
+    private static func width(_ text: String, _ font: Font) -> CGFloat {
+        if let known = widths.withLock({ $0[font.rawValue][text] }) { return known }
+        let measured = ceil((text as NSString).size(withAttributes: [.font: font.font]).width)
         widths.withLock { known in
             // Enough for every name a window shows at once, many times over; past that it starts again.
-            if known.titles.count + known.values.count > 8192 { known = MeasuredWidths() }
-            if isTitle { known.titles[text] = measured } else { known.values[text] = measured }
+            if known.reduce(0, { $0 + $1.count }) > 8192 { known = Array(repeating: [:], count: 4) }
+            known[font.rawValue][text] = measured
         }
         return measured
     }
 
-    private struct MeasuredWidths {
-        var titles: [String: CGFloat] = [:]
-        var values: [String: CGFloat] = [:]
-    }
-    private static let widths = OSAllocatedUnfairLock(initialState: MeasuredWidths())
+    /// Widths measured so far, for each font.
+    private static let widths = OSAllocatedUnfairLock(initialState: [[String: CGFloat]](repeating: [:], count: 4))
 
     /// Where a box of this size fits inside a piece: its middle if possible, otherwise slid along the arc to where the
-    /// ring runs closer to level. A name that fits nearby is better than one out at the side.
-    private static func fit(w: CGFloat, h: CGFloat, piece p: Piece, radius R: CGFloat) -> CGFloat? {
+    /// ring runs closer to level. A name that fits nearby is better than one out at the side. `outward` moves the box out
+    /// from the middle of the ring by that factor, as free space's name is.
+    private static func fit(w: CGFloat, h: CGFloat, piece p: Piece, radius R: CGFloat, outward: CGFloat = 1) -> CGFloat? {
         let mid = CGFloat(p.midAngle)
         let sweep = CGFloat(p.sweep)
         // A big piece's name belongs on it, so those look harder for a place.
@@ -103,14 +109,15 @@ public enum LabelPlacer {
                                    : [0, 0.1, -0.1, 0.2, -0.2, 0.3, -0.3, 0.38, -0.38]
         for step in steps {
             let angle = mid + sweep * step
-            if fits(w: w, h: h, angle: angle, piece: p, radius: R, margin: big ? 2 : 3) { return angle }
+            if fits(w: w, h: h, angle: angle, piece: p, radius: R, margin: big ? 2 : 3, outward: outward) { return angle }
         }
         return nil
     }
 
-    private static func fits(w: CGFloat, h: CGFloat, angle: CGFloat, piece p: Piece, radius R: CGFloat, margin: CGFloat) -> Bool {
+    private static func fits(w: CGFloat, h: CGFloat, angle: CGFloat, piece p: Piece, radius R: CGFloat, margin: CGFloat,
+                             outward: CGFloat) -> Bool {
         let mid = CGFloat(p.midAngle)
-        let rm = CGFloat(p.r0 + p.r1) * 0.5 * R
+        let rm = CGFloat(p.r0 + p.r1) * 0.5 * R * outward
         let cx = sin(angle) * rm, cy = -cos(angle) * rm
         let inner = CGFloat(p.r0) * R + margin, outer = CGFloat(p.r1) * R - margin
         for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
@@ -163,12 +170,13 @@ public enum LabelPlacer {
         public init() {}
     }
 
-    /// Pieces biggest first. With halves, the halves come first, whatever they hold.
+    /// Pieces biggest first. With halves, the halves come first, whatever they hold, and the rest go by how big they're
+    /// drawn: a folder on the smaller half is drawn bigger than its size alone would say.
     public static func order(_ layout: RingLayout, halvesFirst: Bool) -> [Int] {
         layout.pieces.indices.sorted { a, b in
             let pa = layout.pieces[a], pb = layout.pieces[b]
             if halvesFirst, (pa.ring == 0) != (pb.ring == 0) { return pa.ring == 0 }
-            return pa.size > pb.size
+            return halvesFirst ? pa.a1 - pa.a0 > pb.a1 - pb.a0 : pa.size > pb.size
         }
     }
 
@@ -186,12 +194,15 @@ public enum LabelPlacer {
             let isFree = p.style == .free
             // A ghost is drawn faint, whatever its colour, so its name is light like on the dark parts.
             let isHidden = p.style == .hidden || p.style == .ghost
-            let w = max(width(said.title, titleFont), width(said.value, valueFont)) + 2
-            let h: CGFloat = 31
+            // Free space's name is written larger, and measured as it's drawn.
+            let w = isFree ? max(width(said.title, .largeTitle), width(said.value, .largeValue)) + 2
+                           : max(width(said.title, .title), width(said.value, .value)) + 2
+            let h: CGFloat = isFree ? 34 : 31
+            // Free space reads best out in the open part of the wedge, away from the crowded middle.
+            let outward: CGFloat = isFree ? 1.08 : 1
             let halfSpot: CGFloat? = halves && layout.focus == 0 && p.ring == 0 ? (p.a0 < .pi ? .pi - 0.27 : .pi + 0.27) : nil
-            if let angle = halfSpot ?? fit(w: w, h: h, piece: p, radius: R) {
-                // Free space reads best out in the open part of the wedge, away from the crowded middle.
-                let rm = CGFloat(p.r0 + p.r1) * 0.5 * R * (isFree ? 1.08 : 1)
+            if let angle = halfSpot ?? fit(w: w, h: h, piece: p, radius: R, outward: outward) {
+                let rm = CGFloat(p.r0 + p.r1) * 0.5 * R * outward
                 out.append(SunburstLabel(id: p.key, pieceIndex: i, node: p.node, title: said.title, value: said.value,
                                     position: point(area, angle, rm), anchor: .zero, elbow: .zero, place: .inside,
                                     dark: !isFree && !isHidden && isBright(p.color), large: isFree))
@@ -203,16 +214,16 @@ public enum LabelPlacer {
         return out
     }
 
-    /// What's big but couldn't hold its own name, to name at the side: anything over 1.5% of `total` in the first five rings,
-    /// unless a name on a piece just inside it says nearly the same thing.
-    public static func bigPieces(layout: RingLayout, order: [Int], total: UInt64, named: inout Placed,
+    /// What's big but couldn't hold its own name, to name at the side: anything drawn over 1.5% of the way round in the
+    /// first five rings, unless a name on a piece just inside it says nearly the same thing. With halves, that's half its
+    /// share of its own half, so the smaller half's big things are named too.
+    public static func bigPieces(layout: RingLayout, order: [Int], named: inout Placed,
                                  name: (Piece) -> (title: String, value: String)) -> [Pick] {
-        let total = Double(max(total, 1))
         var picks: [Pick] = []
         for i in order.prefix(260) where !named.labelled.contains(i) {
             let p = layout.pieces[i]
             if p.isSmaller || p.style == .free || p.ring > 4 || named.nodes.contains(p.node) { continue }
-            let share = Double(p.size) / total
+            let share = Double(p.a1 - p.a0) / (2 * .pi)
             if share < 0.015 { continue }
             if p.ring == 0 && layout.focus == 0 { continue }
             var a = p.parent
@@ -228,6 +239,12 @@ public enum LabelPlacer {
             named.nodes.insert(p.node)
         }
         return picks
+    }
+
+    @available(*, deprecated, message: "Pieces are judged by how much of the ring they take: drop `total`.")
+    public static func bigPieces(layout: RingLayout, order: [Int], total: UInt64, named: inout Placed,
+                                 name: (Piece) -> (title: String, value: String)) -> [Pick] {
+        bigPieces(layout: layout, order: order, named: &named, name: name)
     }
 
     /// Names out at the sides, best first, each with a thin line to its piece, as many as fit. Unless `eachCounts`, a name
@@ -267,16 +284,16 @@ public enum LabelPlacer {
         /// How far out this wedge reaches along its own centre line. The line to a name starts there, so it never
         /// crosses the ring.
         func silhouette(_ index: Int, _ angle: Float) -> Float {
-            let p = layout.pieces[index]
-            var edge = p.r1
-            var j = index + 1
-            while j < Int(p.end) {
+            var edge = layout.pieces[index].r1
+            let all = layout.extent(of: index)
+            var j = all.lowerBound
+            while j < all.upperBound {
                 let q = layout.pieces[j]
                 if angle >= q.a0 && angle < q.a1 {
                     edge = max(edge, q.r1)
                     j += 1
                 } else {
-                    j = Int(q.end)
+                    j = max(Int(q.end), j + 1)
                 }
             }
             return edge

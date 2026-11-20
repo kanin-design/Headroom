@@ -33,6 +33,35 @@ final class SocketTests: XCTestCase {
     }
 
     /// A line far longer than one read, as an answer with a picture in it is, arrives whole, with what follows it.
+    func testAConnectionTakesLinesUpToItsOwnLimit() throws {
+        func deliver(limit: Int?) -> [Int] {
+            var fds: [Int32] = [0, 0]
+            guard socketpair(AF_UNIX, SOCK_STREAM, 0, &fds) == 0 else { return [-1] }
+            let writer = fds[1]
+            var on: Int32 = 1
+            setsockopt(writer, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+            Thread.detachNewThread {
+                var data = Data(repeating: 0x41, count: AgentConnection.longestRequest + 500_000)
+                data.append(0x0A)
+                data.withUnsafeBytes { raw in
+                    var sent = 0
+                    while sent < raw.count {
+                        let n = write(writer, raw.baseAddress! + sent, raw.count - sent)
+                        if n <= 0 { break }
+                        sent += n
+                    }
+                }
+                close(writer)
+            }
+            var got: [Int] = []
+            let connection = limit.map { AgentConnection(fd: fds[0], longestLine: $0) } ?? AgentConnection(fd: fds[0])
+            connection.read { got.append($0.count) }
+            return got
+        }
+        XCTAssertEqual(deliver(limit: nil), [], "longer than any request: the connection ends")
+        XCTAssertEqual(deliver(limit: 64 << 20), [AgentConnection.longestRequest + 500_000], "the relay takes an app's long answer")
+    }
+
     func testALongLineArrivesWhole() async throws {
         let path = TestPlace.socketPath()
         let listener = AgentListener(path: path)

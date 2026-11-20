@@ -62,7 +62,8 @@ public enum SunburstAgentTools {
             return .text(try summary(chart.summary(limit: limit)))
         case "chart_picture":
             func side(_ key: String) -> Int { min(max(integer(call.arguments[key]) ?? 800, 64), largestPicture) }
-            guard let image = chart.picture(width: side("width"), height: side("height")) else {
+            // Without the dither the PNG is about half the size, and an agent has no use for it.
+            guard let image = chart.picture(width: side("width"), height: side("height"), dithered: false) else {
                 throw AgentFailure("There's no picture: this Mac has no GPU to draw one with.")
             }
             guard let reply = AgentReply.image(image) else { throw AgentFailure("The picture couldn't be written as a PNG.") }

@@ -141,6 +141,31 @@ final class ChartToolsTests: XCTestCase {
         XCTAssertEqual(sized.height, 64)
     }
 
+    func testAnAgentsPictureLeavesOutTheDitherForAPNGHalfTheSize() throws {
+        try XCTSkipIf(MTLCreateSystemDefaultDevice() == nil, "no GPU here")
+        let (chart, _) = chart()
+        func png(_ dithered: Bool) throws -> Data {
+            let image = try XCTUnwrap(chart.picture(width: 800, height: 800, dithered: dithered))
+            guard case .image(let data, _)? = AgentReply.image(image)?.parts.first else { throw AgentFailure("no PNG") }
+            return data
+        }
+        let plain = try png(false), dithered = try png(true)
+        XCTAssertLessThan(Double(plain.count), Double(dithered.count) * 0.8, "\(plain.count) bytes against \(dithered.count)")
+        guard case .image(let sent, _)? = try answer(chart, "chart_picture", ["width": 800, "height": 800]).parts.first else {
+            return XCTFail("an image")
+        }
+        XCTAssertEqual(sent.count, plain.count, "the tool sends the plain one")
+    }
+
+    func testAFolderInTheMiddleOfAChainIsOnTheRing() throws {
+        let tree = PathTree([("A/B/C/x.bin", 500 * mb), ("A/B/C/y.bin", 400 * mb), ("other.bin", 300 * mb)])
+        let chart = SunburstChart(tree: tree, name: { tree.nodes[Int($0)].name }, engine: SunburstEngine(reducesMotion: { false }))
+        let b = Int(tree.node("A/B"))
+        XCTAssertEqual(try json(answer(chart, "chart_highlight", ["nodes": [b]]))["lit"] as? Int, 1)
+        _ = try answer(chart, "chart_zoom_in", ["node": b])
+        XCTAssertEqual(chart.focus, tree.node("A/B/C"), "into the chain's end, where the picture changes")
+    }
+
     /// Through a door, as an app gives them: an agent allowed only to look can read the chart but not move it.
     func testAnAgentAllowedToLookCanReadTheChartButNotMoveIt() async throws {
         let (chart, tree) = chart()

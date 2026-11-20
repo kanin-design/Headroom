@@ -30,6 +30,7 @@ struct UniformsGPU {
     var layer: Float = 0            // which pieces this pass draws: 0 the ones at rest, 1 the lit, 2 the lifted, 3 the one on top
     var litAbove: Float = 1         // how lit a piece has to be to count as lit, for that
     var top: Float = -1             // the piece pointed at, which lies over all the others; -1 when there's none
+    var dither: Float = 1           // 1 adds the pixel of noise that keeps dark gradients smooth, 0 leaves it out
     var tint: SIMD4<Float> = .zero  // the colour lit pieces take on, and in w how much
 }
 
@@ -63,7 +64,6 @@ struct UniformsGPU {
     private(set) var instanceCount = 0
     private var emphasisSlot = 0
     private var emphasisOffset = 0
-    /// Pieces that stand out past their place: the one you're pointing at, and one still settling back after it. They're
 
     private var piecesTexture: MTLTexture?
     private var glowTexture: MTLTexture?

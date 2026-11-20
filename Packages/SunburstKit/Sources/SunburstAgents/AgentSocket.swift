@@ -75,13 +75,19 @@ enum AgentSocket {
 final class AgentConnection: @unchecked Sendable {
     let fd: Int32
     /// A line longer than this isn't a request, and the connection is closed.
-    static let longestLine = 4 << 20
+    static let longestRequest = 4 << 20
+    /// A line longer than this ends the connection: `longestRequest` for what agents send, more for what the app answers,
+    /// which can carry a picture.
+    let longestLine: Int
 
     private let writes = DispatchQueue(label: "agent.writes")
     private let lock = NSLock()
     private var closed = false
 
-    init(fd: Int32) { self.fd = fd }
+    init(fd: Int32, longestLine: Int = AgentConnection.longestRequest) {
+        self.fd = fd
+        self.longestLine = longestLine
+    }
 
     /// Reads until the other end hangs up, handing over each line as it's complete, then closes the connection. Blocks: call
     /// it once, on a thread of its own.
@@ -105,7 +111,7 @@ final class AgentConnection: @unchecked Sendable {
             }
             if from > pending.startIndex { pending.removeSubrange(pending.startIndex..<from) }
             searched = pending.count
-            if pending.count > Self.longestLine { break }
+            if pending.count > longestLine { break }
         }
         // Closed here and nowhere else, so its number can't be handed to another connection while this one still reads.
         lock.withLock {

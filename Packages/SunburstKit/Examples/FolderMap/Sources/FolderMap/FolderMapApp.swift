@@ -15,7 +15,8 @@ struct FolderMapApp: App {
     @State private var model = Model()
 
     var body: some Scene {
-        WindowGroup {
+        // One window: a chart is shown in one view at a time.
+        Window("FolderMap", id: "main") {
             Sunburst(model.chart)
                 .frame(minWidth: 760, minHeight: 520)
                 .navigationTitle(model.title)

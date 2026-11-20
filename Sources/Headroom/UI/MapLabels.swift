@@ -29,7 +29,7 @@ extension LabelPlacer {
         if only == nil {
         switch lens {
         case .map, .backup:
-            candidates = bigPieces(layout: layout, order: ranked, total: tree.totals[Int(layout.focus)], named: &named) { p in
+            candidates = bigPieces(layout: layout, order: ranked, named: &named) { p in
                 (model.displayName(p.node), tree.sizeText(p.node))
             }
         case .changes:

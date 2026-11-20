@@ -87,6 +87,7 @@ public final class SunburstView: NSView {
     public override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     public override var mouseDownCanMoveWindow: Bool { false }
 
+    /// An engine is drawn by one view at a time: a new view takes it over from the one before.
     public init(engine: SunburstEngine) {
         self.engine = engine
         polar = { _ in nil }
