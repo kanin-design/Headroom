@@ -55,9 +55,58 @@ struct HookTests {
         #expect(emphasis[at(c)] == 0, "a match outside it doesn't")
         #expect(shares[at(a)] == 1)
         #expect(shares[at(b)] == 0 && shares[at(films)] == 0, "the rest keeps its own colour")
-        chart.alsoLight = nil
+        #expect(chart.engine.tintSharesShown == shares, "from no tint, it starts on the pieces that take it: nothing flashes")
+        chart.pointerMoved(to: nil)
+        #expect(chart.engine.tintShares == shares, "and it fades from them: who takes it stays until the next tint")
+        chart.alsoLight = { _ in SunburstAlsoLit(tint: [0, 1, 0]) }
         chart.pointerMoved(to: try middle(chart, of: tree.node("other")))
         #expect(chart.engine.tintShares.allSatisfy { $0 == 1 }, "with no say, a tint is for all that's lit")
+    }
+
+    @Test("A stretch of a folder cut by group takes the colour when everything drawn in it does")
+    func tintedStretches() throws {
+        // Films holds two groups: what's on both disks (a, b) and what's only here (c). What's straight around the root isn't
+        // cut, so it's a level down.
+        var tree = TestTree([("Home/Films/a.mov", 400 * mb), ("Home/Films/b.mov", 300 * mb), ("Home/Films/c.mov", 200 * mb),
+                             ("Home/Music/d.mp3", 300 * mb)])
+        for (path, group) in [("Home/Films/a.mov", UInt8(0)), ("Home/Films/b.mov", 0), ("Home/Films/c.mov", 1), ("Home/Films", 0),
+                              ("Home/Music", 1), ("Home/Music/d.mp3", 1)] {
+            tree.nodes[Int(tree.node(path))].group = group
+        }
+        let layout = RingLayout.build(tree: tree, focus: 0, parts: tree.parts, colorer: { _ in .zero })
+        let films = tree.node("Home/Films"), a = tree.node("Home/Films/a.mov"), b = tree.node("Home/Films/b.mov")
+        let first = try #require(layout.piece(of: films))
+        let stretches = layout.pieces.indices.filter { layout.pieces[$0].node == films }
+        #expect(stretches == [first, first + 3] && stretches.allSatisfy { layout.pieces[$0].isStretch }, "one stretch for each group")
+        // Pointing at Home lights all of it: the stretch over a and b takes the colour, though Films as a whole doesn't.
+        let home = try #require(layout.piece(of: tree.node("Home")))
+        let taking = SunburstChart<TestTree>.pieces(in: layout.extent(of: home), of: layout) { $0 == a || $0 == b }
+        #expect(Set(taking.flatMap { Array($0) }) == [first, first + 1, first + 2], "and not the stretch over c, nor c")
+    }
+
+    @Test("The names of what lights with the piece pointed at light with it")
+    func litNames() throws {
+        let (chart, tree) = chart()
+        let films = tree.node("Films"), music = tree.node("Music")
+        chart.pointerMoved(to: try middle(chart, of: films))
+        let named = Set(chart.labels.map(\.node))
+        let a = tree.node("Films/a.mov")
+        try #require(named.contains(a) && named.contains(music), "both are named in this picture")
+        #expect(chart.labelLight.isLit(films) && chart.labelLight.isLit(a), "the folder's name, and those of what's in it")
+        #expect(!chart.labelLight.isLit(music), "a name elsewhere steps back")
+        chart.pointerMoved(to: try middle(chart, of: a))
+        #expect(chart.labelLight.isLit(films), "the way out to what's pointed at stays readable")
+    }
+
+    @Test("The centre is read again after how names are written changes")
+    func readoutFollowsText() {
+        let (chart, _) = chart()
+        final class Count: @unchecked Sendable { var changes = 0 }
+        let count = Count()
+        withObservationTracking { _ = chart.readout } onChange: { count.changes += 1 }
+        chart.valueText = { _ in "–" }
+        #expect(count.changes == 1)
+        #expect(chart.readout.text == "–")
     }
 
     @Test("The app hears what's lit once, as it changes, not with every new picture")

@@ -161,7 +161,11 @@ public final class SunburstChart<Tree: SunburstTree> {
 
     /// The names around the ring, as `SunburstChartLabels` shows them.
     public private(set) var labels: [SunburstLabel] = [] {
-        didSet { namedNodes = Set(labels.map(\.node)) }
+        didSet {
+            namedNodes = Set(labels.map(\.node))
+            // New names, lit by what's pointed at as the old ones were.
+            if hovered != nil { labelLight = labelLightNow() }
+        }
     }
     /// Names wait while the pieces fly to their places after a zoom or a first picture, then fade in.
     public private(set) var labelsVisible = true
@@ -169,6 +173,8 @@ public final class SunburstChart<Tree: SunburstTree> {
     public private(set) var labelLight = LabelLight()
     /// What the centre says now: what's pointed at, or the node in the middle. Worked out when it's read.
     public var readout: SunburstReadout {
+        // What it says also changes with how names and sizes are written.
+        _ = textVersion
         let whole = tree.size(of: focus)
         if let hoveredPiece, hoveredPiece < engine.layout.pieces.count {
             let p = engine.layout.pieces[hoveredPiece]
@@ -193,6 +199,10 @@ public final class SunburstChart<Tree: SunburstTree> {
     @ObservationIgnored private var litLight: (version: Int, light: RingLight, primary: Int?)?
     /// The nodes that have a name, so a name lights with its piece.
     @ObservationIgnored private var namedNodes: Set<UInt32> = []
+    /// The pieces lit with what's pointed at, whole and on the way out to it, so their names light with them.
+    @ObservationIgnored private var litWithPointed: (whole: [Range<Int>], wayOut: [Int]) = ([], [])
+    /// Counts changes to how names and sizes are written, so the centre is read again after one.
+    private var textVersion = 0
     @ObservationIgnored private var batching = false
     @ObservationIgnored private var pendingMove: (node: UInt32, move: SunburstMove)?
     /// Where the pointer last was over the ring, so what's under it can be lit again after the picture changes.
@@ -530,11 +540,8 @@ public final class SunburstChart<Tree: SunburstTree> {
         focus = node
         switch move {
         case .into(let piece):
-            // What was lit was about where you were.
-            lit = nil
             redraw(.zoomIn(piece.map(ZoomMapping.init)))
         case .outFrom(let old):
-            lit = nil
             let layout = makeLayout()
             display(layout, .zoomOut(layout.nearestPiece(to: old, tree: tree).map { ZoomMapping(layout.pieces[$0]) }))
         case .plain(let transition):
@@ -638,14 +645,53 @@ public final class SunburstChart<Tree: SunburstTree> {
             }
             tint = also.tint
             // Of the piece and what's inside it, what the app says takes the colour; the rest keeps its own.
-            if let tints = also.tints {
-                tinted = whole.filter { !layout.pieces[$0].isSmaller && tints(layout.pieces[$0].node) }.map { $0..<$0 + 1 }
-            }
+            if let tints = also.tints { tinted = Self.pieces(in: whole, of: layout, taking: tints) }
         }
         engine.setEmphasis(primary: index, related: related, ancestors: ancestors, tint: tint, tinted: tinted)
         hovered = p.node
-        labelLight = LabelLight(hovering: p.node, named: namedNodes)
+        litWithPointed = (related, ancestors)
+        labelLight = labelLightNow()
         pointed(SunburstPointed(node: p.node, piece: index, isGathered: p.isSmaller), key: p.key)
+    }
+
+    /// Which names light: the pointed-at piece's, and those of the pieces lit with it.
+    private func labelLightNow() -> LabelLight {
+        let (whole, wayOut) = litWithPointed
+        let lit = labels.filter { label in whole.contains { $0.contains(label.pieceIndex) } || wayOut.contains(label.pieceIndex) }
+        return LabelLight(hovering: hovered, named: namedNodes, lit: Set(lit.map(\.node)))
+    }
+
+    /// The pieces in `extent` that take a tint: those whose node the app says do (a "smaller items" piece with the node that
+    /// holds them), and each stretch of a folder cut by group when everything drawn in that stretch does. So the stretch
+    /// that stands for what's backed up reads as backed up, though its folder as a whole isn't.
+    static func pieces(in extent: Range<Int>, of layout: RingLayout, taking tints: (UInt32) -> Bool) -> [Range<Int>] {
+        let pieces = layout.pieces
+        let base = extent.lowerBound
+        var takes = [Bool](repeating: false, count: extent.count)
+        var inside = [Int32](repeating: 0, count: extent.count), insideTaking = inside
+        // Depth first, so going backwards meets everything drawn in a piece before the piece itself.
+        for i in extent.reversed() {
+            let p = pieces[i], at = i - base
+            var on = tints(p.node)
+            // A stretch with its own things drawn in it, all of which take the tint.
+            if !on, p.isStretch, inside[at] > 0, inside[at] == insideTaking[at] { on = true }
+            takes[at] = on
+            let parent = Int(p.parent)
+            if parent >= base, parent < extent.upperBound {
+                inside[parent - base] += 1
+                if on { insideTaking[parent - base] += 1 }
+            }
+        }
+        var out: [Range<Int>] = []
+        var i = 0
+        while i < takes.count {
+            guard takes[i] else { i += 1; continue }
+            var end = i + 1
+            while end < takes.count, takes[end] { end += 1 }
+            out.append(base + i..<base + end)
+            i = end
+        }
+        return out
     }
 
     /// Tells the app what's lit as pointed at, once for each piece: its key stays the same from one picture to the next.
@@ -801,6 +847,7 @@ public final class SunburstChart<Tree: SunburstTree> {
 
     /// Something the names are made from changed: they're placed again, unless a new picture, which places them, is coming.
     private func namesChanged() {
+        textVersion &+= 1
         if !batching { placeLabels() }
     }
 

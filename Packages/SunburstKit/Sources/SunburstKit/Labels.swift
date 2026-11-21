@@ -26,20 +26,27 @@ public struct SunburstLabel: Identifiable, Equatable, Sendable {
     public var large: Bool
 }
 
-/// Whether the pointer is on anything on the ring, and which named piece it's on, if any.
+/// Whether the pointer is on anything on the ring, which named piece it's on, if any, and which names are lit with it.
 public struct LabelLight: Equatable, Sendable {
-    /// Whether the pointer is on the ring at all: then names other than its own step back.
+    /// Whether the pointer is on the ring at all: then the names of what isn't lit step back.
     public var onAnything = false
     /// The named node the pointer is on, if any.
     public var node: UInt32?
+    /// The named nodes that light with it: what's inside it, and the way out to it. Their names stay as easy to read as
+    /// their pieces are to see.
+    public var lit: Set<UInt32> = []
 
     public init() {}
 
-    /// For the piece the pointer is on, if any, and the pieces that have names.
-    public init(hovering node: UInt32?, named: Set<UInt32>) {
+    /// For the piece the pointer is on, if any, the pieces that have names, and those of them that light with it.
+    public init(hovering node: UInt32?, named: Set<UInt32>, lit: Set<UInt32> = []) {
         onAnything = node != nil
         self.node = node.flatMap { named.contains($0) ? $0 : nil }
+        self.lit = node == nil ? [] : lit
     }
+
+    /// Whether a node's name is lit: the pointer is on it, or on something it lights with.
+    public func isLit(_ node: UInt32) -> Bool { self.node == node || lit.contains(node) }
 }
 
 /// Where names can go: the ring, the width of the part of the window it's centred in, and how far up and down the names
@@ -55,7 +62,7 @@ public struct LabelArea: Sendable {
     public var top: CGFloat
     public var bottom: CGFloat
 
-    public init(center: CGPoint, radius: CGFloat, width: CGFloat, height: CGFloat, top: CGFloat = 78, bottom: CGFloat) {
+    public init(center: CGPoint, radius: CGFloat, width: CGFloat, height: CGFloat, top: CGFloat = 24, bottom: CGFloat) {
         self.center = center
         self.radius = radius
         self.width = width
@@ -416,7 +423,7 @@ public struct SunburstLabels<Outer: ViewModifier>: View {
             ForEach(labels) { label in
                 if label.place == .inside {
                     InsideLabel(label: label)
-                        .opacity(!light.onAnything || light.node == label.node ? 1 : 0.5)
+                        .opacity(!light.onAnything || light.isLit(label.node) ? 1 : 0.5)
                         .animation(.easeOut(duration: 0.14), value: light)
                         .position(label.position)
                         .allowsHitTesting(false)

@@ -79,7 +79,8 @@ final class ShaderTests: XCTestCase {
         u.center = SIMD2(200, 200)
         u.radius = 180
         u.scale = 1
-        u.liftPixels = 20
+        // Under the most a piece this thick may lift: three tenths of its 36 pixels.
+        u.liftPixels = 8
         u.bloom = 0
         u.hideScale = 1
         let commands = try XCTUnwrap(renderer.commandQueue.makeCommandBuffer())
@@ -87,8 +88,8 @@ final class ShaderTests: XCTestCase {
         commands.commit()
         commands.waitUntilCompleted()
 
-        // The inner one ends 90 pixels out and is lifted 10 more. Halfway into that, in the middle of its arc.
-        let x = 200 + Int((sin(Float(1)) * 95).rounded()), y = 200 - Int((cos(Float(1)) * 95).rounded())
+        // The inner one ends 90 pixels out and is lifted 4 more. Halfway into that, in the middle of its arc.
+        let x = 200 + Int((sin(Float(1)) * 92).rounded()), y = 200 - Int((cos(Float(1)) * 92).rounded())
         var pixel = [Float16](repeating: 0, count: 4)
         target.getBytes(&pixel, bytesPerRow: 4 * MemoryLayout<Float16>.stride, from: MTLRegionMake2D(x, y, 1, 1), mipmapLevel: 0)
         return SIMD4(Float(pixel[0]), Float(pixel[1]), Float(pixel[2]), Float(pixel[3]))

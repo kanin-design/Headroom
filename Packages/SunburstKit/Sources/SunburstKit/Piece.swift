@@ -28,6 +28,9 @@ public struct Piece: Sendable, Equatable {
     public var role: SunburstRole
     /// Shared, such as seeding: a bright dashed line along its outer edge.
     public var isShared: Bool
+    /// One of several pieces its node is drawn as, side by side: a stretch of a folder cut by group, or one the chart's
+    /// `cuts` asked for. Its `size` is the stretch's.
+    public var isStretch: Bool
     /// A number from 0 to 1 that tells neighbours apart.
     public var seed: Float
     /// The size it's drawn for: the node's size, or what a "smaller items" piece gathers.
@@ -49,7 +52,7 @@ public struct Piece: Sendable, Equatable {
     @inlinable
     init(node: UInt32, tail: UInt32, key: UInt64, a0: Float, a1: Float, r0: Float, r1: Float, ring: Int32, parent: Int32, end: Int32,
          isSmaller: Bool, smallerCount: Int32, color: SIMD3<Float>, role: SunburstRole, isShared: Bool, seed: Float, size: UInt64,
-         marked: Float = 0) {
+         marked: Float = 0, isStretch: Bool = false) {
         self.node = node
         self.tail = tail
         self.key = key
@@ -68,12 +71,13 @@ public struct Piece: Sendable, Equatable {
         self.seed = seed
         self.size = size
         self.marked = marked
+        self.isStretch = isStretch
     }
 
-    /// The number the shaders know its look by (`Style` in Shaders.metal).
+    /// The number the shaders know its look by (`Style` in Shaders.metal): what it is. Its marks, striped and shared, are
+    /// drawn over that, whatever it is.
     var look: Float {
         if isSmaller { return 3 }
-        if isShared { return 6 }
         switch role {
         case .container: return 0
         case .room: return 1

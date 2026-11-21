@@ -412,7 +412,7 @@ struct RingBuilder<Tree: SunburstTree> {
                     layout._pieces.append(Piece(node: id, tail: id, key: key ^ ((UInt64(stretch.key) &+ 1) << 48), a0: at, a1: to, r0: r0, r1: r1,
                                                 ring: Int32(ring), parent: parentPiece, end: Int32(layout._pieces.count + 1), isSmaller: false,
                                                 smallerCount: 0, color: stretch.color ?? color, role: role, isShared: shared, seed: seed,
-                                                size: stretch.size, marked: stretch.isMarked ? 1 : 0))
+                                                size: stretch.size, marked: stretch.isMarked ? 1 : 0, isStretch: true))
                     at = to
                 }
                 if hasChildren {
@@ -434,7 +434,8 @@ struct RingBuilder<Tree: SunburstTree> {
                     let at = Int32(layout._pieces.count)
                     layout._pieces.append(Piece(node: id, tail: id, key: key ^ (UInt64(r + 1) << 56), a0: run.a0, a1: run.a1, r0: r0, r1: r1,
                                                 ring: Int32(ring), parent: parentPiece, end: at + 1, isSmaller: false, smallerCount: 0,
-                                                color: run.color, role: role, isShared: shared, seed: seed, size: run.bytes, marked: marked))
+                                                color: run.color, role: role, isShared: shared, seed: seed, size: run.bytes, marked: marked,
+                                                isStretch: true))
                     let start = lists.buffer.count
                     lists.buffer.append(contentsOf: run.kids)
                     place(parent: id, piece: at, key: key, a0: run.a0, a1: run.a1, level: ring + 1, only: start..<lists.buffer.count,

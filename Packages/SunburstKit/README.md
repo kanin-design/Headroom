@@ -80,7 +80,7 @@ var body: some View {
 // Anywhere on the main actor:
 chart.zoom(into: node)              // into a node; a node with nothing inside is opened instead (onOpen)
 chart.zoomOut()                     // one level back out
-chart.highlight([a, b], tint: c)    // light these and the way out to them, in one colour, through every new picture
+chart.highlight([a, b], tint: c)    // light these and the way out to them, in one colour, until the pointer is on the ring
 chart.marked = [selected]           // drawn striped
 chart.valueText = { node in … }     // a node's own text in place of its size
 chart.tree = updated                // the same tree with new sizes, as often as they come: everything glides
@@ -161,7 +161,7 @@ Optional, with defaults:
 | Member | Default | What it says |
 | --- | --- | --- |
 | `role(of:)` | a container if it's a folder, else an item | What the node is (`SunburstRole`), which sets its look anywhere: `.container`, `.item`, `.room` (room not used, such as free space: a plain wedge around the whole), `.unreadable` (hatched), `.gone` (an outline, where it was) |
-| `isShared(_:)` | false | Being shared, such as a file being seeded: a bright dashed outer edge |
+| `isShared(_:)` | false | Being shared, such as a file being seeded: a bright dashed outer edge, over whatever its role draws |
 | `group(of:)` | nil | Which group the node is in, such as a place, for rings drawn by group (`Rings.order = .byGroup`) |
 | `isStillGrowing(_:)` | false | Still being measured: it doesn't chain yet |
 | `hasNode(_:)` | looks from the root down | Whether the tree has a node with this number, checked before a number from an agent is used; answer at once if your nodes are numbered in a row |
@@ -204,8 +204,8 @@ chart.onClick = { click in                                 // return true when h
     return openIfFile(pointed.node)
 }
 chart.hold(node); chart.hold(nil)                         // keep a piece lit while its card is open, then let go
-chart.highlight(copies, primary: this, tint: setColour)   // light these through every new picture, one of them most
-chart.highlight { layout in videos(in: layout) }          // or light what you work out from each picture (RingLight)
+chart.highlight(copies, primary: this, tint: setColour)   // light these from a list, one of them most, while sizes change
+chart.highlight { layout in videos(in: layout) }          // or what you work out from each picture (RingLight)
 chart.refreshPointer()                                     // what's pointed at means something else now: say it again
 chart.relabel(after: 0.05)                                 // what's named changed in a way only you know: name again
 chart.namer = MyNames()                                    // what's named, on the ring and at the sides (SunburstNamer)

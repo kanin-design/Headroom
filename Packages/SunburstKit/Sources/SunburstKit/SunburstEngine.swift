@@ -100,6 +100,9 @@ public final class SunburstEngine: @unchecked Sendable {
     private var tintColorGoal = SIMD3<Float>(0, 0, 0)
     /// Points: the least a lit piece is drawn across while a tint shows.
     private static let minLitPoints: Float = 4
+    /// Whether a lit piece too thin to see is drawn that wide. Not while only some of what's lit takes the tint: then the
+    /// tint says how much of what's lit it is, and widening its thin pieces would overstate that.
+    private var widensLit = true
 
     // In points, so the ring is right on any display, and when a window moves between displays.
     private var centerNow = SIMD2<Float>(0, 0)
@@ -227,7 +230,7 @@ public final class SunburstEngine: @unchecked Sendable {
             }
             newIndex[p.key] = index
             out.append(SegmentGPU(from: from, to: to, colorFrom: colorFrom, colorTo: colorTo, params: SIMD4(p.look, p.seed, p.calm, p.deeper),
-                                  plan: SIMD4(markedFrom, p.marked, 0, 0)))
+                                  plan: SIMD4(markedFrom, p.marked, p.isShared ? 1 : 0, 0)))
             outKeys.append(p.key)
             outParents.append(p.parent)
         }
@@ -261,7 +264,7 @@ public final class SunburstEngine: @unchecked Sendable {
                 if dissolve { to = g }
                 let leaving = instances[i].plan.x + (instances[i].plan.y - instances[i].plan.x) * colorT
                 out.append(SegmentGPU(from: g, to: to, colorFrom: nowColor, colorTo: SIMD4(nowColor.x, nowColor.y, nowColor.z, 0), params: instances[i].params,
-                                      plan: SIMD4(leaving, leaving, 0, 0)))
+                                      plan: SIMD4(leaving, leaving, instances[i].plan.z, 0)))
                 outKeys.append(keys[i])
                 outParents.append(-1)
             }
@@ -337,23 +340,29 @@ public final class SunburstEngine: @unchecked Sendable {
             for i in range where i < pieceCount { emphasisGoal[i] = 1 }
         }
         for i in ancestors where i < pieceCount { emphasisGoal[i] = max(emphasisGoal[i], 0.62) }
-        // All of what's lit takes the tint, or only what's said to.
-        let share: Float = tinted == nil ? 1 : 0
-        for i in tintShareGoal.indices { tintShareGoal[i] = share }
-        for range in tinted ?? [] {
-            for i in range where i < pieceCount { tintShareGoal[i] = 1 }
-        }
         if let primary, primary < pieceCount { emphasisGoal[primary] = 2 }
         dimGoal = (primary != nil || !related.isEmpty) ? 0.62 : 0
         if let tint, dimGoal > 0 {
-            // From no tint, it starts in its own colour rather than passing through the last one.
-            if tintNow < 0.01 { tintColorNow = tint }
+            // All of what's lit takes the tint, or only what's said to.
+            let share: Float = tinted == nil ? 1 : 0
+            for i in tintShareGoal.indices { tintShareGoal[i] = share }
+            for range in tinted ?? [] {
+                for i in range where i < pieceCount { tintShareGoal[i] = 1 }
+            }
+            widensLit = tinted == nil
+            // From no tint, it starts in its own colour rather than passing through the last one, and on the pieces that
+            // take it rather than gliding there from the ones that last did.
+            if tintNow < 0.01 {
+                tintColorNow = tint
+                tintShareNow = tintShareGoal
+            }
             tintColorGoal = tint
             tintGoal = 1
         } else {
+            // The tint fades from the pieces that had it: who takes it stays as it was until the next one.
             tintGoal = 0
         }
-        renderer?.liftLit = tintGoal > 0
+        renderer?.liftLit = tintGoal > 0 && widensLit
         lock.unlock()
         requestFrame()
     }
@@ -406,6 +415,8 @@ public final class SunburstEngine: @unchecked Sendable {
     @_spi(Diagnostics) public var emphasis: [Float] { lock.withLock { Array(emphasisGoal.prefix(pieceCount)) } }
     /// How much of the tint each piece is to take.
     @_spi(Diagnostics) public var tintShares: [Float] { lock.withLock { Array(tintShareGoal.prefix(pieceCount)) } }
+    /// How much of the tint each piece takes in the frame being drawn now.
+    @_spi(Diagnostics) public var tintSharesShown: [Float] { lock.withLock { Array(tintShareNow.prefix(pieceCount)) } }
 
     // MARK: Frames
 
@@ -610,7 +621,7 @@ public final class SunburstEngine: @unchecked Sendable {
         u.dim = dimNow
         u.liftPixels = Float(scale) * 5
         u.tint = SIMD4(tintColorNow, tintNow)
-        u.minLit = Self.minLitPoints
+        u.minLit = widensLit ? Self.minLitPoints : 0
         u.bloom = glowNow
         u.restSaturation = 1 - calmNow * (1 - Self.colourAtRest)
         u.glowAtRest = 1 - calmNow * (1 - Self.glowAtRest)

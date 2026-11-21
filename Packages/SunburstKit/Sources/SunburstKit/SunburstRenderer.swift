@@ -10,7 +10,7 @@ struct SegmentGPU {
     var colorFrom: SIMD4<Float>
     var colorTo: SIMD4<Float>
     var params: SIMD4<Float>
-    var plan: SIMD4<Float> = .zero      // marked at the start of the transition, marked at the end
+    var plan: SIMD4<Float> = .zero      // marked at the start of the transition, marked at the end, and whether it's shared
 }
 
 struct UniformsGPU {

@@ -13,7 +13,7 @@ struct Segment {
     float4 colorFrom;   // alpha fades pieces in and out
     float4 colorTo;
     float4 params;      // style, seed, how far it steps back until pointed at, how much of it goes on past the last ring
-    float4 plan;        // marked at the start of the transition, marked at the end
+    float4 plan;        // marked at the start of the transition, marked at the end, and whether it's shared
 };
 
 struct Uniforms {
@@ -38,7 +38,7 @@ struct Uniforms {
     float4 tint;            // the colour lit pieces and the folders they're in take on, and in w how much
 };
 
-enum Style { StyleNormal = 0, StyleFree = 1, StyleHidden = 2, StyleSmaller = 3, StyleFile = 4, StyleGhost = 5, StyleShared = 6 };
+enum Style { StyleNormal = 0, StyleFree = 1, StyleHidden = 2, StyleSmaller = 3, StyleFile = 4, StyleGhost = 5 };
 
 struct SegmentOut {
     float4 position [[position]];
@@ -55,6 +55,7 @@ struct SegmentOut {
     float emphasis [[flat]];
     float tintShare [[flat]];       // how much of the tint it takes
     float marked [[flat]];
+    float shared [[flat]];
 };
 
 static float2 onCircle(float a, float r) { return float2(sin(a), -cos(a)) * r; }
@@ -72,9 +73,10 @@ vertex SegmentOut segment_vertex(uint vid [[vertex_id]],
     float4 g = mix(s.from, s.to, u.t);
     float e = emphasis[iid];
     float share = tintShare[iid];
-    float lift = max(e - 1.0, 0.0) * u.liftPixels;
     float a0 = g.x, a1 = g.y;
     float r0 = max(g.z * u.radius, 0.0);
+    // The piece pointed at lifts outward, by no more than a share of its own thickness: a thin band stays thin.
+    float lift = max(e - 1.0, 0.0) * min(u.liftPixels, (g.w * u.radius - r0) * 0.3);
     float r1 = max(g.w * u.radius, r0) + lift;
     // While a tint shows, a lit piece too thin to see is drawn a few points across, so a small file still shows where it is.
     float shown = smoothstep(0.62, 1.0, e) * u.tint.w * share;
@@ -118,11 +120,19 @@ vertex SegmentOut segment_vertex(uint vid [[vertex_id]],
     o.emphasis = e;
     o.tintShare = share;
     o.marked = mix(s.plan.x, s.plan.y, saturate(u.t));
+    o.shared = s.plan.z;
     // Lit pieces lie over the ones at rest, lifted ones over those, and the one pointed at over them all, however lit it
     // is yet. Each pass draws one of the layers: a piece that isn't in it gets no area at all.
     float layer = float(iid) == u.top ? 3.0 : (e > 1.0 ? 2.0 : (e > u.litAbove ? 1.0 : 0.0));
     if (layer != u.layer) o.position = float4(2.0, 2.0, 0.0, 1.0);
     return o;
+}
+
+// Shared: a dashed bright line along the outer edge, so it reads at a glance without taking the colour.
+static inline float3 withSharedEdge(float3 color, float theta, float r, float outerEdge, float scale) {
+    float dash = step(0.5, fract(theta * r / (scale * 7.0)));
+    float band = 1.0 - saturate((outerEdge - r) / (scale * 2.6));
+    return mix(color, float3(0.80, 0.95, 1.0), band * dash * 0.9);
 }
 
 static float hash21(float2 p) {
@@ -203,6 +213,7 @@ fragment PieceOut segment_fragment(SegmentOut in [[stage_in]], constant Uniforms
         color = base * 0.13 * (0.85 + 0.3 * e);
         float rim = 1.0 - saturate(-d / (u.scale * 1.6));
         color += (base * 0.8 + float3(0.10)) * rim * rim;
+        if (in.shared > 0.5) color = withSharedEdge(color, theta, r, in.r1 - radialGap, u.scale);
     } else if (in.style == StyleHidden) {
         // Hidden space is hatched: it's real, but you can't see into it.
         float stripes = smoothstep(0.42, 0.58, fract((in.p.x + in.p.y) / (u.scale * 8.0)));
@@ -229,12 +240,7 @@ fragment PieceOut segment_fragment(SegmentOut in [[stage_in]], constant Uniforms
         float strength = mix(u.restSaturation * (1.0 - 0.5 * in.calm), 1.0, e);
         color = mix(float3(dot(color, float3(0.3, 0.6, 0.1))), color, strength);
         color *= mix(1.0 - 0.2 * in.calm, 1.0, e);
-        // Shared: a dashed bright line along the outer edge, so it reads at a glance without taking the colour.
-        if (in.style == StyleShared) {
-            float dash = step(0.5, fract(theta * r / (u.scale * 7.0)));
-            float band = 1.0 - saturate((in.r1 - radialGap - r) / (u.scale * 2.6));
-            color = mix(color, float3(0.80, 0.95, 1.0), band * dash * 0.9);
-        }
+        if (in.shared > 0.5) color = withSharedEdge(color, theta, r, in.r1 - radialGap, u.scale);
         // Marked: striped and see-through, with a thin bright edge.
         if (in.marked > 0.001) {
             float across = fract((in.p.x - in.p.y) / (u.scale * 10.0));

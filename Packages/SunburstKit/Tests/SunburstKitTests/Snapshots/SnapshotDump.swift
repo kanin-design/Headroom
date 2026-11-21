@@ -137,7 +137,7 @@ enum SnapshotCases {
     }
 
     /// How the piece is drawn, in words that stay the same whatever the kit calls it.
-    static func look(_ p: Piece) -> String { "s\(Int(p.look))" }
+    static func look(_ p: Piece) -> String { p.isShared && !p.isSmaller ? "s6" : "s\(Int(p.look))" }
 
     /// The GPU that draws the pictures here. Another one draws edges a little differently, so pictures are only compared
     /// with ones the same GPU drew.

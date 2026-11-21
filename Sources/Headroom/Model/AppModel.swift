@@ -1245,9 +1245,7 @@ final class AppModel {
         if let pair, pair.tree === tree, !p.isSmaller, var place = pair.places[p.node] {
             // A folder cut into stretches: this stretch's place is that of what it's over.
             let pieces = engine.layout.pieces
-            if index + 1 < pieces.count, pieces[index + 1].parent == Int32(index), pieces[index + 1].node != p.node,
-               engine.layout.piece(of: p.node) != index || (Int(p.end) < pieces.count && pieces[Int(p.end)].node == p.node),
-               let first = pair.places[pieces[index + 1].node] {
+            if p.isStretch, index + 1 < pieces.count, pieces[index + 1].parent == Int32(index), let first = pair.places[pieces[index + 1].node] {
                 place = first
             }
             return HoverInfo(pieceIndex: index, node: p.node, title: displayName(piece: p), bytes: p.size, share: "",
