@@ -8,28 +8,22 @@ import Testing
 @Suite("Snapshots")
 @MainActor
 struct SnapshotTests {
-    private let baseline = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Baseline")
+    private nonisolated static let baseline = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Baseline")
 
-    @Test("Every case is drawn as before")
+    /// Whether this GPU drew the baseline's pictures (`Baseline/gpu.txt`). Another one draws edges a little differently,
+    /// so its pictures are only compared with its own.
+    nonisolated static var drewTheBaseline: Bool {
+        let drew = try? String(contentsOf: baseline.appendingPathComponent("gpu.txt"), encoding: .utf8)
+        return drew?.trimmingCharacters(in: .whitespacesAndNewlines) == SnapshotCases.gpu
+    }
+
+    @Test("Every case is laid out and named as before")
     func everyCase() throws {
         var differ: [String] = []
         for c in SnapshotCases.all {
-            let expected = try String(contentsOf: baseline.appendingPathComponent("\(c.name).txt"), encoding: .utf8)
-            var (text, layout, _) = SnapshotCases.dump(c)
-            if c.picture, let pic = SnapshotCases.picture(layout) {
-                // The shaders are built with fast maths, so a change anywhere in them can move a value by the last bit and a
-                // pixel by one step of brightness. A picture counts as the same if no pixel is off by more than that, and
-                // only a few are off at all; anything a person could see is far more.
-                let was = try Data(contentsOf: baseline.appendingPathComponent("\(c.name).png"))
-                let (count, most) = try Self.difference(was, pic.png)
-                if most > 1 || count > 32 {
-                    let out = FileManager.default.temporaryDirectory.appendingPathComponent("snapshot-\(c.name).png")
-                    try? pic.png.write(to: out)
-                    differ.append("\(c.name): picture differs in \(count) pixels by up to \(most), see \(out.path)")
-                }
-            }
-            // The picture's hash line is checked above, by its pixels.
-            text = text.split(separator: "\n").filter { !$0.hasPrefix("picture ") }.joined(separator: "\n") + "\n"
+            let expected = try String(contentsOf: Self.baseline.appendingPathComponent("\(c.name).txt"), encoding: .utf8)
+            // The picture's hash line is checked by its pixels, on the GPU that drew it.
+            let text = SnapshotCases.dump(c).0.split(separator: "\n").filter { !$0.hasPrefix("picture ") }.joined(separator: "\n") + "\n"
             let expectedText = expected.split(separator: "\n").filter { !$0.hasPrefix("picture ") }.joined(separator: "\n") + "\n"
             let a = expectedText.split(separator: "\n", omittingEmptySubsequences: false)
             let b = text.split(separator: "\n", omittingEmptySubsequences: false)
@@ -37,6 +31,25 @@ struct SnapshotTests {
                 let was = i < a.count ? String(a[i].prefix(220)) : "(end)"
                 let now = i < b.count ? String(b[i].prefix(220)) : "(end)"
                 differ.append("\(c.name) line \(i + 1):\n  was: \(was)\n  now: \(now)")
+            }
+        }
+        #expect(differ.isEmpty, Comment(rawValue: differ.joined(separator: "\n")))
+    }
+
+    @Test("Every picture is drawn as before", .enabled(if: drewTheBaseline, "the baseline's pictures were drawn on another GPU"))
+    func everyPicture() throws {
+        var differ: [String] = []
+        for c in SnapshotCases.all where c.picture {
+            guard let pic = SnapshotCases.picture(SnapshotCases.dump(c).1) else { continue }
+            // The shaders are built with fast maths, so a change anywhere in them can move a value by the last bit and a
+            // pixel by one step of brightness. A picture counts as the same if no pixel is off by more than that, and
+            // only a few are off at all; anything a person could see is far more.
+            let was = try Data(contentsOf: Self.baseline.appendingPathComponent("\(c.name).png"))
+            let (count, most) = try Self.difference(was, pic.png)
+            if most > 1 || count > 32 {
+                let out = FileManager.default.temporaryDirectory.appendingPathComponent("snapshot-\(c.name).png")
+                try? pic.png.write(to: out)
+                differ.append("\(c.name): picture differs in \(count) pixels by up to \(most), see \(out.path)")
             }
         }
         #expect(differ.isEmpty, Comment(rawValue: differ.joined(separator: "\n")))

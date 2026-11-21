@@ -1,5 +1,6 @@
 import AppKit
 import ImageIO
+import Metal
 import Testing
 @testable import SunburstKit
 
@@ -19,22 +20,22 @@ enum SnapshotCases {
         var colours = false
     }
 
-    nonisolated(unsafe) static let homeData: FixtureData = {
+    static let homeData: FixtureData = {
         var d = FixtureData()
         Fixtures.home(into: &d, at: 0, seed: 3)
         d.finish()
         return d
     }()
-    nonisolated(unsafe) static let diskData = Fixtures.disk()
+    static let diskData = Fixtures.disk()
     /// The home folder with every list smallest first, as a tree whose sizes changed after it was sorted can be.
-    nonisolated(unsafe) static let unsortedData: FixtureData = {
+    static let unsortedData: FixtureData = {
         var d = homeData
         for i in d.nodes.indices { d.nodes[i].children.reverse() }
         return d
     }()
-    nonisolated(unsafe) static let partialData = Fixtures.disk(partial: true)
-    nonisolated(unsafe) static let pairData = Fixtures.pair()
-    nonisolated(unsafe) static let libraryData = Fixtures.library()
+    static let partialData = Fixtures.disk(partial: true)
+    static let pairData = Fixtures.pair()
+    static let libraryData = Fixtures.library()
 
     /// The first folder inside, `levels` times over: somewhere deep to zoom into.
     static func deep(_ path: String, _ levels: Int) -> (FixtureData) -> UInt32 {
@@ -138,6 +139,10 @@ enum SnapshotCases {
     /// How the piece is drawn, in words that stay the same whatever the kit calls it.
     static func look(_ p: Piece) -> String { "s\(Int(p.look))" }
 
+    /// The GPU that draws the pictures here. Another one draws edges a little differently, so pictures are only compared
+    /// with ones the same GPU drew.
+    static var gpu: String { MTLCreateSystemDefaultDevice()?.name ?? "none" }
+
     /// The settled picture of a case, 360 points square at 2x, with no dither: the bytes and a PNG to look at.
     @MainActor
     static func picture(_ layout: RingLayout) -> (hash: UInt64, png: Data)? {
@@ -172,5 +177,6 @@ struct SnapshotWriter {
             }
             try all.write(to: folder.appendingPathComponent("\(c.name).txt"), atomically: true, encoding: .utf8)
         }
+        try (SnapshotCases.gpu + "\n").write(to: folder.appendingPathComponent("gpu.txt"), atomically: true, encoding: .utf8)
     }
 }

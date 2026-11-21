@@ -6,7 +6,7 @@ import XCTest
 /// BENCH=1 swift test -c release --filter LayoutBench
 @MainActor
 final class LayoutBench: XCTestCase {
-    nonisolated(unsafe) static let big: FixtureData = {
+    static let big: FixtureData = {
         var d = FixtureData()
         d.band = true
         let you = d.add("Your files", in: 0, folder: true)
