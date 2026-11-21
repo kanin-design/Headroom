@@ -2,39 +2,53 @@ import AppKit
 import SwiftUI
 
 /// Which pieces of the ring are named, and what they're called, in each view. SunburstKit finds where the names fit.
-extension LabelPlacer {
-    /// `only` names just these at the sides: what you're pointing at in the panel.
-    @MainActor
-    static func place(layout: RingLayout, ring: RingGeometry, lens: Lens, tree: DiskTree, model: AppModel, only: [Pick]? = nil) -> [SunburstLabel] {
-        guard ring.radius > 0, !layout.pieces.isEmpty else { return [] }
-        // The drive row at the bottom is kept clear.
-        let area = LabelArea(center: ring.center, radius: ring.radius, width: ring.mapWidth, height: ring.windowHeight,
-                             top: 78, bottom: ring.windowHeight - 26 - DriveRow.height - 14)
-        var named = Placed()
-        // Inside the pieces, biggest first. Only in the Map view: elsewhere most of the ring is dimmed on purpose.
-        // With both of Backup's sides, the two halves are named first, whatever they hold.
-        let ranked = order(layout, halvesFirst: tree.twoSides)
-        var out: [SunburstLabel] = []
-        if lens == .map || lens == .freeUp || lens == .backup {
-            out = inside(layout: layout, order: ranked, area: area, halves: tree.twoSides, named: &named) { p in
-                if lens == .freeUp && p.style != .free { return nil }
-                // The top of a chain is what you'd call it. The whole chain shows when you point at it.
-                return (p.style == .free ? "Free" : model.displayName(p.node), tree.sizeText(p.node))
-            }
-        }
+@MainActor
+struct HeadroomNames: SunburstNamer {
+    /// Something to name at the side, by what it names: its piece is found in each picture as it's drawn.
+    struct Named {
+        var nodes: [UInt32]
+        var title: String
+        var value: String
+    }
 
-        // Out at the sides: what's big but can't hold its own name.
-        typealias Candidate = Pick
-        var candidates: [Candidate] = only ?? []
-        if only == nil {
+    let model: AppModel
+    /// Just these at the sides: what you're pointing at in the panel.
+    var only: [Named]?
+
+    /// Which view's names: the one on screen, or Free Up's for what's pointed at in its list.
+    private var lens: Lens { only == nil ? model.labelLens : .freeUp }
+
+    /// Inside the pieces, biggest first. Only in the Map view: elsewhere most of the ring is dimmed on purpose. In Free Up,
+    /// only free space.
+    func inside(_ p: Piece) -> (title: String, value: String)? {
+        let lens = lens
+        guard lens == .map || lens == .freeUp || lens == .backup, let tree = model.tree else { return nil }
+        if lens == .freeUp && p.role != .room { return nil }
+        // The top of a chain is what you'd call it. The whole chain shows when you point at it.
+        return (p.role == .room ? "Free" : model.displayName(p.node), tree.sizeText(p.node))
+    }
+
+    /// Out at the sides: what's big but can't hold its own name, or what this view's lists point at.
+    func sides(_ layout: RingLayout, order ranked: [Int], named: inout LabelPlacer.Placed) -> [LabelPlacer.Pick] {
+        guard let tree = model.tree else { return [] }
+        typealias Candidate = LabelPlacer.Pick
+        if let only {
+            var picks: [Candidate] = []
+            for one in only {
+                guard let at = layout.bestPiece(for: one.nodes, in: tree), !picks.contains(where: { $0.index == at }) else { continue }
+                picks.append(Candidate(index: at, title: one.title, value: one.value, score: Double(layout.pieces[at].size)))
+            }
+            return picks
+        }
+        var candidates: [Candidate] = []
         switch lens {
         case .map, .backup:
-            candidates = bigPieces(layout: layout, order: ranked, named: &named) { p in
+            candidates = LabelPlacer.bigPieces(layout: layout, order: ranked, named: &named) { p in
                 (model.displayName(p.node), tree.sizeText(p.node))
             }
         case .changes:
             for row in model.changeRows.prefix(18) {
-                if let i = visiblePiece(for: row.node, layout: layout, tree: tree), !candidates.contains(where: { $0.index == i }) {
+                if let i = layout.nearestPiece(to: row.node, tree: tree), !candidates.contains(where: { $0.index == i }) {
                     // What grew has a plus. What's gone untouched is just how much.
                     let sign = model.changeWindow.isUntouched ? "" : "+"
                     candidates.append(Candidate(index: i, title: row.title, value: sign + formatBytes(UInt64(max(row.delta, 0))), score: Double(row.delta)))
@@ -52,7 +66,7 @@ extension LabelPlacer {
                 let places = CopiesMap.places(shown.map { tree.nodes[Int($0)].has(NodeFlag.directory) ? $0 : tree.nodes[Int($0)].parent }, in: tree, short: true)
                 for (at, node) in shown.enumerated() where node != 0 {
                     // Copies too small to show apart, or side by side, can share a piece of the ring: each still gets its own name.
-                    guard let i = visiblePiece(for: node, layout: layout, tree: tree) else { continue }
+                    guard let i = layout.nearestPiece(to: node, tree: tree) else { continue }
                     let n = tree.nodes[Int(node)]
                     let isFolder = n.has(NodeFlag.directory)
                     // Copies side by side in one folder are named by their own names, which is what tells them apart; the others
@@ -74,7 +88,7 @@ extension LabelPlacer {
                 // The biggest sets, named at the copy to keep. Hardlinks, clones and symlinks take no extra space, so they're
                 // named when you point at them.
                 for group in model.copyGroupsHere.prefix(24) where group.kind == .duplicate {
-                    if let i = visiblePiece(for: group.home, layout: layout, tree: tree), !candidates.contains(where: { $0.index == i }) {
+                    if let i = layout.nearestPiece(to: group.home, tree: tree), !candidates.contains(where: { $0.index == i }) {
                         candidates.append(Candidate(index: i, title: group.title, value: formatBytes(group.back), score: Double(group.back)))
                     }
                 }
@@ -86,36 +100,30 @@ extension LabelPlacer {
             for row in model.shownRows.sorted(by: { $0.gain > $1.gain }).prefix(40) where row.action != .restart && row.action != .softwareUpdate && row.nodes.count <= 3 && Double(row.gain) >= bar
                 && !(row.inUse != nil && row.tier <= .rebuilds && model.rowStates[row.id] == TickState.none) {
                 let biggest = row.nodes.max { tree.totals[Int($0)] < tree.totals[Int($1)] }
-                if let biggest, let i = visiblePiece(for: biggest, layout: layout, tree: tree), !candidates.contains(where: { $0.index == i }) {
+                if let biggest, let i = layout.nearestPiece(to: biggest, tree: tree), !candidates.contains(where: { $0.index == i }) {
                     candidates.append(Candidate(index: i, title: row.title, value: formatBytes(row.gain), score: Double(row.gain)))
                 }
             }
             // What's been moved is on its way out through here.
-            if let after = model.afterClean, after.state == .waiting, let trash = model.trashNode(in: tree), let i = visiblePiece(for: trash, layout: layout, tree: tree) {
+            if let after = model.afterClean, after.state == .waiting, let trash = model.trashNode(in: tree), let i = layout.nearestPiece(to: trash, tree: tree) {
                 candidates.removeAll { $0.index == i }
                 candidates.insert(Candidate(index: i, title: "In the Trash", value: tree.sizeText(trash), score: .greatestFiniteMagnitude), at: 0)
             }
         }
-        }
-        // A name just outside a piece that's already named would say nearly the same thing. Not a copy's: each is a place of
-        // its own, however near the others it is.
-        let eachCounts = lens == .copies && model.pointedCopyGroup != nil
-        return out + sides(candidates, layout: layout, area: area, eachCounts: eachCounts)
+        return candidates
     }
 
-    private static func visiblePiece(for node: UInt32, layout: RingLayout, tree: DiskTree) -> Int? {
-        layout.nearestPiece(to: node, tree: tree)
-    }
+    /// A name just outside a piece that's already named would say nearly the same thing. Not a copy's: each is a place of
+    /// its own, however near the others it is.
+    var leavesOutRepeats: Bool { !(lens == .copies && model.pointedCopyGroup != nil) }
 }
 
+/// The names around the ring, from the chart, each at the side with the menu of what it names.
 struct LabelsLayer: View {
     let model: AppModel
 
     var body: some View {
-        SunburstLabels(labels: model.labels, light: model.labelLight, visible: model.labelsVisible, width: model.ring.mapWidth,
-                       onEnter: { model.enterLabel(piece: $0) }, onLeave: { model.leaveLabel(piece: $0) },
-                       onOpen: { model.openLabel(piece: $0, count: $1) },
-                       outer: { NamedLabel(model: model, node: $0.node) })
+        SunburstChartLabels(model.chart, width: model.ring.mapWidth) { NamedLabel(model: model, node: $0.node) }
     }
 }
 
@@ -181,27 +189,9 @@ struct CenterReadout: View {
     }
 
     private func bigNumber(_ bytes: UInt64, size: CGFloat, color: Color = .white, sign: String = "") -> some View {
-        let (value, unit) = splitBytes(bytes)
-        let digits = Font.system(size: size * 0.235, weight: .semibold, design: .rounded).monospacedDigit()
-        let units = Font.system(size: size * 0.105, weight: .semibold, design: .rounded)
-        // Each in a box as wide as it ever gets, so the digits' right edge and the unit stay put whatever the value.
-        return HStack(alignment: .firstTextBaseline, spacing: size * 0.016) {
-            ZStack(alignment: .trailing) {
-                // Changes has a sign in front, so its box makes room for one in every number it shows.
-                Text(model.view == .changes ? "−8.88" : "8.88").font(digits).hidden()
-                Text(sign + value)
-                    .font(digits)
-                    .contentTransition(Motion.rolling(Double(bytes)))
-            }
-            ZStack(alignment: .leading) {
-                Text("MB").font(units).hidden()
-                Text(unit)
-                    .font(units)
-                    .foregroundStyle(color.opacity(0.62))
-            }
-        }
-        .foregroundStyle(color)
-        .animation(.snappy(duration: 0.32), value: bytes)
+        // Changes has a sign in front, so its number keeps room for one whatever it shows.
+        SunburstNumber(sign + formatBytes(bytes), size: bytes, diameter: size, color: color,
+                       widest: model.view == .changes ? "−8.88 MB" : "8.88 MB")
     }
 
     /// Free space is on screen from the first frame, because the disk itself reports it.

@@ -293,7 +293,7 @@ final class SectionsTests: XCTestCase {
     func testPointingAtSomethingLightsItsPieceAndWhatsInsideIt() throws {
         let d = filmDisk()
         let layout = ring(d)
-        let lit = layout.lit(by: [d.node("/Volumes/Fake/LLM")], tree: d.tree)
+        let lit = layout.light([d.node("/Volumes/Fake/LLM")], in: d.tree)
         let first = try XCTUnwrap(lit.full.first)
         XCTAssertGreaterThan(first.count, 1, "Its children light with it")
     }
@@ -306,7 +306,7 @@ final class SectionsTests: XCTestCase {
         let stills = d.node("/Volumes/Fake/a/review/stills")
         let layout = ring(d)
         XCTAssertFalse(layout.pieces.contains { $0.node == stills }, "It has no piece of its own: the chain is drawn as one")
-        let lit = layout.lit(by: [stills], tree: d.tree)
+        let lit = layout.light([stills], in: d.tree)
         XCTAssertFalse(lit.full.isEmpty && lit.holding.isEmpty, "It lights all the same")
     }
 
@@ -318,7 +318,7 @@ final class SectionsTests: XCTestCase {
         let tiny = d.node("/Volumes/Fake/big/tiny")
         let layout = ring(d)
         XCTAssertFalse(layout.pieces.contains { $0.node == tiny && !$0.isSmaller })
-        let lit = layout.lit(by: [tiny], tree: d.tree)
+        let lit = layout.light([tiny], in: d.tree)
         XCTAssertFalse(lit.holding.isEmpty, "Whatever holds it lights instead of nothing at all")
     }
 }

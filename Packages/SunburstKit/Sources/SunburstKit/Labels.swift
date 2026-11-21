@@ -170,10 +170,11 @@ public enum LabelPlacer {
         public init() {}
     }
 
-    /// Pieces biggest first. With halves, the halves come first, whatever they hold, and the rest go by how big they're
-    /// drawn: a folder on the smaller half is drawn bigger than its size alone would say.
-    public static func order(_ layout: RingLayout, halvesFirst: Bool) -> [Int] {
-        layout.pieces.indices.sorted { a, b in
+    /// Pieces biggest first. With a split, its sides come first, whatever they hold, and the rest go by how big they're
+    /// drawn: a folder on the smaller side is drawn bigger than its size alone would say.
+    public static func order(_ layout: RingLayout) -> [Int] {
+        let halvesFirst = layout.isSplit
+        return layout.pieces.indices.sorted { a, b in
             let pa = layout.pieces[a], pb = layout.pieces[b]
             if halvesFirst, (pa.ring == 0) != (pb.ring == 0) { return pa.ring == 0 }
             return halvesFirst ? pa.a1 - pa.a0 > pb.a1 - pb.a0 : pa.size > pb.size
@@ -181,26 +182,30 @@ public enum LabelPlacer {
     }
 
     /// Names inside the pieces, biggest first, wherever they fit. `name` says what a piece is called and what it holds, or
-    /// nil to leave it unnamed. With `halves`, the two halves of the root are always named, just either side of six o'clock.
-    public static func inside(layout: RingLayout, order: [Int], area: LabelArea, halves: Bool, named: inout Placed,
+    /// nil to leave it unnamed. A split drawn as a ring has its two sides always named, just either side of six o'clock.
+    /// Nothing is named on a band: it's too thin, and the centre says what's pointed at.
+    public static func inside(layout: RingLayout, order: [Int], area: LabelArea, named: inout Placed,
                               name: (Piece) -> (title: String, value: String)?) -> [SunburstLabel] {
+        let halves = layout.levels.first.map { $0.part == .split && !$0.isThin } ?? false
+        let sides = halves ? layout.pieces.lazy.filter { $0.ring == 0 }.count : 0
         let R = area.radius
         guard R > 0, !layout.pieces.isEmpty else { return [] }
         var out: [SunburstLabel] = []
         for i in order.prefix(160) {
             let p = layout.pieces[i]
             if p.isSmaller || p.ring > 3 || named.nodes.contains(p.node) { continue }
+            if Int(p.ring) < layout.levels.count, layout.levels[Int(p.ring)].isThin, !p.isSpace { continue }
             guard let said = name(p) else { continue }
-            let isFree = p.style == .free
+            let isFree = p.role == .room
             // A ghost is drawn faint, whatever its colour, so its name is light like on the dark parts.
-            let isHidden = p.style == .hidden || p.style == .ghost
+            let isHidden = p.role == .unreadable || p.role == .gone
             // Free space's name is written larger, and measured as it's drawn.
             let w = isFree ? max(width(said.title, .largeTitle), width(said.value, .largeValue)) + 2
                            : max(width(said.title, .title), width(said.value, .value)) + 2
             let h: CGFloat = isFree ? 34 : 31
             // Free space reads best out in the open part of the wedge, away from the crowded middle.
             let outward: CGFloat = isFree ? 1.08 : 1
-            let halfSpot: CGFloat? = halves && layout.focus == 0 && p.ring == 0 ? (p.a0 < .pi ? .pi - 0.27 : .pi + 0.27) : nil
+            let halfSpot: CGFloat? = halves && layout.focus == 0 && p.ring == 0 ? sideSpot(p, sides: sides) : nil
             if let angle = halfSpot ?? fit(w: w, h: h, piece: p, radius: R, outward: outward) {
                 let rm = CGFloat(p.r0 + p.r1) * 0.5 * R * outward
                 out.append(SunburstLabel(id: p.key, pieceIndex: i, node: p.node, title: said.title, value: said.value,
@@ -214,6 +219,14 @@ public enum LabelPlacer {
         return out
     }
 
+    /// Where a side of a split names itself: as near six o'clock as its own arc allows, so two sides are named either side of
+    /// it and more each inside their own.
+    static func sideSpot(_ p: Piece, sides: Int) -> CGFloat {
+        if sides == 2 { return p.a0 < .pi ? .pi - 0.27 : .pi + 0.27 }
+        let low = CGFloat(p.a0) + 0.27, high = CGFloat(p.a1) - 0.27
+        return min(max(.pi, low), max(high, low))
+    }
+
     /// What's big but couldn't hold its own name, to name at the side: anything drawn over 1.5% of the way round in the
     /// first five rings, unless a name on a piece just inside it says nearly the same thing. With halves, that's half its
     /// share of its own half, so the smaller half's big things are named too.
@@ -222,10 +235,12 @@ public enum LabelPlacer {
         var picks: [Pick] = []
         for i in order.prefix(260) where !named.labelled.contains(i) {
             let p = layout.pieces[i]
-            if p.isSmaller || p.style == .free || p.ring > 4 || named.nodes.contains(p.node) { continue }
+            if p.isSmaller || p.role == .room || p.ring > 4 || named.nodes.contains(p.node) { continue }
             let share = Double(p.a1 - p.a0) / (2 * .pi)
             if share < 0.015 { continue }
             if p.ring == 0 && layout.focus == 0 { continue }
+            // A band's segments aren't named: the centre says what's pointed at.
+            if Int(p.ring) < layout.levels.count, layout.levels[Int(p.ring)].isThin, !p.isSpace { continue }
             var a = p.parent
             var redundant = false
             while a >= 0 {

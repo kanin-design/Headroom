@@ -36,8 +36,8 @@ final class ItemTreeTests: XCTestCase {
         XCTAssertEqual(names(tree, tree.children(of: 4)), ["Shop", "Out", "Coffee"], "of the same size, in the order given")
         XCTAssertTrue(tree.isFolder(4))
         XCTAssertFalse(tree.isFolder(5))
-        XCTAssertEqual(tree.style(of: 4), .folder)
-        XCTAssertEqual(tree.style(of: 8), .file)
+        XCTAssertEqual(tree.role(of: 4), .container)
+        XCTAssertEqual(tree.role(of: 8), .item)
         XCTAssertEqual(tree.firstChild(of: 8), 0)
     }
 

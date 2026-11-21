@@ -67,7 +67,8 @@ private struct DriveCapsuleLabel: View {
 }
 
 private func icon(_ drive: DriveInfo) -> String {
-    drive.isBoot || drive.isInternal ? "internaldrive" : "externaldrive"
+    if drive.isNetwork { return "externaldrive.connected.to.line.below" }
+    return drive.isBoot || drive.isInternal ? "internaldrive" : "externaldrive"
 }
 
 private func detail(_ drive: DriveInfo) -> String {
@@ -113,44 +114,55 @@ private struct SourceCapsule: View {
     }
 }
 
-/// Where Backup's files go: any other drive that can be written to, connected or used before.
+/// Where Backup's files go: the locations used before, then the other drives connected now, or any folder at all, a
+/// server's share included.
 private struct DestinationCapsule: View {
     let model: AppModel
 
     var body: some View {
         let destination = model.backup.destination
         let connected = destination.flatMap { model.connected($0.drive) }
+        let used = model.usedLocations
         Menu {
-            ForEach(model.destinationChoices) { drive in
-                let why = model.whyNotDestination(drive)
-                Button {
-                    model.chooseDestination(drive)
-                } label: {
-                    Label {
-                        Text(drive.name)
-                        Text(why.map { "\($0) · \(drive.fileSystemTitle)" } ?? (drive.largestFile != nil ? detail(drive) + " · No files over 4 GB" : detail(drive)))
-                    } icon: {
-                        Image(systemName: destination.map { $0.drive.isSame(as: drive) } == true ? "checkmark" : icon(drive))
-                    }
+            ForEach(used) { place in
+                choice(place.title, on: place.drive, isCurrent: destination?.isSame(as: place) == true) {
+                    model.chooseDestination(place.drive, folder: place.folder)
                 }
-                .disabled(why != nil || model.isCleaning)
+            }
+            if !used.isEmpty { Divider() }
+            ForEach(model.otherDrives) { drive in
+                choice(drive.name, on: drive, isCurrent: false) { model.chooseDestination(drive) }
             }
             Divider()
             Button("Choose Folder…") { model.chooseDestinationFolder() }
-                .disabled(model.isCleaning || !model.drives.contains { model.whyNotDestination($0) == nil })
+                .disabled(model.isCleaning)
         } label: {
             if let destination {
                 DriveCapsuleLabel(icon: icon(destination.drive), title: destination.title,
                              detail: connected.map { "\(formatBytes($0.free)) free · \($0.fileSystemTitle)" } ?? "Not connected", dim: connected == nil)
             } else {
-                DriveCapsuleLabel(icon: "externaldrive.badge.plus", title: "Choose a drive", detail: "Backup drive", dim: true)
+                DriveCapsuleLabel(icon: "externaldrive.badge.plus", title: "Choose a location", detail: "Backup location", dim: true)
             }
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help("Choose the backup drive")
-        .accessibilityLabel("Backup drive")
+        .help("Choose where Backup puts files")
+        .accessibilityLabel("Backup location")
+    }
+
+    /// One place to choose: its name, how full its drive is, and why it can't be chosen when it can't.
+    private func choice(_ title: String, on drive: DriveInfo, isCurrent: Bool, choose: @escaping () -> Void) -> some View {
+        let why = model.whyNotDestination(drive)
+        return Button(action: choose) {
+            Label {
+                Text(title)
+                Text(why.map { "\($0) · \(drive.fileSystemTitle)" } ?? (drive.largestFile != nil ? detail(drive) + " · No files over 4 GB" : detail(drive)))
+            } icon: {
+                Image(systemName: isCurrent ? "checkmark" : icon(drive))
+            }
+        }
+        .disabled(why != nil || model.isCleaning)
     }
 }

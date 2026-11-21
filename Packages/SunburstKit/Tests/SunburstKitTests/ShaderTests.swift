@@ -49,6 +49,7 @@ final class ShaderTests: XCTestCase {
             "minLit": MemoryLayout<UniformsGPU>.offset(of: \.minLit),
             "layer": MemoryLayout<UniformsGPU>.offset(of: \.layer), "litAbove": MemoryLayout<UniformsGPU>.offset(of: \.litAbove),
             "top": MemoryLayout<UniformsGPU>.offset(of: \.top), "dither": MemoryLayout<UniformsGPU>.offset(of: \.dither),
+            "dialSides": MemoryLayout<UniformsGPU>.offset(of: \.dialSides),
             "tint": MemoryLayout<UniformsGPU>.offset(of: \.tint),
         ]
         XCTAssertEqual(members.count, swift.count, "the same numbers on both sides")
@@ -66,7 +67,7 @@ final class ShaderTests: XCTestCase {
         let inner = SIMD4<Float>(0.5, 1.5, 0.3, 0.5), outer = SIMD4<Float>(0.5, 1.5, 0.5, 0.7)
         renderer.setInstances([SegmentGPU(from: inner, to: inner, colorFrom: red, colorTo: red, params: .zero),
                                SegmentGPU(from: outer, to: outer, colorFrom: blue, colorTo: blue, params: .zero)])
-        renderer.writeEmphasis([1.5, 1.5], top: top)
+        renderer.writeEmphasis([1.5, 1.5], tintShares: [1, 1], top: top)
 
         let side = 400
         let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: SunburstRenderer.outputFormat, width: side, height: side, mipmapped: false)

@@ -22,6 +22,8 @@ let package = Package(
         .testTarget(
             name: "SunburstKitTests",
             dependencies: ["SunburstKit"],
+            // What the kit drew before parts, for the snapshot tests to compare with.
+            exclude: ["Snapshots/Baseline"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .target(

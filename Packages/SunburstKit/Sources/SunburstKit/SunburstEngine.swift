@@ -5,7 +5,7 @@ import QuartzCore
 import simd
 
 /// How a change of picture moves.
-public enum RingTransition: Sendable {
+public enum RingTransition: Sendable, Equatable {
     /// The first picture: it unfurls out of the middle.
     case appear
     /// Into a piece: everything scales around it until it fills the ring. Give the piece's place as it was.
@@ -18,16 +18,24 @@ public enum RingTransition: Sendable {
     case live
     /// A new picture of the same place, as after something changed or was removed.
     case settle
+    /// The new picture at once: nothing moves or fades.
+    case instant
 
     /// New sizes arriving: what's pointed at stays lit and pieces glide on.
     public var isLive: Bool {
         if case .live = self { return true }
         return false
     }
+
+    /// At once: nothing moves.
+    public var isInstant: Bool {
+        if case .instant = self { return true }
+        return false
+    }
 }
 
 /// Where a zoom is headed: it maps the old ring to the new one, sliding everything else out of the way.
-public struct ZoomMapping: Sendable {
+public struct ZoomMapping: Sendable, Equatable {
     /// The piece's start and end angle, and its outer edge as a share of the radius.
     public var a0: Float, a1: Float, r1: Float
 
@@ -80,6 +88,9 @@ public final class SunburstEngine: @unchecked Sendable {
 
     private var emphasisNow: [Float] = []
     private var emphasisGoal: [Float] = []
+    /// How much of the tint each piece takes, 0 to 1: all of it, unless only some of what's lit is to take it.
+    private var tintShareNow: [Float] = []
+    private var tintShareGoal: [Float] = []
     private var dimNow: Float = 0
     private var dimGoal: Float = 0
     /// One colour for what's lit and the way out to it, so things far apart read as one set, and how much of it shows.
@@ -102,6 +113,8 @@ public final class SunburstEngine: @unchecked Sendable {
     /// For a check: where the ring is drawn now, in points.
     @_spi(Diagnostics) public var placeNow: (center: SIMD2<Float>, radius: Float) { lock.withLock { (centerNow, radiusNow) } }
     private var scaleShown = true
+    /// How many wholes the scale counts across, from the picture on screen: 0 for no scale.
+    private var dialSides = 1
 
     /// Colour and glow can hold back until something is pointed at. See `setCalm(_:)`.
     private var calmNow: Float = 1
@@ -136,7 +149,10 @@ public final class SunburstEngine: @unchecked Sendable {
     @MainActor public func apply(_ new: RingLayout, _ transition: RingTransition) {
         // Asked here, on the main thread, where System Settings can be.
         let reduceMotion = reducesMotion()
-        lock.withLock { applyLocked(new, transition, reduceMotion: reduceMotion) }
+        lock.withLock {
+            dialSides = new.dialSides
+            applyLocked(new, transition, reduceMotion: reduceMotion)
+        }
         requestFrame()
     }
 
@@ -152,6 +168,8 @@ public final class SunburstEngine: @unchecked Sendable {
         var enterMapping: ZoomMapping?
         var exitMapping: ZoomMapping?
         var appearing = false
+        var instant = false
+        if case .instant = transition { instant = true }
         switch transition {
         case .appear: appearing = true
         case .zoomIn(let m): exitMapping = m
@@ -182,7 +200,10 @@ public final class SunburstEngine: @unchecked Sendable {
             var from = to
             var colorFrom = SIMD4<Float>(p.color.x, p.color.y, p.color.z, 0)
             var markedFrom = p.marked
-            if dissolve {
+            if instant {
+                // Where it ends up, as it is there.
+                colorFrom = colorTo
+            } else if dissolve {
                 // Where it ends up, fading in.
             } else if let i = currentIndex[p.key], !appearing {
                 from = geometryNow(i)
@@ -205,7 +226,7 @@ public final class SunburstEngine: @unchecked Sendable {
                 from = m.apply(to)
             }
             newIndex[p.key] = index
-            out.append(SegmentGPU(from: from, to: to, colorFrom: colorFrom, colorTo: colorTo, params: SIMD4(p.style.rawValue, p.seed, p.calm, p.deeper),
+            out.append(SegmentGPU(from: from, to: to, colorFrom: colorFrom, colorTo: colorTo, params: SIMD4(p.look, p.seed, p.calm, p.deeper),
                                   plan: SIMD4(markedFrom, p.marked, 0, 0)))
             outKeys.append(p.key)
             outParents.append(p.parent)
@@ -213,7 +234,7 @@ public final class SunburstEngine: @unchecked Sendable {
         pieceCount = out.count
 
         // Whatever isn't in the new picture leaves: into the piece that survives it, or carried off by the zoom.
-        if !appearing {
+        if !appearing && !instant {
             for i in keys.indices where !used[i] {
                 let nowColor = colorNow(i)
                 if nowColor.w < 0.01 { continue }
@@ -250,12 +271,16 @@ public final class SunburstEngine: @unchecked Sendable {
         if case .live = transition { isLive = true }
         var nextNow = [Float](repeating: 0, count: out.count)
         var nextGoal = nextNow
+        var nextShareNow = [Float](repeating: 1, count: out.count)
+        var nextShareGoal = nextShareNow
         if isLive {
             // New numbers shouldn't disturb what you're pointing at.
             for i in 0..<pieceCount {
                 if let old = currentIndex[outKeys[i]], old < emphasisNow.count {
                     nextNow[i] = emphasisNow[old]
                     nextGoal[i] = emphasisGoal[old]
+                    nextShareNow[i] = tintShareNow[old]
+                    nextShareGoal[i] = tintShareGoal[old]
                 }
             }
         } else {
@@ -271,6 +296,8 @@ public final class SunburstEngine: @unchecked Sendable {
         renderer?.setInstances(instances)
         emphasisNow = nextNow
         emphasisGoal = nextGoal
+        tintShareNow = nextShareNow
+        tintShareGoal = nextShareGoal
         emphasisChangedSinceDrawn = true
 
         // Every piece now starts from where it is, with less far to go. Scaling the speed up to match keeps anything still
@@ -283,10 +310,12 @@ public final class SunburstEngine: @unchecked Sendable {
         case .zoomIn, .zoomOut: setSpring(stiffness: 120, dampingRatio: 0.92)
         case .recolor: setSpring(stiffness: 70, dampingRatio: 1)
         case .live: setSpring(stiffness: 60, dampingRatio: 1)
-        case .settle: setSpring(stiffness: 80, dampingRatio: 1)
+        case .settle, .instant: setSpring(stiffness: 80, dampingRatio: 1)
         }
         if dissolve { setSpring(stiffness: 90, dampingRatio: 1) }
         velocity = min(carried, stiffness.squareRoot())
+        // Already there.
+        if instant { x = 1 }
     }
 
     private func setSpring(stiffness k: Float, dampingRatio: Float) {
@@ -297,8 +326,10 @@ public final class SunburstEngine: @unchecked Sendable {
     // MARK: Emphasis
 
     /// Lifts these pieces and lets the rest step back. Pass nothing to bring everything back. With a tint, what's lit takes on
-    /// that colour, the folders it's in part of it, and a lit piece too small to see is drawn a few points across.
-    @MainActor public func setEmphasis(primary: Int?, related: [Range<Int>], ancestors: [Int] = [], tint: SIMD3<Float>? = nil) {
+    /// that colour, the folders it's in part of it, and a lit piece too small to see is drawn a few points across; with
+    /// `tinted`, only those pieces take it, and the rest keep their own colours.
+    @MainActor public func setEmphasis(primary: Int?, related: [Range<Int>], ancestors: [Int] = [], tint: SIMD3<Float>? = nil,
+                                       tinted: [Range<Int>]? = nil) {
         lock.lock()
         guard !emphasisGoal.isEmpty else { lock.unlock(); return }
         for i in emphasisGoal.indices { emphasisGoal[i] = 0 }
@@ -306,6 +337,12 @@ public final class SunburstEngine: @unchecked Sendable {
             for i in range where i < pieceCount { emphasisGoal[i] = 1 }
         }
         for i in ancestors where i < pieceCount { emphasisGoal[i] = max(emphasisGoal[i], 0.62) }
+        // All of what's lit takes the tint, or only what's said to.
+        let share: Float = tinted == nil ? 1 : 0
+        for i in tintShareGoal.indices { tintShareGoal[i] = share }
+        for range in tinted ?? [] {
+            for i in range where i < pieceCount { tintShareGoal[i] = 1 }
+        }
         if let primary, primary < pieceCount { emphasisGoal[primary] = 2 }
         dimGoal = (primary != nil || !related.isEmpty) ? 0.62 : 0
         if let tint, dimGoal > 0 {
@@ -365,6 +402,10 @@ public final class SunburstEngine: @unchecked Sendable {
 
     /// For a check: how many pieces are lit, or on their way to being.
     @_spi(Diagnostics) public var litPieces: Int { lock.withLock { emphasisGoal.filter { $0 > 0.5 }.count } }
+    /// Which pieces are lit, and how: 2 pointed at, 1 lit whole, 0.62 on the way out.
+    @_spi(Diagnostics) public var emphasis: [Float] { lock.withLock { Array(emphasisGoal.prefix(pieceCount)) } }
+    /// How much of the tint each piece is to take.
+    @_spi(Diagnostics) public var tintShares: [Float] { lock.withLock { Array(tintShareGoal.prefix(pieceCount)) } }
 
     // MARK: Frames
 
@@ -380,7 +421,7 @@ public final class SunburstEngine: @unchecked Sendable {
         // Once a frame at most, and only for a frame that's drawn: each write takes the next of three places in a buffer
         // the GPU may still be reading the last two frames from.
         if emphasisChangedSinceDrawn, encode != nil {
-            renderer?.writeEmphasis(emphasisNow, top: emphasisGoal.firstIndex { $0 > 1 })
+            renderer?.writeEmphasis(emphasisNow, tintShares: tintShareNow, top: emphasisGoal.firstIndex { $0 > 1 })
             emphasisChangedSinceDrawn = false
         }
         encode?(uniforms(viewport: viewport, scale: scale, headroom: headroom))
@@ -419,7 +460,7 @@ public final class SunburstEngine: @unchecked Sendable {
             u.center = SIMD2(Float(width), Float(height)) * 0.5
             u.radius = max(Float(min(width, height)) * 0.5 - Float(scale) * 22, 1)
             u.dither = dithered ? 1 : 0
-            renderer.writeEmphasis(emphasisNow, top: emphasisGoal.firstIndex { $0 > 1 })
+            renderer.writeEmphasis(emphasisNow, tintShares: tintShareNow, top: emphasisGoal.firstIndex { $0 > 1 })
             renderer.encode(into: commands, target: target, uniforms: u)
         }
         if target.storageMode == .managed, let blit = commands.makeBlitCommandEncoder() {
@@ -475,6 +516,8 @@ public final class SunburstEngine: @unchecked Sendable {
                 parents.removeLast(parents.count - pieceCount)
                 emphasisNow.removeLast(emphasisNow.count - pieceCount)
                 emphasisGoal.removeLast(emphasisGoal.count - pieceCount)
+                tintShareNow.removeLast(tintShareNow.count - pieceCount)
+                tintShareGoal.removeLast(tintShareGoal.count - pieceCount)
                 renderer?.setInstances(instances)
                 emphasisChangedSinceDrawn = true
             }
@@ -490,6 +533,14 @@ public final class SunburstEngine: @unchecked Sendable {
                 emphasisChanged = true
             } else if now != goal {
                 emphasisNow[i] = goal
+                emphasisChanged = true
+            }
+            let shareGoal = tintShareGoal[i], share = tintShareNow[i]
+            if abs(shareGoal - share) > 0.002 {
+                tintShareNow[i] = share + (shareGoal - share) * (shareGoal > share ? rise : fall)
+                emphasisChanged = true
+            } else if share != shareGoal {
+                tintShareNow[i] = shareGoal
                 emphasisChanged = true
             }
         }
@@ -564,7 +615,8 @@ public final class SunburstEngine: @unchecked Sendable {
         u.restSaturation = 1 - calmNow * (1 - Self.colourAtRest)
         u.glowAtRest = 1 - calmNow * (1 - Self.glowAtRest)
         u.headroom = Float(headroom)
-        u.hideScale = scaleShown ? 0 : 1
+        u.hideScale = scaleShown && dialSides > 0 ? 0 : 1
+        u.dialSides = Float(max(dialSides, 1))
         return u
     }
 }

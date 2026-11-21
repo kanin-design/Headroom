@@ -10,10 +10,13 @@ middle to go back out.
 
 - **One line to use.** `Sunburst(tree)` gives the ring, names on and beside it, a readout in the middle, pointing, zooming,
   keys and VoiceOver.
+- **Made of parts.** A chart is a centre, thin bands, rings and a dial, each with one meaning wherever it's used, so whoever
+  has read one chart can read another. You choose the parts; the kit keeps what each one means.
 - **Any tree.** It doesn't own your data. Hand it the items you already have (`ItemTree`), or answer a small protocol from a
   tree of your own, and you decide what the colours mean, what's marked and what a click opens.
-- **Fast.** The layout of a whole 2-million-file disk's top six rings, about 400 pieces, takes a third of a millisecond. The
-  layout is generic and `@inlinable`, so your build specialises it for your own tree. Every piece is one instanced quad
+- **Fast.** The layout of a million-file disk's top six rings, about a thousand pieces, takes half a millisecond on an
+  Apple silicon Mac, and a photo library's 80,000 files in one folder take 0.4 ms. The layout is generic and `@inlinable`,
+  so your build specialises it for your own tree. Every piece is one instanced quad
   shaped on the GPU, so drawing barely depends on how many there are, and the ring only draws while something moves, on a
   thread of its own.
 - **Moves well.** One spring carries every change: a zoom, new sizes arriving while something is measured, new colours.
@@ -27,10 +30,10 @@ Requirements: macOS 14 or later, Swift 6.2 or later. No dependencies.
 
 ## Install
 
-Add this repository's URL as a package dependency, up to the next minor version from 0.2.1: in Xcode with File › Add
+Add this repository's URL as a package dependency, up to the next minor version from 0.3.0: in Xcode with File › Add
 Package Dependencies… (Dependency Rule: Up to Next Minor Version), or in `Package.swift` with `.package(url:_:)` and
-`.upToNextMinor(from: "0.2.1")`. Before 1.0, a patch such as 0.2.2 never breaks your code; a minor version such as 0.3.0
-may, and its notes say what. Then add `SunburstKit` to your target's dependencies, and `SunburstAgents` too if you want
+`.upToNextMinor(from: "0.3.0")`. Before 1.0, a patch such as 0.3.1 never breaks your code; a minor version such as 0.4.0
+may, and its notes say what. Coming from 0.2, see [Moving from 0.2](#moving-from-02). Then add `SunburstKit` to your target's dependencies, and `SunburstAgents` too if you want
 agents.
 
 ## Quick start
@@ -77,7 +80,7 @@ var body: some View {
 // Anywhere on the main actor:
 chart.zoom(into: node)              // into a node; a node with nothing inside is opened instead (onOpen)
 chart.zoomOut()                     // one level back out
-chart.highlight([a, b], tint: c)    // light these and the way out to them, in one colour
+chart.highlight([a, b], tint: c)    // light these and the way out to them, in one colour, through every new picture
 chart.marked = [selected]           // drawn striped
 chart.valueText = { node in … }     // a node's own text in place of its size
 chart.tree = updated                // the same tree with new sizes, as often as they come: everything glides
@@ -92,16 +95,58 @@ chart.takesKeyboardFocus = true     // keys work without a click first
 A chart is shown in one view at a time, so give each window its own. What the pointer is on stays lit while sizes,
 marks and colours change under it.
 
-The [example app](Examples/FolderMap) is a complete Mac app: it shows a folder, or a made-up sample shaped like a real home
-folder, and lets agents in when you ask.
-Run it with `swift run` in its folder.
+Two example apps, each run with `swift run` in its folder:
+
+- [FolderMap](Examples/FolderMap) is a complete Mac app: it shows a folder, or a made-up sample shaped like a real home
+  folder, and lets agents in when you ask.
+- [Budget](Examples/Budget) is a month's money in the same parts as a disk: fixed and variable costs in a thin band, the
+  costs in rings outside it, and what isn't spent yet as room, a plain wedge closing the circle.
 
 ![The same chart zoomed into Photos: years in the first ring, albums and their videos outside them, and the middle saying 77.2 GB, 23% of Home](docs/zoomed.jpg)
+
+## Parts
+
+![A disk drawn by the kit, its parts labelled: the centre in the hole; a thin band hugging it that says what the disk is made of; rings of folders going out; free space as a plain wedge and what can't be read as a hatched one, closing the circle; and the dial of fine marks around the edge](docs/anatomy.jpg)
+
+Every chart is made of the same parts, from the middle out, and each always means the same thing:
+
+| Part | Where | Means |
+| --- | --- | --- |
+| Centre | the hole | the one number that matters now: the kit's readout, or anything of your own |
+| Split | the first level | several wholes sharing the circle, such as two disks compared: equal halves, each its own 100% |
+| Bands | thin levels just outside the centre | what the whole is made of: read it, don't act on it |
+| Rings | the thick levels going out | the things, one level deeper each ring |
+| Dial | outside the last ring | the scale: a mark every 1%, a longer one every 10%, of the circle or of each side |
+
+You describe a chart's parts in one value, `SunburstParts`, and hand it over whole, so a chart can swap all of them at
+once (another view, more rings) and every piece glides to its new place:
+
+```swift
+// A whole disk: what it's made of in a thin band, then six rings of folders.
+chart.parts = SunburstParts(bands: [.init()], rings: .init(RingSizes(depth: 6)))
+
+// Two disks compared: each side its own whole, its folders ordered and cut by where their files are.
+chart.parts = SunburstParts(split: .band, rings: .init(order: .byGroup), dial: .init(counts: .eachSide))
+
+// The plain chart, rings and a dial, is the default.
+chart.setParts(SunburstParts(), animated: false)
+```
+
+Each level of the tree goes to one part: the split takes the first level, each band the next, and the rings the rest.
+
+- **What's yours to choose:** whether to have a split, how many bands and which levels they take, how many rings and how
+  thick (`RingSizes`, `RingStyle`), how the rings order and cut what's in them (`Rings.order`, `keep`, `cuts`), and whether
+  there's a dial and what it counts.
+- **What's fixed, and why:** a band sits inside the rings, because a chart reads from the whole in the middle to the detail
+  at the edge. It's thin, so context never competes with the things, and its segments aren't named: no name would fit, and
+  the centre says what's pointed at. Zooming into one of its segments removes it, since you're inside that part now. A split
+  drawn as a band (`.band`) frames the rings; drawn as a ring (`.ring`) it writes each side's name on it.
 
 ## Your tree: `SunburstTree`
 
 Nodes are `UInt32` numbers. Node 0 is the root, and 0 as a child or a sibling means there is none. Children are listed
-biggest first, and things of the same size are drawn in the order you list them, such as by name.
+biggest first, and things of the same size are drawn in the order you list them, such as by name. The tree says what
+exists, how big it is and what it is; how it's drawn is the chart's parts.
 
 | Member | What it says |
 | --- | --- |
@@ -109,22 +154,19 @@ biggest first, and things of the same size are drawn in the order you list them,
 | `size(of:)` | Everything in the node: sets its angle |
 | `ownSize(of:)` | What the node holds outside its children, drawn with what's too small to draw on its own |
 | `isFolder(_:)` | Only folders chain: a folder that's nearly all one subfolder is drawn as one piece with it |
-| `style(of:)` | `.folder`, `.file`, `.free` (room not used), `.hidden` (hatched), `.ghost` (faint), `.shared` (a bright dashed outer edge) |
 | `nameKey(of:)` | A number from the name, the same from one tree to the next, so pieces glide to their new places |
 
-Optional, with defaults that draw a plain sunburst:
+Optional, with defaults:
 
-| Member | Default | What it does |
+| Member | Default | What it says |
 | --- | --- | --- |
-| `hasHalves`, `isHalf(_:)` | off | The root is two halves of the ring whatever their sizes, such as one disk beside another |
-| `hasBand` | off | A thin band around the middle of the root, with the rings outside it |
-| `rootRank(of:)` | 0 | Around the root, lower ranks first, then biggest first |
-| `isPlainShape(_:)` | false | A shape of its own in the first ring, such as free space, reaching out as far as the rest does on average |
-| `hasGroups`, `group(of:)` | off | Things in a folder are drawn by group first, and a folder that holds more than one group is drawn as a stretch for each |
+| `role(of:)` | a container if it's a folder, else an item | What the node is (`SunburstRole`), which sets its look anywhere: `.container`, `.item`, `.room` (room not used, such as free space: a plain wedge around the whole), `.unreadable` (hatched), `.gone` (an outline, where it was) |
+| `isShared(_:)` | false | Being shared, such as a file being seeded: a bright dashed outer edge |
+| `group(of:)` | nil | Which group the node is in, such as a place, for rings drawn by group (`Rings.order = .byGroup`) |
 | `isStillGrowing(_:)` | false | Still being measured: it doesn't chain yet |
-| `isAlwaysDrawn(_:)` | false | Drawn as its own piece however thin, never gathered into "smaller items", such as every film in a library |
-| `stretches(of:)` | nil | The node's piece cut into stretches side by side, each with its own size, colour and mark, such as by where its files are and which are selected; what's inside is drawn under the whole piece |
 | `hasNode(_:)` | looks from the root down | Whether the tree has a node with this number, checked before a number from an agent is used; answer at once if your nodes are numbered in a row |
+| `isInside(_:_:)` | walks up from the node | Whether a node is a folder or inside it; answer at once if your nodes are numbered depth first |
+| `branches(_:)` | a set that walks up from each node it's asked about | Some nodes as a set for lighting (`SunburstNodeSet`), asked about once for every piece; a tree numbered depth first answers from ranges |
 
 ## Colours
 
@@ -139,7 +181,42 @@ chart.colours = { tree, focus in
 ```
 
 `BranchColours` can also be painted branch by branch, for rules of your own: `paint(_:hue:)`, `paintQuietly(_:)` for
-something that should stay in the background, and `set(_:_:)`.
+something that should stay in the background, and `set(_:_:)`. So that a branch keeps its colour however sizes change, a
+`HueMemory` remembers which hue each name had; you keep its `indices` between launches:
+
+```swift
+var hues = HueMemory(saved)                       // [name: index], as you kept it
+for branch in branches { colours.paint(branch, hue: hues.hue(for: name(branch), after: previous)) }
+if hues.changed { save(hues.indices) }
+```
+
+## Hooks
+
+The chart does what every ring does the same way. What your app does its own way, it says through hooks:
+
+```swift
+chart.isMarked = { node in plan.contains(node) }          // striped, asked per piece: for a selection too big to list
+chart.alsoLight = { node in .init(copies(of: node), gathered: .shown, tint: setColour) }   // more lights with what's pointed at
+chart.alsoLight = { _ in .init(tint: green, tints: { backedUp.contains($0) }) }  // or, in what's pointed at, colour some
+chart.onPoint = { pointed in panel.show(pointed?.node) }  // what's under the pointer, as it changes
+chart.onClick = { click in                                 // return true when handled, so the chart doesn't zoom
+    guard case .piece(let pointed) = click.target else { return false }
+    return openIfFile(pointed.node)
+}
+chart.hold(node); chart.hold(nil)                         // keep a piece lit while its card is open, then let go
+chart.highlight(copies, primary: this, tint: setColour)   // light these through every new picture, one of them most
+chart.highlight { layout in videos(in: layout) }          // or light what you work out from each picture (RingLight)
+chart.refreshPointer()                                     // what's pointed at means something else now: say it again
+chart.relabel(after: 0.05)                                 // what's named changed in a way only you know: name again
+chart.namer = MyNames()                                    // what's named, on the ring and at the sides (SunburstNamer)
+chart.calm = 0.55; chart.glow = 0.35                      // how much pieces at rest hold back, and glow
+
+Sunburst(chart) { readout, diameter in                     // a centre of your own, in the kit's slot
+    MyCentre(diameter: diameter)                           // SunburstNumber reads like the kit's big number
+}
+```
+
+
 
 ## Reading it from code
 
@@ -160,8 +237,10 @@ let image = chart.picture(width: 1600, height: 1200)       // nil without a GPU
 
 `Sunburst` is made of parts you can use directly, for a view of your own:
 
-- `RingLayout.build(tree:focus:colorer:marked:sizes:)` turns part of a tree into `Piece`s, depth first, with how many
-  rings to draw (`RingSizes`, `RingStyle`). `piece(of:)`, `hit(angle:radius:)` and `extent(of:)` find pieces in it.
+- `RingLayout.build(tree:focus:parts:colorer:marked:)` turns part of a tree into `Piece`s, depth first, in the chart's
+  parts; `levels` says which part each level is. `piece(of:)`, `hit(angle:radius:)` and `extent(of:)` find pieces in it,
+  and `light(_:in:)` says what lights up for a set of nodes, with everything inside them (`RingLight`), asking the tree's
+  own set of them (`branches(_:)`).
 - `SunburstEngine` holds the picture on screen and everything that moves: `apply(_:_:)` with a `RingTransition`,
   `setEmphasis(primary:related:ancestors:tint:)` to light pieces, `setCalm(_:)`, `setGlow(_:)`, `showsScale`.
 - `SunburstView` is the `NSView` that draws it, with callbacks for the pointer, keys and VoiceOver; `RingPlace` tells it
@@ -206,6 +285,32 @@ command, ready to copy into an agent's settings (`AgentDoor.command`).
   image.
 
 The example app has an Agents… button that does all of this.
+
+## Moving from 0.2
+
+0.3 moves how a tree is drawn out of the tree and into the chart's parts. The tree says what things are; the parts say how
+the chart is made.
+
+| 0.2 | 0.3 |
+| --- | --- |
+| `style(of:)` returning `PieceStyle` | `role(of:)` returning `SunburstRole`, and `isShared(_:)`; `Piece.style` is `Piece.role` and `isShared` |
+| `hasBand` | `SunburstParts(bands: [.init()])` |
+| `hasHalves`, `isHalf(_:)` | `SunburstParts(split: .ring)` (or `.band`): the root's things are the sides |
+| `rootRank(of:)` | `Band(order: .ranked { ... })`; room and what can't be read come last by themselves |
+| `isPlainShape(_:)` | `role(of:)` returning `.room` or `.unreadable`: around the whole, they close the circle as wedges |
+| `hasGroups` | `Rings(order: .byGroup)`; `group(of:)` stays on the tree |
+| `isAlwaysDrawn(_:)` | `Rings(keep:)` |
+| `stretches(of:)` | `Rings(cuts:)` |
+| `chart.sizes` | still there, as `chart.parts.rings.sizes` |
+| `RingLayout.build(…, sizes:)`, `fill(…, style:)` | `build(…, parts:…)`, `fill(…, parts:)` |
+| `freePiece` | `roomPiece` |
+| `LabelPlacer.order(_:halvesFirst:)`, `inside(…halves:…)` | `order(_:)`, `inside(layout:order:area:named:name:)`: the layout knows its split |
+| `Sunburst<Tree>` | `Sunburst<Tree, Centre>`, with the kit's centre by default |
+
+A chart given the parts its 0.2 switches described draws what 0.2 drew, with two deliberate differences: `cuts` apply to
+rings only, not to a band's or a split's segments; and around the whole, room and what can't be read always close the
+circle as wedges, after everything else, with or without a band. `RingLayout.visibleChildren(tree:of:)` at the root lists
+all the root's things, since a split is a part now rather than something the tree knows.
 
 ## Working on it
 

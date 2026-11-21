@@ -10,6 +10,11 @@ final class AccessTests: XCTestCase {
         FileManager.default.temporaryDirectory.appendingPathComponent("agents-\(UUID().uuidString).json")
     }
 
+    /// Waits, up to 2 s, until a call just started has got as far as `test`: on a busy machine one yield isn't enough.
+    private func until(_ test: () -> Bool) async {
+        for _ in 0..<1000 where !test() { try? await Task.sleep(for: .milliseconds(2)) }
+    }
+
     func testNothingIsAnsweredUntilYouAllow() async {
         let agents = Agents(file: nil)
         let id = UUID()
@@ -20,7 +25,7 @@ final class AccessTests: XCTestCase {
         XCTAssertEqual(agents.requests.count, 1, "once, however many times it connects")
 
         async let waiting = agents.mayAnswer(claude)
-        await Task.yield()
+        await until { agents.waitingCalls == 1 }
         agents.answer(agents.requests[0], .allow)
         let allowed = await waiting
         XCTAssertEqual(allowed, true)
@@ -70,7 +75,7 @@ final class AccessTests: XCTestCase {
         let id = UUID()
         agents.arrived(id, claude)
         async let waiting = agents.mayAnswer(claude)
-        await Task.yield()
+        await until { agents.waitingCalls == 1 }
         agents.left(id)
         let answer = await waiting
         XCTAssertNil(answer)
@@ -92,7 +97,7 @@ final class AccessTests: XCTestCase {
         next.remove(next.allowed[0])
         XCTAssertEqual(next.standing(of: claude), .asking)
         async let waiting = next.mayAnswer(claude, patience: .milliseconds(50))
-        await Task.yield()
+        await until { !next.requests.isEmpty }
         XCTAssertEqual(next.requests.map(\.identity), [claude], "removed, it has to ask again")
         _ = await waiting
         XCTAssertTrue(Agents(file: file).allowed.isEmpty)

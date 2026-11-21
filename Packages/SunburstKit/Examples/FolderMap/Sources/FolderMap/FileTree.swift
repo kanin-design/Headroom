@@ -57,7 +57,6 @@ struct FileTree: SunburstTree, Sendable {
     func size(of node: UInt32) -> UInt64 { totals[Int(node)] }
     func ownSize(of node: UInt32) -> UInt64 { nodes[Int(node)].own }
     func isFolder(_ node: UInt32) -> Bool { nodes[Int(node)].isFolder }
-    func style(of node: UInt32) -> PieceStyle { nodes[Int(node)].isFolder ? .folder : .file }
     func nameKey(of node: UInt32) -> UInt64 {
         nodes[Int(node)].name.utf8.reduce(0xCBF2_9CE4_8422_2325 as UInt64) { ($0 ^ UInt64($1)) &* 0x100_0000_01B3 }
     }

@@ -30,6 +30,7 @@ struct Uniforms {
     float litAbove;         // how lit a piece has to be to count as lit, for that
     float top;              // the piece pointed at, which lies over all the others; -1 when there's none
     float dither;           // 1 adds the pixel of noise that keeps dark gradients smooth, 0 leaves it out
+    float dialSides;        // how many wholes the scale counts across: 1 for the circle, 2 for two sides each 0...100%
     float4 tint;            // the colour lit pieces and the folders they're in take on, and in w how much
 };
 
@@ -48,6 +49,7 @@ struct SegmentOut {
     float calm [[flat]];
     float deeper [[flat]];
     float emphasis [[flat]];
+    float tintShare [[flat]];       // how much of the tint it takes
     float marked [[flat]];
 };
 
@@ -60,16 +62,18 @@ vertex SegmentOut segment_vertex(uint vid [[vertex_id]],
                                  uint iid [[instance_id]],
                                  const device Segment *segments [[buffer(0)]],
                                  constant Uniforms &u [[buffer(1)]],
-                                 const device float *emphasis [[buffer(2)]]) {
+                                 const device float *emphasis [[buffer(2)]],
+                                 const device float *tintShare [[buffer(3)]]) {
     const Segment s = segments[iid];
     float4 g = mix(s.from, s.to, u.t);
     float e = emphasis[iid];
+    float share = tintShare[iid];
     float lift = max(e - 1.0, 0.0) * u.liftPixels;
     float a0 = g.x, a1 = g.y;
     float r0 = max(g.z * u.radius, 0.0);
     float r1 = max(g.w * u.radius, r0) + lift;
     // While a tint shows, a lit piece too thin to see is drawn a few points across, so a small file still shows where it is.
-    float shown = smoothstep(0.62, 1.0, e) * u.tint.w;
+    float shown = smoothstep(0.62, 1.0, e) * u.tint.w * share;
     if (shown > 0.0 && u.minLit > 0.0) {
         float least = 0.5 * u.minLit * u.scale / max((r0 + r1) * 0.5, 1.0);
         float halfWidth = (a1 - a0) * 0.5;
@@ -108,6 +112,7 @@ vertex SegmentOut segment_vertex(uint vid [[vertex_id]],
     o.calm = s.params.z;
     o.deeper = s.params.w;
     o.emphasis = e;
+    o.tintShare = share;
     o.marked = mix(s.plan.x, s.plan.y, saturate(u.t));
     // Lit pieces lie over the ones at rest, lifted ones over those, and the one pointed at over them all, however lit it
     // is yet. Each pass draws one of the layers: a piece that isn't in it gets no area at all.
@@ -169,7 +174,7 @@ fragment PieceOut segment_fragment(SegmentOut in [[stage_in]], constant Uniforms
     // A tint paints what's lit in one colour, all of it, and the folders it's in part of the way, faintly near the middle and
     // more toward the edge, so the way out to each lit thing reads as one colour that gathers where it ends.
     float outward = smoothstep(0.3, 0.95, in.r0 / max(u.radius, 1.0));
-    float tinted = u.tint.w * (saturate(e / 0.62) * mix(0.14, 0.42, outward) + smoothstep(0.62, 1.0, e) * (1.0 - mix(0.14, 0.42, outward)));
+    float tinted = u.tint.w * in.tintShare * (saturate(e / 0.62) * mix(0.14, 0.42, outward) + smoothstep(0.62, 1.0, e) * (1.0 - mix(0.14, 0.42, outward)));
     float3 base = mix(in.color.rgb, u.tint.rgb, tinted);
     float3 color;
     float alpha = in.color.a;
@@ -294,6 +299,15 @@ fragment float4 blur_up(QuadOut in [[stage_in]], texture2d<float> source [[textu
     return c / 12.0;
 }
 
+/// How far a point is from the nearest mark of a scale with `steps` marks around the circle, in pixels along the circle,
+/// and whether that mark is a long one (every tenth).
+static inline float2 dialMark(float a, float rPx, float steps) {
+    float cell = (a / (2.0 * M_PI_F) + 1.0) * steps;
+    float toMark = abs(fract(cell + 0.5) - 0.5) / steps * 2.0 * M_PI_F * rPx;
+    float isMajor = step(abs(fract(cell / 10.0 + 0.5 / 10.0) - 0.5 / 10.0) * 10.0, 0.5);
+    return float2(toMark, isMajor);
+}
+
 fragment float4 composite(QuadOut in [[stage_in]],
                           texture2d<float> pieces [[texture(0)]],
                           texture2d<float> glow [[texture(1)]],
@@ -313,14 +327,15 @@ fragment float4 composite(QuadOut in [[stage_in]],
 
     float3 color = background + near * u.bloom * 0.13 + far * u.bloom * 0.17;
 
-    // A fine scale around the ring: a mark for every 1%, a longer one for every 10%.
+    // A fine scale around the ring: a mark for every 1%, a longer one for every 10%, of the circle or of each side.
     float scalePx = u.scale;
     float rPx = length(fromCenter);
     float a = atan2(fromCenter.x, -fromCenter.y);
-    float steps = 100.0;
-    float cell = (a / (2.0 * M_PI_F) + 1.0) * steps;
-    float toMark = abs(fract(cell + 0.5) - 0.5) / steps * 2.0 * M_PI_F * rPx;
-    float isMajor = step(abs(fract(cell / 10.0 + 0.5 / 10.0) - 0.5 / 10.0) * 10.0, 0.5);
+    // The circle's 100 marks are worked out with the count written in, as they always were, so they land on exactly the
+    // same pixels; sides each get 100 of their own.
+    float2 mark = u.dialSides > 1.5 ? dialMark(a, rPx, 100.0 * u.dialSides) : dialMark(a, rPx, 100.0);
+    float toMark = mark.x;
+    float isMajor = mark.y;
     float base = u.radius + 9.0 * scalePx;
     float length0 = mix(3.0, 8.0, isMajor) * scalePx;
     float inBand = smoothstep(base - 0.5, base + 0.5, rPx) * (1.0 - smoothstep(base + length0 - 0.5, base + length0 + 0.5, rPx));

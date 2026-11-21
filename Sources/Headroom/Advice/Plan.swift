@@ -77,6 +77,13 @@ enum PathMath {
         path.hasPrefix(dataVolume + "/") ? String(path.dropFirst(dataVolume.count)) : path
     }
 
+    /// The path as the system spells it, every link followed: /tmp/x is /private/tmp/x. As it is when it isn't there.
+    static func canonical(_ path: String) -> String {
+        guard let real = realpath(path, nil) else { return path }
+        defer { free(real) }
+        return String(cString: real)
+    }
+
     /// The top of the disk a path is on.
     static func mount(of path: String) -> String {
         guard path.hasPrefix("/Volumes/") else { return "/" }

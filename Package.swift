@@ -22,6 +22,8 @@ let package = Package(
             name: "HeadroomTests",
             dependencies: ["Headroom"],
             path: "Tests/HeadroomTests",
+            // What the ring looked like before the kit had parts, for the snapshot test to compare with.
+            exclude: ["RingSnapshots/Baseline"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
     ]

@@ -134,7 +134,7 @@ extension AppModel {
         LookPanel.shared.show(for: self)
         mapView?.window?.makeFirstResponder(mapView)
         watchLookEvents()
-        setHover(lookPieceIndex)
+        chart.hold(look?.node)
     }
 
     func closeLook() {
@@ -145,7 +145,7 @@ extension AppModel {
         if let lookWatch { NSEvent.removeMonitor(lookWatch) }
         lookWatch = nil
         pointedThing = nil
-        setHover(nil)
+        chart.hold(nil)
         // A click on a preview gives it the keyboard, and it keeps it after the card has gone, so Space would no longer
         // reach the ring. Unless you're typing in the search field, the keys go back to the ring.
         if let window = mapView?.window, !(window.firstResponder is NSText) { window.makeFirstResponder(mapView) }
@@ -184,7 +184,7 @@ extension AppModel {
         current.node = node
         lookCursor = nil
         look = current
-        setHover(lookPieceIndex)
+        chart.hold(look?.node)
     }
 
     func lookBack() {
@@ -194,7 +194,7 @@ extension AppModel {
             current.node = previous
             lookCursor = nil
             look = current
-            setHover(lookPieceIndex)
+            chart.hold(look?.node)
             return
         }
     }
@@ -213,7 +213,7 @@ extension AppModel {
         guard !rows.isEmpty else { return false }
         let at = min(max(lookCursor.map { $0 + step } ?? (step > 0 ? 0 : rows.count - 1), 0), rows.count - 1)
         lookCursor = at
-        setHover(engine.layout.piece(of: rows[at]))
+        chart.point(at: rows[at])
         return true
     }
 
@@ -260,12 +260,6 @@ extension AppModel {
             }
         }
         openLooked()
-    }
-
-    /// The piece to keep lit while the card is open. Something too small to draw lights what holds it.
-    var lookPieceIndex: Int? {
-        guard let look, let tree else { return nil }
-        return engine.layout.nearestPiece(to: look.node, tree: tree)
     }
 
     // MARK: Keys and clicks

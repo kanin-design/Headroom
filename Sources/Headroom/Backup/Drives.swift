@@ -37,6 +37,9 @@ struct DriveInfo: Codable, Identifiable, Equatable, Hashable, Sendable {
         }
     }
 
+    /// On a server, shared over the network, rather than a disk of this Mac's.
+    var isNetwork: Bool { ["smbfs", "afpfs", "nfs", "webdav", "cifs"].contains(fileSystem.lowercased()) }
+
     /// The largest file it can hold, when it has a limit that matters for big files.
     var largestFile: UInt64? { fileSystem.lowercased() == "msdos" ? 4_294_967_295 : nil }
 
@@ -46,27 +49,42 @@ struct DriveInfo: Codable, Identifiable, Equatable, Hashable, Sendable {
         return mountPath == other.mountPath && name == other.name
     }
 
-    /// The drives connected now, the startup disk first.
+    private static let keys: [URLResourceKey] = [.volumeLocalizedNameKey, .volumeUUIDStringKey, .volumeTotalCapacityKey,
+                                                 .volumeAvailableCapacityForImportantUsageKey, .volumeAvailableCapacityKey, .volumeIsInternalKey,
+                                                 .volumeIsReadOnlyKey, .volumeIsRootFileSystemKey, .volumeIsBrowsableKey]
+
+    /// The drives connected now, the startup disk first: the ones the Finder lists, a server's shares included.
     static func connected() -> [DriveInfo] {
-        let keys: [URLResourceKey] = [.volumeLocalizedNameKey, .volumeUUIDStringKey, .volumeTotalCapacityKey, .volumeAvailableCapacityForImportantUsageKey,
-                                      .volumeAvailableCapacityKey, .volumeIsInternalKey, .volumeIsReadOnlyKey, .volumeIsRootFileSystemKey, .volumeIsBrowsableKey]
         let urls = FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: keys, options: [.skipHiddenVolumes]) ?? []
         var out: [DriveInfo] = []
         for url in urls {
-            guard let drive = info(at: url, keys: Set(keys)) else { continue }
+            guard let drive = info(at: url, listedOnly: true) else { continue }
             out.append(drive)
         }
         return out.sorted { a, b in a.isBoot != b.isBoot ? a.isBoot : a.name.localizedStandardCompare(b.name) == .orderedAscending }
     }
 
-    /// The drive a path is on, as it is now.
+    /// The drive a folder is on, as it is now: whatever is mounted there, wherever it's mounted, a server's share included.
     static func holding(_ path: String) -> DriveInfo? {
-        let mount = PathMath.mount(of: PathMath.visible(path))
-        return connected().first { $0.mountPath == mount }
+        guard let volume = try? URL(fileURLWithPath: path).resourceValues(forKeys: [.volumeURLKey]).volume else { return nil }
+        return info(at: volume, listedOnly: false)
     }
 
-    private static func info(at url: URL, keys: Set<URLResourceKey>) -> DriveInfo? {
-        guard let values = try? url.resourceValues(forKeys: keys), values.volumeIsBrowsable != false else { return nil }
+    /// The drive mounted at this path, if one is now, even one the Finder doesn't list. Only what's mounted is looked at, so a
+    /// server that isn't there isn't asked for.
+    static func mounted(at mountPath: String) -> DriveInfo? {
+        var list: UnsafeMutablePointer<statfs>?
+        let count = Int(getmntinfo(&list, MNT_NOWAIT))
+        guard count > 0, let list else { return nil }
+        let isMounted = (0..<count).contains { i in
+            withUnsafeBytes(of: list[i].f_mntonname) { String(cString: $0.bindMemory(to: CChar.self).baseAddress!) } == mountPath
+        }
+        return isMounted ? info(at: URL(fileURLWithPath: mountPath, isDirectory: true), listedOnly: false) : nil
+    }
+
+    /// `listedOnly` leaves out what the Finder doesn't list, as macOS's own parts are.
+    private static func info(at url: URL, listedOnly: Bool) -> DriveInfo? {
+        guard let values = try? url.resourceValues(forKeys: Set(keys)), !listedOnly || values.volumeIsBrowsable != false else { return nil }
         var disk = statfs()
         guard statfs(url.path, &disk) == 0 else { return nil }
         let type = withUnsafeBytes(of: disk.f_fstypename) { String(cString: $0.bindMemory(to: CChar.self).baseAddress!) }
@@ -83,8 +101,9 @@ struct DriveInfo: Codable, Identifiable, Equatable, Hashable, Sendable {
     }
 }
 
-/// Where Backup puts things: a folder on a drive, the top of the drive unless you choose one.
-struct BackupDestination: Codable, Equatable, Sendable {
+/// Where Backup puts things: a folder on a drive, the top of the drive unless you choose one. The drive can be a server's
+/// share.
+struct BackupDestination: Codable, Equatable, Sendable, Identifiable {
     var drive: DriveInfo
     /// The folder on the drive, from its top. Empty for the top itself.
     var folder: String = ""
@@ -97,6 +116,11 @@ struct BackupDestination: Codable, Equatable, Sendable {
 
     /// What the drive row says: the drive, and the folder when it isn't the top.
     var title: String { folder.isEmpty ? drive.name : drive.name + " › " + (folder as NSString).lastPathComponent }
+
+    var id: String { drive.id + "/" + folder }
+
+    /// Whether it's this one: the same folder on the same drive.
+    func isSame(as other: BackupDestination) -> Bool { drive.isSame(as: other.drive) && folder == other.folder }
 }
 
 /// Where a file goes on the drive: in a folder named for this Mac, at its full path on the Mac, so
@@ -118,6 +142,14 @@ enum BackupPaths {
 
     static func onDrive(_ path: String, under root: String, folder: String = macFolder) -> String {
         (root == "/" ? "" : root) + "/" + relative(path, folder: folder)
+    }
+
+    /// A folder's path from the top of the drive it's on, both spelled as the system spells them (`PathMath.canonical`): empty
+    /// for the top itself, nil when it isn't on that drive.
+    static func folder(_ path: String, onDriveAt top: String) -> String? {
+        if path == top { return "" }
+        let start = top == "/" ? "/" : top + "/"
+        return path.hasPrefix(start) ? String(path.dropFirst(start.count)) : nil
     }
 
     /// The path from the drive's top, as a note keeps it.
@@ -164,6 +196,9 @@ struct BackupState: Codable, Equatable {
     var keep: [String] = []
     /// Drives used before, so one can be chosen while it isn't connected.
     var knownDrives: [DriveInfo] = []
+    /// The locations chosen before, each a folder on a drive, in the order first chosen, so one can be chosen again, folder and
+    /// all, while it isn't connected. Optional, so a file from before it was kept still reads (see `usedLocations`).
+    var locations: [BackupDestination]?
     /// The notes this Mac has written, so their ghosts can be shown without looking through the whole disk.
     var notes: [String] = []
     /// What's picked on the drive's half, kept like what's picked on the Mac's. Optional, so a file from before it was kept
@@ -175,6 +210,28 @@ struct BackupState: Codable, Equatable {
     /// Only files this big are offered, or can be selected.
     /// Under this, what a file costs on an exFAT drive with large clusters stops being small next to what it frees.
     static let smallest: UInt64 = 10_000_000
+
+    /// The locations chosen before: as kept, or for a file from before they were, the drives used before, at their tops, or
+    /// in the folder files go to now.
+    var usedLocations: [BackupDestination] {
+        if let locations { return locations }
+        return knownDrives.map { known in
+            destination.flatMap { $0.drive.isSame(as: known) ? $0 : nil } ?? BackupDestination(drive: known)
+        }
+    }
+
+    /// Files go here from now on. It joins the locations used, after the others, or takes the place of itself as it was.
+    mutating func use(_ place: BackupDestination) {
+        var places = usedLocations
+        if let at = places.firstIndex(where: { $0.isSame(as: place) }) { places[at] = place } else { places.append(place) }
+        locations = places
+        destination = place
+        if let at = knownDrives.firstIndex(where: { $0.isSame(as: place.drive) }) {
+            knownDrives[at] = place.drive
+        } else if !place.drive.isBoot {
+            knownDrives.append(place.drive)
+        }
+    }
 
     func isKept(_ path: String) -> Bool { keep.contains { PathMath.isInside(path, $0) } }
     func has(_ path: String) -> Bool { items.contains { $0.path == path } }

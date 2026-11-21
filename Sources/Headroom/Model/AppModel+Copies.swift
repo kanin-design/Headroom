@@ -138,35 +138,11 @@ extension AppModel {
         }
     }
 
-    /// Where these copies are on the ring: each one's own piece, or when it's too small to draw, the piece that holds it, lit as
-    /// fully as the copy itself would be, so every place shows. A folder lights with what's in it. The folders on the way out
-    /// light a little, as anything's do.
-    func copyPieces(_ nodes: [UInt32]) -> (related: [Range<Int>], ancestors: [Int]) {
-        guard let tree else { return ([], []) }
-        let layout = engine.layout
-        var related: [Range<Int>] = []
-        var ancestors = Set<Int>()
-        for node in nodes where node != 0 {
-            if layout.focus != 0, !tree.isInside(node, layout.focus) { continue }
-            var a = node
-            while true {
-                if let at = layout.piece(of: a) {
-                    let own = a == node
-                    let target = own ? at : (layout.smallerPiece(in: at) ?? at)
-                    let end = own && tree.nodes[Int(node)].has(NodeFlag.directory) ? max(Int(layout.pieces[target].end), target + 1) : target + 1
-                    related.append(target..<end)
-                    var up = layout.pieces[target].parent
-                    while up >= 0 {
-                        ancestors.insert(Int(up))
-                        up = layout.pieces[Int(up)].parent
-                    }
-                    break
-                }
-                if a == layout.focus || a == 0 { break }
-                a = tree.nodes[Int(a)].parent
-            }
-        }
-        return (related, Array(ancestors))
+    /// Lights where these copies are on the ring: each one's own piece, or when it's too small to draw, the piece that holds
+    /// it, lit as fully as the copy itself would be, so every place shows. A folder lights with what's in it, and the folders
+    /// on the way out light a little, as anything's do. `primary` stands out from the rest.
+    private func lightCopies(_ nodes: [UInt32], primary: UInt32? = nil, of group: CopyGroup) {
+        chart.highlight(nodes.filter { $0 != 0 }, primary: primary, tint: group.colour.linearP3, gathered: .shown)
     }
 
     /// How many of a set's copies are outside the folder in view, where the ring can't show them.
@@ -176,18 +152,10 @@ extension AppModel {
         return group.nodes.filter { $0 != 0 && !tree.isInside($0, root) }.count
     }
 
-    /// What lights up with a piece under the pointer in Copies: every copy of the set it holds, wherever it is, as a box's files
-    /// light up together in Free Up. The set's row in the inspector lights too.
-    func copyLight(for index: Int) -> (full: [Range<Int>], holding: [Int], tint: SIMD3<Float>?) {
-        guard view == .copies, mode == .freeUp, let tree, let copies, copies.scanID == tree.scanID, index < engine.layout.pieces.count else { return ([], [], nil) }
-        let p = engine.layout.pieces[index]
-        guard !p.isSmaller, p.style != .free, p.style != .hidden, let set = copies.set(of: p.node) else {
-            hotCopyGroup = nil
-            return ([], [], nil)
-        }
-        hotCopyGroup = set.id
-        let lit = copyPieces(set.nodes)
-        return (lit.related, lit.ancestors, set.kind == .duplicate ? set.colour.linearP3 : nil)
+    /// The set of copies a piece on the ring holds, in Copies while freeing up: its row in the inspector lights with it.
+    func copySet(at p: Piece) -> CopyGroup? {
+        guard view == .copies, mode == .freeUp, let tree, let copies, copies.scanID == tree.scanID, !p.isSmaller, !p.role.isSpace else { return nil }
+        return copies.set(of: p.node)
     }
 
     /// Points at a row in the inspector: every copy lights up on the ring in the set's colour, and so does the way out to each
@@ -199,14 +167,13 @@ extension AppModel {
             hotCopyGroup = nil
             pointedCopyGroup = nil
             highlight(nodes: [])
-            placeLabels(after: 0.05)
+            chart.relabel(after: 0.05)
             return
         }
-        let lit = copyPieces(group.nodes)
-        lightFromPanel(related: lit.related, ancestors: lit.ancestors, tint: group.colour.linearP3)
+        lightCopies(group.nodes, of: group)
         hotCopyGroup = group.id
         pointedCopyGroup = group.id
-        placeLabels(after: 0.05)
+        chart.relabel(after: 0.05)
     }
 
     /// Points at one copy in an open set: it stands out, and the other copies of the same file light with it, so you can see
@@ -215,15 +182,13 @@ extension AppModel {
         let isFolder = tree?.nodes[Int(node)].has(NodeFlag.directory) == true
         let set = isFolder ? nil : group.sets.first { $0.keeper == node || $0.extras.contains(node) }
         let others = set.map { [$0.keeper] + $0.extras } ?? [node]
-        let lit = copyPieces(others)
-        let own = copyPieces([node]).related.first
         // A folder lights all of what's in it; a file stands out from the copies lit with it.
-        lightFromPanel(related: lit.related, ancestors: lit.ancestors, primary: isFolder ? nil : own?.lowerBound, tint: group.colour.linearP3)
+        lightCopies(others, primary: isFolder ? nil : node, of: group)
         pointedCopy = node
         hotCopyGroup = group.id
         if pointedCopyGroup != group.id {
             pointedCopyGroup = group.id
-            placeLabels(after: 0.05)
+            chart.relabel(after: 0.05)
         }
     }
 

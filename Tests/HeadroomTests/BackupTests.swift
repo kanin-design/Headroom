@@ -231,11 +231,39 @@ final class BackupTests: XCTestCase {
         XCTAssertNil(tree.withGhosts([elsewhere]))
 
         let layout = RingLayout.build(tree: picture, focus: movies, colorer: { _ in .zero }, sizes: RingSizes())
-        XCTAssertEqual(layout.pieces.first { $0.node == ghost }?.style, .ghost, "and it's drawn as a ghost")
+        XCTAssertEqual(layout.pieces.first { $0.node == ghost }?.role, .gone, "and it's drawn as a ghost")
         XCTAssertNotNil(picture.copy().ghosts[ghost], "a copy of the picture keeps its ghosts")
     }
 
     // MARK: Both sides
+
+    func testWhatsBackedUpIsWhatsOnBothAndFoldersOfNothingElse() throws {
+        let drive = folder + "/Drive2", mac = folder + "/Mac2/Media"
+        for top in [drive, mac] {
+            for sub in ["Kept", "Mixed"] { try FileManager.default.createDirectory(atPath: top + "/" + sub, withIntermediateDirectories: true) }
+        }
+        for (path, bytes) in [("Kept/a.mkv", 3_000_000), ("Kept/b.mkv", 2_000_000), ("Mixed/c.mkv", 4_000_000)] {
+            _ = try file(drive + "/" + path, bytes: bytes)
+            _ = try file(mac + "/" + path, bytes: bytes)
+        }
+        _ = try file(mac + "/Mixed/d.mkv", bytes: 20_000_000)
+        let disk = FakeDisk(root: folder + "/Mac2")
+        disk.file(mac + "/Kept/a.mkv", 3_000_000, kind: .video)
+        disk.file(mac + "/Kept/b.mkv", 2_000_000, kind: .video)
+        disk.file(mac + "/Mixed/c.mkv", 4_000_000, kind: .video)
+        disk.file(mac + "/Mixed/d.mkv", 20_000_000, kind: .video)
+        disk.finish()
+        let pair = try XCTUnwrap(PairPicture.build(real: disk.tree, macFolder: disk.node(mac), macPath: mac, drivePath: drive, driveName: "Spare",
+                                                   notes: [], ghosts: false))
+        func backedUp(_ path: String) -> Bool { pair.tree.find(path: path).map { pair.backedUp.contains($0) } ?? false }
+        XCTAssertTrue(backedUp(mac + "/Kept/a.mkv"))
+        XCTAssertTrue(backedUp(drive + "/Kept/a.mkv"), "on either half")
+        XCTAssertTrue(backedUp(mac + "/Kept"), "a folder of nothing but backed-up files")
+        XCTAssertTrue(backedUp(mac + "/Mixed/c.mkv"))
+        XCTAssertFalse(backedUp(mac + "/Mixed/d.mkv"))
+        XCTAssertFalse(backedUp(mac + "/Mixed"), "a folder with anything else in it isn't")
+        XCTAssertFalse(pair.backedUp.contains(pair.macSide))
+    }
 
     func testBothSidesSayWhereEachFileIs() throws {
         // The drive's folder, on the disk: one file the same as the Mac's, one of a different size, one only there, one moved.
@@ -392,6 +420,48 @@ final class BackupTests: XCTestCase {
         XCTAssertNil(never.readAt)
         XCTAssertNil(never.counts[.both])
         XCTAssertEqual(never.driveBytes, 0)
+    }
+
+    func testLocationsUsedBeforeAreKeptWithTheirFolders() throws {
+        // A file from before locations were kept: the drives used, and where files go now.
+        let nas = DriveInfo(name: "NAS", mountPath: "/Volumes/Media", uuid: nil, fileSystem: "smbfs", capacity: 8_000_000_000_000,
+                            free: 3_000_000_000_000, isInternal: false, isReadOnly: false, isBoot: false)
+        var state = BackupState()
+        state.knownDrives = [drive, nas]
+        state.destination = BackupDestination(drive: nas, folder: "Backups/Mac")
+        XCTAssertEqual(state.usedLocations.map(\.title), ["Spare", "NAS › Mac"], "each drive used, the one in use at its folder")
+        let old = try JSONDecoder().decode(BackupState.self, from: JSONEncoder().encode(state))
+        XCTAssertNil(old.locations)
+        XCTAssertEqual(old.usedLocations.map(\.root), ["/Volumes/Spare", "/Volumes/Media/Backups/Mac"])
+
+        // Another folder on the same server is a location of its own; choosing one again doesn't add it twice.
+        state.use(BackupDestination(drive: nas, folder: "Archive"))
+        state.use(BackupDestination(drive: drive))
+        XCTAssertEqual(state.usedLocations.map(\.root), ["/Volumes/Spare", "/Volumes/Media/Backups/Mac", "/Volumes/Media/Archive"])
+        XCTAssertEqual(state.destination?.root, "/Volumes/Spare")
+        XCTAssertEqual(state.knownDrives.count, 2)
+        let kept = try JSONDecoder().decode(BackupState.self, from: JSONEncoder().encode(state))
+        XCTAssertEqual(kept.usedLocations.map(\.id), state.usedLocations.map(\.id), "kept between launches")
+        XCTAssertTrue(nas.isNetwork)
+        XCTAssertFalse(drive.isNetwork)
+    }
+
+    func testAFolderIsOnTheDiskItIsReallyOn() throws {
+        // Wherever it is, the system says which disk: a folder in the home folder, or a cloud folder in it, is the startup disk's.
+        let home = try XCTUnwrap(DriveInfo.holding(NSHomeDirectory()))
+        XCTAssertTrue(home.isBoot)
+        XCTAssertEqual(home.mountPath, "/")
+        let boot = try XCTUnwrap(DriveInfo.mounted(at: "/"))
+        XCTAssertTrue(boot.isSame(as: home))
+        XCTAssertNil(DriveInfo.mounted(at: "/Volumes/Nothing Mounted Here"))
+        XCTAssertNil(DriveInfo.holding("/Volumes/Nothing Mounted Here/Backups"))
+        // A folder reads from the top of its drive, wherever that's mounted, spelled as the system spells it.
+        XCTAssertEqual(PathMath.canonical("/tmp"), "/private/tmp")
+        XCTAssertEqual(BackupPaths.folder("/private/tmp/mnt/Share/Backups/Mac", onDriveAt: "/private/tmp/mnt/Share"), "Backups/Mac")
+        XCTAssertEqual(BackupPaths.folder("/Volumes/Spare", onDriveAt: "/Volumes/Spare"), "")
+        XCTAssertEqual(BackupPaths.folder("/Users/x/Backups", onDriveAt: "/"), "Users/x/Backups")
+        XCTAssertNil(BackupPaths.folder("/Volumes/Spare2/Backups", onDriveAt: "/Volumes/Spare"), "another drive with a longer name")
+        XCTAssertNil(BackupPaths.folder("/tmp/mnt/Share/Backups", onDriveAt: "/private/tmp/mnt/Share"), "spelled two ways, it isn't read wrong")
     }
 
     func testABackupFileFromBeforePicksWereKeptStillReads() throws {

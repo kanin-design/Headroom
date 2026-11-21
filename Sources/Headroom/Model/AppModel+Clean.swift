@@ -391,9 +391,9 @@ extension AppModel {
     /// The same while things are still going: each one visibly goes, without the ring being rebuilt thousands of times.
     private func showProgress(of cleaned: DiskTree?) {
         let now = Date()
-        guard now.timeIntervalSince(lastCleanFrame) > 0.1, isOnScreen(cleaned), showDraft(), let tree else { return }
+        guard now.timeIntervalSince(lastCleanFrame) > 0.1, isOnScreen(cleaned), showDraft(), tree != nil else { return }
         lastCleanFrame = now
-        engine.apply(drawing(tree), .live)
+        refreshRing(.live)
     }
 
     private func didMove(_ path: String, to inTrash: String, identity: String?, item: PlanItem, trueBytes: [UInt32: UInt64], tree cleaned: DiskTree,
@@ -544,7 +544,7 @@ extension AppModel {
         refreshShownRows()
         rescanWhenBack = true
         rebuildInsights()
-        if let tree { engine.apply(drawing(tree), .live) }
+        refreshRing(.live)
     }
 
     /// The last step, and the only one that can't be undone. It's always your click.
@@ -646,7 +646,7 @@ extension AppModel {
             moveFromTrashToFree(oldTrash)
             showDraft()
             treeVersion += 1
-            if let shown = self.tree { engine.apply(drawing(shown), .settle) }
+            refreshRing(.settle)
         }
         takenOut = []
         lastPlanItems = []

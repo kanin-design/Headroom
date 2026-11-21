@@ -162,12 +162,10 @@ final class AppModel {
     /// How many rings the picture has now, and how many it could fill. The menu offers no more than that.
     var ringsDrawn = RingSizes.saved.depth
     var ringReach = RingSizes.most
-    var hover: HoverInfo? { didSet { noteLabelLight() } }
-    /// What the names around the ring need to know of where the pointer is. It changes when the pointer comes onto the
-    /// ring, leaves it, or reaches a piece that has a name, and not for every piece it crosses on the way, so the names
-    /// aren't all drawn again each time `hover` changes.
-    private(set) var labelLight = LabelLight()
-    @ObservationIgnored private var labelledNodes: Set<UInt32> = []
+    var hover: HoverInfo?
+    /// The ring: SunburstKit's chart, for as long as the window is open. It draws, follows the pointer, lights things, zooms
+    /// and places the names; what Headroom does its own way it says in the chart's hooks.
+    @ObservationIgnored private(set) lazy var chart: SunburstChart<MapTree> = makeChart()
     var selected: UInt32? { didSet { if oldValue != selected { refreshStory(); visitChanged() } } }
     var ring = RingGeometry(center: .zero, radius: 0, mapWidth: 0, windowHeight: 0)
 
@@ -244,9 +242,6 @@ final class AppModel {
     var tipOffersUndo = false
     /// Send to Trash found something using this, and is asking whether it should go anyway.
     var busyToSend: BusyThing?
-    /// Whether the ring lit what's lit, or something drawn over it did: a name around the ring, a row in the panel or the
-    /// card. The ring only puts out what it lit itself, so the pointer moving over that row doesn't put the row's light out.
-    @ObservationIgnored private var ringLitIt = true
     /// The file the last click landed on, so that a second click can open that file and no other.
     @ObservationIgnored private var clickedFile: UInt32?
     var expandedRow: String?
@@ -321,15 +316,6 @@ final class AppModel {
     var changeUsesHistory = false
     var history: [HistoryPoint] = []
 
-    // Names around the ring
-    var labels: [SunburstLabel] = [] {
-        didSet {
-            labelledNodes = Set(labels.map(\.node))
-            noteLabelLight()
-        }
-    }
-    var labelsVisible = false
-
     // Search
     var searchText = ""
     /// Whether the search field in the toolbar has the keyboard, as ⌘F gives it.
@@ -391,7 +377,6 @@ final class AppModel {
     /// The startup disk's change journal, collected from where the map on screen was read, so that a refresh only reads
     /// what has changed since.
     @ObservationIgnored var journal: ChangeJournal.Watcher?
-    @ObservationIgnored private var labelTask: Task<Void, Never>?
     @ObservationIgnored private var linksTask: Task<Void, Never>?
     /// The name under the pointer, off the ring: a row, a label, the path under the ring.
     @ObservationIgnored var pointedThing: NamedThing?
@@ -414,8 +399,6 @@ final class AppModel {
     @ObservationIgnored var cacheLoadMilliseconds = 0.0
     /// How the last scan went about it, for a scripted check.
     @ObservationIgnored var lastScanNote = ""
-    @ObservationIgnored var lastHoverIndex: Int?
-    @ObservationIgnored var lastPointer: (angle: Float, radius: Float)?
     @ObservationIgnored var nameCache: [UInt32: String] = [:]
     @ObservationIgnored weak var mapView: MapHostView?
 
@@ -673,21 +656,11 @@ final class AppModel {
         workOutInsights(from: picture)
     }
 
-    /// New numbers for the picture you're already looking at.
+    /// New numbers for the picture you're already looking at. Whatever is lit is looked up again, under the pointer or from
+    /// a row in the panel, and says its new numbers.
     private func refreshLive() {
-        guard let tree else { return }
-        engine.apply(drawing(tree), .live)
-        // Pieces have new places, so whatever is lit gets looked up again: under the pointer, or from a row in the panel.
-        lastHoverIndex = -1
-        if let pointer = lastPointer, let index = engine.layout.hit(angle: pointer.angle, radius: pointer.radius) {
-            setHover(index)
-        } else if let node = hover?.node {
-            highlight(node: node)
-        } else {
-            lastHoverIndex = nil
-        }
         // The same spring as the ring's, so names stay with their pieces.
-        if labelsVisible { Motion.animate(.spring(response: 0.81, dampingFraction: 1)) { labels = makeLabels() } }
+        Motion.animate(.spring(response: 0.81, dampingFraction: 1)) { refreshRing(.live, repoint: true) }
     }
 
     /// Free Up and Changes during a scan: off the main thread and low priority, every couple of seconds.
@@ -910,8 +883,8 @@ final class AppModel {
         changesScanID = nil
         reclaim = nil
         searchResults = []
-        labels = []
-        engine.apply(RingLayout(), .settle)
+        // Nothing of the last disk's is drawn, pointed at or lit: its node numbers mean other things.
+        chart.show(.empty)
         history = History.points(for: facts)
         let cached = hasFullAccess ? TreeCache.load(for: facts, rules: rules) : nil
         if let cached { present(cached, transition: .appear) }
@@ -1011,32 +984,87 @@ final class AppModel {
 
     // MARK: Drawing
 
-    func relayout(_ transition: RingTransition, labelDelay: Double = 0.18) {
-        guard let tree else { return }
-        let layout = drawing(tree)
-        engine.apply(layout, transition)
+    func relayout(_ transition: RingTransition) {
+        // What's under the pointer says something different in another view: it's said again with the new picture.
+        refreshRing(transition, repoint: true)
         if view == .copies { refreshCopyGroups() }
-        mapView?.voiceOverLayoutChanged()
-        lastHoverIndex = nil
-        hover = nil
-        placeLabels(after: labelDelay)
         refreshStory()
-        refreshHover(after: 0.42)
     }
 
-    /// The picture for the folder in view.
-    func drawing(_ tree: DiskTree, after: AfterPlan? = nil) -> RingLayout {
+    /// The ring drawn again for what's on screen now: the disk, or what it will be while ⌥ is held, in this view's colours,
+    /// with the mode's selection striped. It moves from the last picture as `transition` says, or as `move` says when the
+    /// folder in the middle changed. With `repoint`, what's pointed at is said again: it means something else now.
+    func refreshRing(_ transition: RingTransition, move: SunburstMove? = nil, repoint: Bool = false) {
+        guard let tree else { return }
+        let after = previewingAfter ? planNumbers.after : nil
         // Whatever the view, the ring stripes what the mode has selected.
         let planned = mode == .backup ? backupPlanned() : plannedTest()
-        var layout = RingLayout.build(tree: tree, focus: focus, colorer: colorer(tree), marked: after == nil ? planned : nil, after: after,
-                                      sizes: ringSizes)
+        chart.change(transition) {
+            chart.tree = MapTree(tree, after: after)
+            chart.parts = tree.parts(ringSizes)
+            chart.isMarked = after == nil ? planned : nil
+            chart.calmsTinyPieces = view == .map || showsPair
+            if repoint { chart.refreshPointer() }
+            if let move {
+                chart.setFocus(focus, move)
+            } else if chart.focus != focus {
+                chart.setFocus(focus, .plain(transition))
+            }
+        }
         // The picture on screen, rather than the one while ⌥ is held, sets what the Rings menu offers.
         if after == nil {
+            let layout = engine.layout
             if ringsDrawn != layout.rings { ringsDrawn = layout.rings }
             if ringReach != layout.reach { ringReach = layout.reach }
         }
-        if view == .map || showsPair { layout.calmTinyPieces(total: tree.totals[Int(focus)]) }
-        return layout
+    }
+
+    /// Which view's names go around the ring: both of Backup's sides, and its Copies, are named as the map is.
+    var labelLens: Lens { showsPair || (view == .copies && mode == .backup) ? .map : view }
+
+    /// The ring for the disks this window shows, with what Headroom does its own way. It asks the model what it needs when it
+    /// needs it, so nothing here is set again as the view or the mode changes.
+    private func makeChart() -> SunburstChart<MapTree> {
+        let chart = SunburstChart(tree: MapTree.empty, name: { [weak self] in self?.displayName($0) ?? "" }, sizeText: formatBytes,
+                                  engine: engine, appears: false)
+        chart.colours = { [weak self] tree, _ in self?.colorer(tree.disk) ?? { _ in .zero } }
+        chart.namer = HeadroomNames(model: self)
+        chart.alsoLight = { [weak self] node in self?.alsoLit(with: node) }
+        chart.onPoint = { [weak self] pointed in self?.pointed(at: pointed) }
+        chart.onClick = { [weak self] click in self?.handle(click) ?? false }
+        chart.onBack = { [weak self] in
+            self?.goUp()
+            return true
+        }
+        chart.onKey = { [weak self] event in self?.mapKey(event) ?? false }
+        chart.menu = { [weak self] node in
+            guard let self, let thing = self.thing(onRing: node) else { return nil }
+            return self.menu(for: thing)
+        }
+        // ⌘-click copies the name of what's under it, and that's all it does.
+        chart.onCommandClick = { [weak self] node in
+            if let self, let thing = self.thing(onRing: node) { self.copyName(of: thing) }
+        }
+        // The map reaches under the toolbar, so along the top and on empty background it moves the window. It has the
+        // keyboard from the start, so Esc and Space simply work.
+        chart.movesWindow = true
+        chart.takesKeyboardFocus = true
+        // To VoiceOver the map is a group of what's in the folder you're in, biggest first, each with its size and its share
+        // of the folder. Pressing one does what a click does: a folder opens, a file is selected.
+        chart.accessibilityKind = "disk map"
+        chart.accessibilityTitle = { [weak self] in
+            guard let self else { return "Disk map" }
+            return "Map of " + (self.focus == 0 ? (self.volume?.shownName ?? "the disk") : self.displayName(self.focus))
+        }
+        chart.describe = { [weak self] piece, share in
+            (self?.displayName(piece: piece) ?? "", "\(formatBytes(piece.size)), \(Int((share * 100).rounded()))%")
+        }
+        // The drive row at the bottom is kept clear.
+        chart.labelInsets = EdgeInsets(top: 78, leading: 0, bottom: 26 + DriveRow.height + 14, trailing: 0)
+        chart.calm = calmForView
+        chart.glow = glowForView
+        chart.place(center: ring.center, radius: ring.radius, size: CGSize(width: ring.mapWidth, height: ring.windowHeight))
+        return chart
     }
 
     /// Whether both sides of Backup are what's on screen.
@@ -1058,12 +1086,6 @@ final class AppModel {
             guard let copies, copies.scanID == tree.scanID else { let quiet = Palette.quiet.linearP3; return { _ in quiet } }
             return Lenses.copiesColorer(map: copies, tree: tree)
         }
-    }
-
-    /// The same thing on the other half of both disks, to light with what's under the pointer.
-    private func pairLight(for p: Piece, in tree: DiskTree) -> (full: [Range<Int>], holding: [Int]) {
-        guard let pair, pair.tree === tree, !p.isSmaller, let other = pair.counterpart(p.node) else { return ([], []) }
-        return engine.layout.lit(by: [other], tree: tree)
     }
 
     /// Each thing on both halves in the colour its copy in the map has, so the Mac's half looks as the map does and the same
@@ -1090,25 +1112,8 @@ final class AppModel {
 
     func setRing(_ geometry: RingGeometry) {
         guard geometry != ring else { return }
-        let moved = abs(geometry.radius - ring.radius) > 0.5 || abs(geometry.center.x - ring.center.x) > 0.5 || abs(geometry.center.y - ring.center.y) > 0.5
         ring = geometry
-        if moved { placeLabels(after: 0.12) }
-    }
-
-    func placeLabels(after delay: Double) {
-        labelTask?.cancel()
-        Motion.animate(.easeOut(duration: 0.1)) { labelsVisible = false }
-        labelTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(delay))
-            guard let self, !Task.isCancelled else { return }
-            self.labels = self.makeLabels()
-            Motion.animate(.easeOut(duration: 0.28)) { self.labelsVisible = true }
-        }
-    }
-
-    func makeLabels() -> [SunburstLabel] {
-        guard let tree else { return [] }
-        return LabelPlacer.place(layout: engine.layout, ring: ring, lens: showsPair || (view == .copies && mode == .backup) ? .map : view, tree: tree, model: self)
+        chart.place(center: geometry.center, radius: geometry.radius, size: CGSize(width: geometry.mapWidth, height: geometry.windowHeight))
     }
 
     /// Works out the link story for what the panel is showing. It takes a moment, so it never holds up the zoom.
@@ -1155,64 +1160,19 @@ final class AppModel {
 
     // MARK: Pointer
 
-    func polar(_ p: CGPoint) -> (angle: Float, radius: Float)? {
-        guard ring.radius > 0 else { return nil }
-        let dx = Float(p.x - ring.center.x), dy = Float(p.y - ring.center.y)
-        var angle = atan2(dx, -dy)
-        if angle < 0 { angle += 2 * .pi }
-        return (angle, (dx * dx + dy * dy).squareRoot() / Float(ring.radius))
-    }
-
-    func pointerMoved(to polar: (angle: Float, radius: Float)?) {
-        ringLitIt = true
-        lastPointer = polar
-        guard let polar else { setHover(nil); return }
-        setHover(engine.layout.hit(angle: polar.angle, radius: polar.radius))
-    }
-
-    /// The pointer is on something drawn over the ring. To the ring that's nothing, but what's there may light something itself.
-    func pointerOffRing() {
-        lastPointer = nil
-        if ringLitIt { setHover(nil) }
-    }
-
-    func enterLabel(piece index: Int) {
-        ringLitIt = false
-        lastPointer = nil
-        setHover(index)
-    }
-
-    /// Going straight from one name to the next, the next may have said so first, and then this one isn't lit any more.
-    func leaveLabel(piece index: Int) {
-        guard lastHoverIndex == index else { return }
-        setHover(nil)
-    }
-
-    /// The picture changed under a pointer that hasn't moved, so it may be over something new.
-    private func refreshHover(after delay: Double) {
-        guard lastPointer != nil else { return }
-        Task { [weak self] in
-            try? await Task.sleep(for: .seconds(delay))
-            guard let self, let pointer = self.lastPointer else { return }
-            self.setHover(self.engine.layout.hit(angle: pointer.angle, radius: pointer.radius))
-        }
-    }
-
-    func setHover(_ index: Int?) {
-        // With the card open, what it's about stays lit whenever the pointer isn't on something else.
-        let index = index ?? lookPieceIndex
-        guard index != lastHoverIndex else { return }
-        lastHoverIndex = index
+    /// What the ring lit as pointed at changed: under the pointer, from a name or a row, or the card's. The middle of the
+    /// ring, the list and the inspector say what it is.
+    private func pointed(at pointed: SunburstPointed?) {
         linksTask?.cancel()
-        guard let index, let tree, index < engine.layout.pieces.count else {
-            engine.setEmphasis(primary: nil, related: [])
+        let layout = engine.layout
+        guard let pointed, let tree, pointed.piece < layout.pieces.count else {
             if view == .copies { hotCopyGroup = nil }
             hover = nil
             hotBox = nil
             hotRow = nil
             return
         }
-        let layout = engine.layout
+        let index = pointed.piece
         let p = layout.pieces[index]
         // The list says so too: one set of data, shown two ways.
         if mode == .freeUp, let at = reclaim?.rowIndex(of: p.node), let id = reclaim?.rowIDs[at] {
@@ -1222,23 +1182,13 @@ final class AppModel {
             hotRow = nil
             hotBox = nil
         }
-        var chain: [Int] = []
-        var a = p.parent
-        while a >= 0 {
-            chain.append(Int(a))
-            a = layout.pieces[Int(a)].parent
-        }
-        // In Copies, every copy of what's under the pointer lights up with it, in its set's colour.
-        let copiesLit = copyLight(for: index)
-        // On both disks, the same thing on the other half lights up with it.
-        let otherLit = pairLight(for: p, in: tree)
-        engine.setEmphasis(primary: index, related: [index..<Int(p.end)] + copiesLit.full + otherLit.full,
-                           ancestors: chain + copiesLit.holding + otherLit.holding, tint: copiesLit.tint)
+        // In Copies, the set under the pointer: its row in the inspector lights up too.
+        if view == .copies { hotCopyGroup = copySet(at: p)?.id }
         var info = describe(p, index: index, tree: tree)
         hover = info
         // Whether its files also have another path, and when it was last used, are worked out off the main thread from
         // the moment the pointer arrives, and the line shows them when they're ready. Pointing at something else stops it.
-        let wantsLinks = !info.inTrash && !p.isSmaller && p.style != .free && p.style != .hidden && !tree.links.isEmpty && tree.nodes[Int(p.node)].flags & NodeFlag.synthetic == 0
+        let wantsLinks = !info.inTrash && !p.isSmaller && !p.role.isSpace && !tree.links.isEmpty && tree.nodes[Int(p.node)].flags & NodeFlag.synthetic == 0
         if hasFullAccess, wantsLinks || info.tellsUse {
             let node = p.node, bytes = p.size, tellsUse = info.tellsUse
             linksTask = Task { [weak self] in
@@ -1246,12 +1196,48 @@ final class AppModel {
                     LastUse.find(node, bytes: bytes, links: wantsLinks, use: tellsUse, in: tree)
                 }
                 let found = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
-                guard let self, found.links != nil || found.use != nil, !Task.isCancelled, self.lastHoverIndex == index else { return }
+                guard let self, found.links != nil || found.use != nil, !Task.isCancelled, self.hover?.pieceIndex == index else { return }
                 info.links = found.links
                 if let use = found.use { info.note = use }
                 self.hover = info
             }
         }
+    }
+
+    /// What a thing under the pointer lights besides itself and what's inside it: nothing elsewhere. On both disks, in Map,
+    /// what in it is backed up takes the colour Backed Up gives it; Backed Up, and Copies, colour what they're about already.
+    private func alsoLit(with node: UInt32) -> SunburstAlsoLit? {
+        guard view == .map, let tree, let pair, pair.tree === tree else { return nil }
+        let backedUp = pair.backedUp
+        return SunburstAlsoLit(tint: PairPlace.both.colour, tints: { backedUp.contains($0) })
+    }
+
+    /// A click on the ring or a name, as Headroom means it. The middle goes back out, or with the card open, shows the folder
+    /// you're in; a click away from the ring lets go of what's selected, or closes the card.
+    private func handle(_ click: SunburstClick) -> Bool {
+        switch click.target {
+        case .centre:
+            if look != nil { showInLook(focus, steppingIn: false) } else { goUp() }
+        case .nothing:
+            if look != nil { closeLook() } else { selected = nil }
+        case .piece(let p):
+            self.click(piece: p.piece, count: click.count)
+        case .label(let p):
+            openLabel(piece: p.piece, count: click.count)
+        }
+        return true
+    }
+
+    /// The map's keys. In Free Up the keyboard steps through the list: nothing here does anything until you clean.
+    private func mapKey(_ event: NSEvent) -> Bool {
+        if mode == .freeUp, handlePlanKey(event) { return true }
+        // Escape and Delete are the chart's: they go back, through `onBack`.
+        switch event.keyCode {
+        case 49:                            // space selects; with shift, the card
+            if event.modifierFlags.contains(.shift) { toggleLook() } else { spaceSelect() }
+        default: return false
+        }
+        return true
     }
 
     private func describe(_ p: Piece, index: Int, tree: DiskTree) -> HoverInfo {
@@ -1297,7 +1283,7 @@ final class AppModel {
             if untouched > 0 {
                 // The window is in the panel, so a part only needs saying how much: the whole line has to fit in the middle.
                 note = Double(untouched) >= Double(p.size) * 0.999 ? "Untouched \(changeWindow.span)" : "\(formatBytes(UInt64(untouched))) untouched"
-            } else if !ownShape, !p.isSmaller, p.style != .hidden, !(tree.isPartial && tree.isStillGrowing(p.node)) {
+            } else if !ownShape, !p.isSmaller, p.role != .unreadable, !(tree.isPartial && tree.isStillGrowing(p.node)) {
                 share = ""
                 tellsUse = !(n.has(NodeFlag.synthetic) || (n.rule != 0 && rules.rule(n.rule).tier == .handsOff))
             }
@@ -1308,7 +1294,7 @@ final class AppModel {
                 note = "−\(formatBytes(UInt64(-delta))) \(changes.shortCaption)"
                 shrank = true
             }
-        } else if !ownShape, !p.isSmaller, p.style != .hidden, !(tree.isPartial && tree.isStillGrowing(p.node)) {
+        } else if !ownShape, !p.isSmaller, p.role != .unreadable, !(tree.isPartial && tree.isStillGrowing(p.node)) {
             // The ring already shows its share. Once the pointer rests, the line says when it was last used, except on
             // macOS's own parts, which have nothing to add.
             share = ""
@@ -1325,63 +1311,12 @@ final class AppModel {
 
     /// Lights up one thing from the panel or a label, as if the pointer were on it.
     func highlight(node: UInt32?) {
-        ringLitIt = false
-        guard let node, let tree else { setHover(nil); return }
-        setHover(engine.layout.nearestPiece(to: node, tree: tree))
+        chart.point(at: node)
     }
 
     /// Lights up many things at once: every node_modules on the disk. Whatever is too small to draw lights what holds it.
     func highlight(nodes: [UInt32]) {
-        ringLitIt = false
-        guard let tree, !nodes.isEmpty else { setHover(nil); engine.setEmphasis(primary: nil, related: []); return }
-        lastHoverIndex = nil
-        hover = nil
-        hotBox = nil
-        hotRow = nil
-        let lit = engine.layout.lit(by: nodes, tree: tree)
-        engine.setEmphasis(primary: nil, related: lit.full, ancestors: lit.holding)
-    }
-
-    /// Lights what the inspector worked out itself, as `highlight(nodes:)` does for a list of things, in one colour if it has one.
-    func lightFromPanel(related: [Range<Int>], ancestors: [Int], primary: Int? = nil, tint: SIMD3<Float>? = nil) {
-        ringLitIt = false
-        lastHoverIndex = nil
-        hover = nil
-        hotBox = nil
-        hotRow = nil
-        engine.setEmphasis(primary: primary, related: related, ancestors: ancestors, tint: tint)
-    }
-
-    func highlight(kind: Kind?) {
-        guard let kind, let tree else { engine.setEmphasis(primary: nil, related: []); return }
-        let layout = engine.layout
-        var ranges: [Range<Int>] = []
-        for (i, p) in layout.pieces.enumerated() {
-            let isLeaf = Int(p.end) == i + 1
-            if isLeaf && !p.isSmaller && p.style != .free && p.style != .hidden && tree.dominantKind(p.node) == kind { ranges.append(i..<i + 1) }
-        }
-        engine.setEmphasis(primary: nil, related: ranges)
-    }
-
-    func click(at polar: (angle: Float, radius: Float)?, count: Int = 1) {
-        guard let polar else { return }
-        if polar.radius < RingLayout.hole {
-            if look != nil {
-                showInLook(focus, steppingIn: false)
-            } else {
-                goUp()
-            }
-            return
-        }
-        guard let index = engine.layout.hit(angle: polar.angle, radius: polar.radius) else {
-            if look != nil {
-                closeLook()
-            } else {
-                selected = nil
-            }
-            return
-        }
-        click(piece: index, count: count)
+        chart.highlight(nodes, gathered: .held)
     }
 
     /// Works out what this click means for a double-click. The first click on a folder has already gone in, so what's under the
@@ -1443,7 +1378,7 @@ final class AppModel {
         let meaning = noteClick(on: p, in: tree, count: count)
         guard !meaning.ignore else { return }
         closeLook()
-        setHover(nil)
+        chart.point(at: nil)
         open(piece: index)
         if meaning.opensFile { open(NamedThing(p.node)) }
     }
@@ -1490,12 +1425,13 @@ final class AppModel {
     func zoom(into node: UInt32, from piece: Piece? = nil) {
         guard node != focus else { return }
         let source = piece ?? engine.layout.piece(of: node).map { engine.layout.pieces[$0] }
-        let mapping = source.map { ZoomMapping(a0: $0.a0, a1: $0.a1, r1: $0.r1) }
         trail.append(focus)
         focus = node
         selected = nil
         zoomedAt = Date()
-        relayout(.zoomIn(mapping), labelDelay: 0.34)
+        refreshRing(.settle, move: .into(source))
+        if view == .copies { refreshCopyGroups() }
+        refreshStory()
         readFocusFirst()
     }
 
@@ -1542,25 +1478,16 @@ final class AppModel {
     }
 
     func go(to node: UInt32, keepingTrail: Bool = false) {
-        guard let tree, node != focus else { return }
+        guard node != focus else { return }
         if !keepingTrail { trail = [] }
         let old = focus
         focus = node
         selected = nil
-        let layout = drawing(tree)
-        // The piece that holds where you were tells the zoom which way to go.
-        let mapping = layout.nearestPiece(to: old, tree: tree).map { at -> ZoomMapping in
-            let p = layout.pieces[at]
-            return ZoomMapping(a0: p.a0, a1: p.a1, r1: p.r1)
-        }
         zoomedAt = Date()
-        engine.apply(layout, .zoomOut(mapping))
-        mapView?.voiceOverLayoutChanged()
-        lastHoverIndex = nil
-        hover = nil
-        placeLabels(after: 0.34)
+        // The piece that holds where you were tells the zoom which way to go.
+        refreshRing(.settle, move: .outFrom(old))
+        if view == .copies { refreshCopyGroups() }
         refreshStory()
-        refreshHover(after: 0.42)
         readFocusFirst()
     }
 
@@ -1576,20 +1503,21 @@ final class AppModel {
         view = new
         rememberWindow()
         hotCopyGroup = nil
-        applyCalm()
-        engine.setGlow(new == .changes ? 0.35 : 1)
+        chart.calm = calmForView
+        chart.glow = glowForView
         // Moved files and both sides are drawn on the Map only.
         if showGhosts || showDriveSide || bareTree != nil { applyGhosts() }
-        relayout(.recolor, labelDelay: 0.2)
+        relayout(.recolor)
         if new == .copies { refreshCopies() }
         // Changes and Copies want the whole picture, so now you're waiting on the scan.
         if tree?.isPartial == true, !scanIsHurrying { activeScan?.scanner.setHurry(new != .map) }
     }
 
     /// How far the ring steps back in each view. Backed Up, Copies' place in Backup, is as bright as the map.
-    private func applyCalm() {
-        engine.setCalm(view == .map || (view == .copies && mode == .backup) ? 1 : (view == .copies ? 0.55 : 0))
-    }
+    var calmForView: Float { view == .map || (view == .copies && mode == .backup) ? 1 : (view == .copies ? 0.55 : 0) }
+
+    /// How much the ring glows: less in Changes, where colour says what changed.
+    var glowForView: Float { view == .changes ? 0.35 : 1 }
 
     /// What you're doing. Each mode keeps its own selection.
     func setMode(_ new: Lens) {
@@ -1604,16 +1532,11 @@ final class AppModel {
         hotBox = nil
         hotRow = nil
         if new == .freeUp, !plan.isEmpty { runChecks() }
-        applyCalm()
+        chart.calm = calmForView
         if new == .freeUp, view == .copies { refreshCopies() }
         if new == .backup { refreshDrives() }
         if showGhosts || showDriveSide || bareTree != nil { applyGhosts() }
-        relayout(.recolor, labelDelay: 0.2)
-    }
-
-    private func noteLabelLight() {
-        let light = LabelLight(hovering: hover?.node, named: labelledNodes)
-        if light != labelLight { labelLight = light }
+        relayout(.recolor)
     }
 
     // MARK: Taking things out of the picture
@@ -1753,7 +1676,7 @@ final class AppModel {
         let query = searchText.trimmingCharacters(in: .whitespaces).lowercased()
         guard query.count >= 2 else {
             searchResults = []
-            engine.setEmphasis(primary: nil, related: [])
+            chart.clearHighlight()
             return
         }
         searchResults = Search.run(query, in: tree)

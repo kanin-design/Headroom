@@ -109,24 +109,25 @@ public struct BranchColours<Tree: SunburstTree> {
     /// Too small to be drawn on its own, so there's no need to work out a colour.
     private let smallest: UInt64
 
-    /// Where the first branch starts. Each next one is a golden angle further on, so branches next to each other in the
-    /// list are always far apart in colour, and however many there are, they fill the wheel evenly.
-    public static var firstHue: Float { 298 }
-    /// How far round the wheel each next branch's hue is: the golden angle, in degrees.
-    public static var goldenAngle: Float { 137.508 }
-    /// A branch won't take a colour this close to the one before it on the ring.
-    public static var neighbourGap: Float { 50 }
+    /// Where the first branch starts (`SunburstHues.first`).
+    @available(*, deprecated, renamed: "SunburstHues.first")
+    public static var firstHue: Float { SunburstHues.first }
+    /// How far round the wheel each next branch's hue is (`SunburstHues.step`).
+    @available(*, deprecated, renamed: "SunburstHues.step")
+    public static var goldenAngle: Float { SunburstHues.step }
+    /// A branch won't take a colour this close to the one before it on the ring (`SunburstHues.neighbourGap`).
+    @available(*, deprecated, renamed: "SunburstHues.neighbourGap")
+    public static var neighbourGap: Float { SunburstHues.neighbourGap }
     /// What anything without a colour of its own, or quiet, is drawn in: slate.
     public static var quiet: Lab { Lab(lch: 0.38, 0.014, 255) }
 
     /// The hue of the branch at this place in the order.
-    public static func hue(_ index: Int) -> Float { firstHue + Float(index) * goldenAngle }
+    @available(*, deprecated, renamed: "SunburstHues.hue")
+    public static func hue(_ index: Int) -> Float { SunburstHues.hue(index) }
 
-    /// Hues that are this far apart, or more, read as different colours.
-    public static func apart(_ x: Float, _ y: Float) -> Float {
-        let d = abs(x - y).truncatingRemainder(dividingBy: 360)
-        return d > 180 ? 360 - d : d
-    }
+    /// How far apart two hues are round the wheel, in degrees.
+    @available(*, deprecated, renamed: "SunburstHues.apart")
+    public static func apart(_ x: Float, _ y: Float) -> Float { SunburstHues.apart(x, y) }
 
     /// Nothing painted yet: paint branches yourself. Nothing smaller than `smallest` is painted, since it can't be drawn on
     /// its own: 1/4000 of the node in the middle is about right.
@@ -143,9 +144,9 @@ public struct BranchColours<Tree: SunburstTree> {
         var previous: Float?
         var next = 0
         for item in RingLayout.visibleChildren(tree: tree, of: focus).kids where tree.size(of: item) > smallest {
-            if tree.style(of: item) == .free || tree.style(of: item) == .hidden { continue }
-            while previous.map({ Self.apart(Self.hue(next), $0) < Self.neighbourGap }) == true { next += 1 }
-            let hue = Self.hue(next)
+            if tree.role(of: item).isSpace { continue }
+            while previous.map({ SunburstHues.apart(SunburstHues.hue(next), $0) < SunburstHues.neighbourGap }) == true { next += 1 }
+            let hue = SunburstHues.hue(next)
             previous = hue
             next += 1
             paint(item, hue: hue)
@@ -215,5 +216,53 @@ public struct BranchColours<Tree: SunburstTree> {
             paintQuietly(c, depth: depth + 1)
             c = tree.nextSibling(of: c)
         }
+    }
+}
+
+/// The hues branches take, in order round the wheel: each next one a golden angle further on, so branches next to each
+/// other in the list are always far apart in colour, and however many there are, they fill the wheel evenly.
+public enum SunburstHues {
+    /// Where the first branch starts, in degrees.
+    public static let first: Float = 298
+    /// How far round the wheel each next one is: the golden angle, in degrees.
+    public static let step: Float = 137.508
+    /// A branch won't take a hue this close to the one before it on the ring.
+    public static let neighbourGap: Float = 50
+
+    /// The hue of the branch at this place in the order.
+    public static func hue(_ index: Int) -> Float { first + Float(index) * step }
+
+    /// How far apart two hues are round the wheel, in degrees: this far or more reads as different colours.
+    public static func apart(_ x: Float, _ y: Float) -> Float {
+        let d = abs(x - y).truncatingRemainder(dividingBy: 360)
+        return d > 180 ? 360 - d : d
+    }
+}
+
+/// Which hue each branch has, by name, kept from one picture to the next so a branch keeps its colour however sizes
+/// change. The app keeps `indices` between launches; it's a plain dictionary of name to place in `SunburstHues`' order.
+public struct HueMemory: Sendable, Equatable {
+    public private(set) var indices: [String: Int]
+    /// Whether a branch was given a hue it didn't have, so the memory needs keeping again.
+    public private(set) var changed = false
+    private var used: Set<Int>
+
+    public init(_ indices: [String: Int] = [:]) {
+        self.indices = indices
+        used = Set(indices.values)
+    }
+
+    /// The hue for a branch called `name`, next on the ring after one in `previous`: the hue it had, or else the first free
+    /// one that isn't close to the one before it.
+    public mutating func hue(for name: String, after previous: Float?) -> Float {
+        if let known = indices[name] { return SunburstHues.hue(known) }
+        var next = 0
+        while used.contains(next) || previous.map({ SunburstHues.apart(SunburstHues.hue(next), $0) < SunburstHues.neighbourGap }) == true {
+            next += 1
+        }
+        indices[name] = next
+        used.insert(next)
+        changed = true
+        return SunburstHues.hue(next)
     }
 }

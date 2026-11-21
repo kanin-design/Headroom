@@ -77,13 +77,12 @@ extension AppModel {
         return NamedThing(selected ?? focus)
     }
 
-    /// What's on the ring at this spot. The middle of it is the folder you're in.
-    func thing(at polar: (angle: Float, radius: Float)) -> NamedThing? {
-        if polar.radius < RingLayout.hole { return NamedThing(focus) }
-        let pieces = engine.layout.pieces
-        guard let index = engine.layout.hit(angle: polar.angle, radius: polar.radius), index < pieces.count, !pieces[index].isSmaller,
-              tree?.path(pieces[index].node) != nil else { return nil }
-        return NamedThing(pieces[index].node)
+    /// What a node the ring points to stands for, for its menu or a ⌘-click: the middle is the folder you're in, and a piece
+    /// is its thing when it has a place on the disk.
+    func thing(onRing node: UInt32) -> NamedThing? {
+        if node == focus { return NamedThing(focus) }
+        guard tree?.path(node) != nil else { return nil }
+        return NamedThing(node)
     }
 
     func realName(of node: UInt32) -> String {

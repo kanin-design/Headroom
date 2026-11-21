@@ -238,13 +238,13 @@ enum ScriptRunner {
     private static let groupOfStep: [String: StepGroup] = [
         "wait": .timing, "clock": .timing, "at": .timing, "mark": .timing, "scanned": .timing, "quit": .timing,
         "report": .timing,
-        "copies": .copies, "copyrow": .copies, "copyopen": .copies, "copyopenrow": .copies, "copyline": .copies,
+        "copies": .copies, "copyset": .copies, "copyrow": .copies, "copyopen": .copies, "copyopenrow": .copies, "copyline": .copies,
         "copykeep": .copies, "copylink": .copies, "copyact": .copies, "filekind": .copies, "copyhelp": .copies,
         "copytick": .copies, "benchcopy": .copies,
         "lens": .map, "focus": .map, "up": .map, "hover": .map, "links": .map, "lastuse": .map, "pointname": .map,
         "moveto": .map, "pointerpost": .map, "axlist": .map, "axpress": .map, "rightclick": .map, "target": .map, "where": .map, "select": .map, "back": .map, "forward": .map,
         "rings": .map, "changeinfo": .map, "ringbench": .map, "piece": .map, "pointer": .map, "labelpoint": .map,
-        "labelleave": .map, "panelhover": .map, "ringpoint": .map, "ringclick": .map, "labelclick": .map, "window": .map,
+        "labelleave": .map, "panelhover": .map, "ringpoint": .map, "ringat": .map, "ringclick": .map, "labelclick": .map, "window": .map,
         "search": .map, "volume": .map, "sizes": .map,
         "titlemenu": .menus, "menu": .menus, "action": .menus, "clipboard": .menus, "menubar": .menus, "key": .menus,
         "menuitem": .menus, "copyroute": .menus, "keydown": .menus, "keys": .menus,
@@ -264,7 +264,7 @@ enum ScriptRunner {
         "look": .card, "cardpress": .card, "carddrag": .card, "cardframe": .card, "card": .card,
         "checkupdates": .updates, "installupdate": .updates, "signedlikethis": .updates, "updatestate": .updates,
         "agents": .agents, "agentanswer": .agents, "agentremove": .agents, "agentswindow": .agents,
-        "drives": .backup, "backupdrive": .backup, "backupselect": .backup, "backupdeselect": .backup, "backupmove": .backup, "backupcopy": .backup,
+        "drives": .backup, "litdump": .backup, "locations": .backup, "backupfolder": .backup, "backupdrive": .backup, "backupselect": .backup, "backupdeselect": .backup, "backupmove": .backup, "backupcopy": .backup,
         "backupwait": .backup, "backupstate": .backup, "ghosts": .backup, "bringback": .backup, "verifymoved": .backup, "deletelast": .backup,
         "backupcandidates": .backup, "undomove": .backup, "driveside": .backup, "drivepick": .backup, "drivecopy": .backup,
         "drivecheck": .backup, "drivedelete": .backup, "selectonlymac": .backup, "backupactions": .backup, "hoverpiece": .backup, "openpiece": .backup, "labelsdump": .backup,
@@ -302,6 +302,31 @@ enum ScriptRunner {
             for drive in model.drives {
                 print("drive \(drive.name) at \(drive.mountPath): \(drive.fileSystemTitle), \(formatBytes(drive.free)) free\(drive.isReadOnly ? ", read-only" : "")\(model.whyNotDestination(drive).map { ", not for Backup: \($0)" } ?? "")")
             }
+        case "litdump":
+            // litdump: every piece lit now, and how: pointed at, lit whole, or on the way out.
+            guard let tree = model.tree else { return }
+            let pieces = model.engine.layout.pieces, emphasis = model.engine.emphasis, shares = model.engine.tintShares
+            // When only some of what's lit takes the tint, those are marked.
+            let some = shares.contains { $0 < 0.5 }
+            for (i, e) in emphasis.enumerated() where e > 0.5 && i < pieces.count {
+                let p = pieces[i]
+                let how = e > 1.5 ? "pointed" : e > 0.9 ? "whole" : "way out"
+                print("  lit \(how) \(p.isSmaller ? "smaller items in " : "")\(tree.friendlyPath(p.node))\(some && shares[i] > 0.5 ? " (coloured)" : "")")
+            }
+        case "locations":
+            // The right capsule's list as it shows it: the locations used, a divider, the other drives.
+            model.refreshDrives()
+            for place in model.usedLocations {
+                let current = model.backup.destination?.isSame(as: place) == true ? " (current)" : ""
+                print("used \(place.title) at \(place.root)\(place.drive.isConnected ? "" : ", not connected")\(current)\(place.drive.isNetwork ? ", network" : "")")
+            }
+            print("---")
+            for drive in model.otherDrives {
+                print("other \(drive.name)\(model.whyNotDestination(drive).map { ", \($0)" } ?? "")")
+            }
+        case "backupfolder":
+            // backupfolder path: a folder chosen in Choose Folder….
+            print("backupfolder \(argument): \(model.chooseDestination(folder: argument) ?? "now \(model.backup.destination?.title ?? "nothing") at \(model.backup.destination?.root ?? "")")")
         case "backupdrive":
             model.refreshDrives()
             guard let drive = model.drives.first(where: { $0.name == argument || $0.mountPath == argument }) else { print("backupdrive: no drive \(argument)"); return }
@@ -339,7 +364,11 @@ enum ScriptRunner {
         case "driveside":
             model.setShowDriveSide(argument != "off")
             let started = Date()
-            while argument != "off", model.pair == nil, Date().timeIntervalSince(started) < 20 { try? await Task.sleep(for: .milliseconds(100)) }
+            // The two disks as they are now: a picture of where files went before doesn't count.
+            let root = model.backup.destination?.root ?? ""
+            while argument != "off", model.pair.map({ !$0.drivePath.hasPrefix(root) }) ?? true, Date().timeIntervalSince(started) < 20 {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
             guard let pair = model.pair else { print("driveside \(argument): not shown, focus \(model.focus)"); return }
             print("driveside: \(pair.macPath) beside \(pair.drivePath), \(pair.tree.count) nodes, on screen \(model.tree === pair.tree)")
             for place in PairPlace.allCases { if let c = pair.counts[place] { print("  \(place.title(drive: pair.driveName)): \(c.files) files, \(formatBytes(c.bytes))") } }
@@ -357,7 +386,7 @@ enum ScriptRunner {
             guard let tree = model.tree, let node = resolve(argument, model), let index = model.engine.layout.piece(of: node) else {
                 print("hoverpiece \(argument): no piece"); return
             }
-            model.setHover(index)
+            model.chart.point(at: model.engine.layout.pieces[index].node)
             let other = model.pair.flatMap { $0.tree === tree ? $0.counterpart(node) : nil }
             print("hoverpiece \(tree.name(node)): \(model.hover?.note ?? ""), other half \(other.map { tree.path($0) ?? tree.name($0) } ?? "none")")
         case "labelsdump":
@@ -365,7 +394,7 @@ enum ScriptRunner {
             for p in model.engine.layout.pieces where p.ring == 0 {
                 print(String(format: "  ring 0 %@ %.0f°-%.0f° r %.3f-%.3f", model.tree?.name(p.node) ?? "?", p.a0 * 180 / .pi, p.a1 * 180 / .pi, p.r0, p.r1))
             }
-            for label in model.labels { print("  label \(label.title) \(label.value) \(label.place)") }
+            for label in model.chart.labels ?? [] { print("  label \(label.title) \(label.value) \(label.place)") }
         case "openpiece":
             // openpiece path: a click on that thing's piece.
             guard let tree = model.tree, let node = resolve(argument, model), let index = model.engine.layout.piece(of: node) else {
@@ -476,6 +505,13 @@ enum ScriptRunner {
     @MainActor
     private static func runCopiesStep(_ command: String, _ argument: String, _ model: AppModel) async {
         switch command {
+        case "copyset":
+            // copyset path: the set that holds this, pointed at in the inspector, as leaving one of its copies' lines does.
+            guard let node = resolve(argument, model), let group = model.copyGroupsHere.first(where: { $0.nodes.contains(node) }) else {
+                print("copyset \(argument): no set"); return
+            }
+            model.pointAtCopyGroup(group)
+            print("copyset \(argument): \(group.title), \(group.nodes.count) places")
         case "copies":
             // Copies looks only when it's open, so this waits for it to finish, then says what it found and what it cost.
             let started = CFAbsoluteTimeGetCurrent()
@@ -592,7 +628,7 @@ enum ScriptRunner {
         case "up":
             model.goUp()
         case "hover":
-            if argument.isEmpty { model.setHover(nil) }
+            if argument.isEmpty { model.chart.point(at: nil) }
             else if let node = resolve(argument, model) { model.highlight(node: node) }
             else { print("no such folder: \(argument)") }
         case "links":
@@ -736,7 +772,7 @@ enum ScriptRunner {
                 print("rings: lips at " + lipped.map { String(format: "%.0f° %.0f%%", $0.midAngle * 180 / .pi, $0.deeper * 100) }.joined(separator: ", "))
             }
             // How far around each ring goes with the most rings there can be, as a share of the first ring.
-            let fill = RingLayout.fill(tree: tree, focus: model.focus, style: model.ringSizes.style)
+            let fill = RingLayout.fill(tree: tree, focus: model.focus, parts: tree.parts(model.ringSizes))
             print("rings: at \(RingSizes.most), how far around each goes: " + fill.map { String(format: "%.1f%%", $0 * 100) }.joined(separator: " "))
         case "changeinfo":
             // changeinfo ~/some/folder: over the last day, how it changed, and what grew and shrank inside it, then the
@@ -792,7 +828,7 @@ enum ScriptRunner {
             }
             let label = at.label
             print("name \"\(label.title)\" at \(Int(at.x)),\(Int(at.y)), lands on \(w.contentView?.superview?.hitTest(NSPoint(x: at.x, y: w.frame.height - at.y)).map { String(describing: type(of: $0)).prefix(24) } ?? "nothing")")
-            model.enterLabel(piece: label.pieceIndex)
+            model.chart.pointerOnLabel(piece: label.pieceIndex)
             print("arrived: lit \(model.hover?.title ?? "nothing")")
             move(at.x, at.y)
             try? await Task.sleep(for: .milliseconds(60))
@@ -803,7 +839,7 @@ enum ScriptRunner {
         case "labelleave":
             // labelleave 2: the pointer goes from that name to empty space beside the ring.
             guard let w = mainWindow, let at = labelPoint(argument, model) else { print("no such name: \(argument)"); return }
-            model.leaveLabel(piece: at.label.pieceIndex)
+            model.chart.pointerLeftLabel(piece: at.label.pieceIndex)
             let p = NSPoint(x: 8, y: w.frame.height - 400)
             if let event = NSEvent.mouseEvent(with: .mouseMoved, location: p, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0) { model.mapView?.mouseMoved(with: event) }
             print("left: lit \(model.hover?.title ?? "nothing")")
@@ -820,9 +856,18 @@ enum ScriptRunner {
             }
             model.highlight(node: nil)
             print("off the row: lit \(model.hover?.title ?? "nothing")")
+        case "ringat":
+            // ringat 90 0.2: the pointer moved onto the ring at this angle in degrees and share of the radius, handed to this
+            // copy's ring alone. The pointer on screen doesn't move.
+            let parts = argument.split(separator: " ").compactMap { Double($0) }
+            guard parts.count == 2, let w = mainWindow else { return }
+            let angle = parts[0] * .pi / 180, radius = parts[1] * model.ring.radius
+            let p = NSPoint(x: model.ring.center.x + sin(angle) * radius, y: w.frame.height - (model.ring.center.y - cos(angle) * radius))
+            if let event = NSEvent.mouseEvent(with: .mouseMoved, location: p, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0) { model.mapView?.mouseMoved(with: event) }
+            print("ringat \(argument): lit \(model.hover?.title ?? "nothing")")
         case "ringpoint":
             // The pointer on the biggest piece of the ring itself.
-            guard let w = mainWindow, let piece = model.engine.layout.pieces.filter({ !$0.isSmaller && $0.style == .folder }).max(by: { $0.size < $1.size }) else { return }
+            guard let w = mainWindow, let piece = model.engine.layout.pieces.filter({ !$0.isSmaller && $0.role == .container }).max(by: { $0.size < $1.size }) else { return }
             let angle = Double(piece.a0 + piece.a1) / 2, radius = Double(piece.r0 + piece.r1) / 2 * model.ring.radius
             let p = NSPoint(x: model.ring.center.x + sin(angle) * radius, y: w.frame.height - (model.ring.center.y - cos(angle) * radius))
             print("ring: lands on \(w.contentView?.superview?.hitTest(p).map { String(describing: type(of: $0)).prefix(24) } ?? "nothing")")
@@ -844,7 +889,7 @@ enum ScriptRunner {
             let numbers = argument.split(separator: " ").map(String.init)
             guard let at = labelPoint(numbers.first ?? "", model) else { print("no such name: \(argument)"); return }
             print("clicking \"\(at.label.title)\", in \(model.displayName(model.focus)), \(model.plan.count) selected")
-            model.openLabel(piece: at.label.pieceIndex, count: numbers.count > 1 ? Int(numbers[1]) ?? 1 : 1)
+            model.chart.labelClicked(piece: at.label.pieceIndex, count: numbers.count > 1 ? Int(numbers[1]) ?? 1 : 1)
             try? await Task.sleep(for: .milliseconds(700))
             print("now in \(model.displayName(model.focus)), selected thing \(model.selected.map(model.displayName) ?? "none"), \(model.plan.count) selected")
         case "volume":
@@ -1128,7 +1173,7 @@ enum ScriptRunner {
             }
             let list = measure(20) { model.refreshShownRows() }
             print(String(format: "the list for this picture: %.1f ms", list))
-            let draw = measure(20) { _ = model.drawing(tree) }
+            let draw = measure(20) { _ = model.chart.makeLayout() }
             print(String(format: "one picture: %.1f ms", draw))
             let facts = model.facts
             let wins = measure(3) { _ = Wins.build(tree: tree, rules: model.rules, running: [], facts: facts) }
@@ -1216,10 +1261,11 @@ enum ScriptRunner {
             time("search: node_modules", rounds: 3) { _ = Search.run("node_modules", in: tree) }
             time("search: ø", rounds: 3) { _ = Search.run("ø", in: tree) }
             time("search: blåbær", rounds: 3) { _ = Search.run("blåbær", in: tree) }
-            time("one picture") { _ = model.drawing(tree) }
-            time("the names around it") { _ = model.makeLabels() }
+            time("one picture") { _ = model.chart.makeLayout() }
+            time("the names around it") { model.chart.relabel() }
             let pieces = model.engine.layout.pieces.count
-            time("hover on, hover off", rounds: 20) { model.setHover(pieces / 2); model.setHover(nil) }
+            let middle = pieces > 0 ? model.engine.layout.pieces[pieces / 2].node : 0
+            time("hover on, hover off", rounds: 20) { model.chart.point(at: middle); model.chart.point(at: nil) }
             time("zoom in and back", rounds: 3) { model.zoom(into: RingLayout.chainTail(tree: tree, biggest)); model.go(to: 0) }
             time("the list for this picture") { model.refreshShownRows() }
             time("Map to Free Up and back", rounds: 3) { model.setLens(.freeUp); model.setLens(.map) }
@@ -1499,7 +1545,7 @@ enum ScriptRunner {
             if parts.first == "piece" {
                 parts.removeFirst()
                 let layout = model.engine.layout
-                guard let piece = layout.pieces.filter({ !$0.isSmaller && $0.style == .folder }).max(by: { $0.size < $1.size }) else {
+                guard let piece = layout.pieces.filter({ !$0.isSmaller && $0.role == .container }).max(by: { $0.size < $1.size }) else {
                     print("press: no piece among \(layout.pieces.count)")
                     return
                 }
@@ -1623,7 +1669,7 @@ enum ScriptRunner {
     /// Somewhere on a name around the ring, by its number among those names.
     @MainActor
     private static func labelPoint(_ argument: String, _ model: AppModel) -> (label: SunburstLabel, x: Double, y: Double)? {
-        let names = model.labels.filter { $0.place != .inside }
+        let names = (model.chart.labels ?? []).filter { $0.place != .inside }
         guard let at = Int(argument), names.indices.contains(at) else { return nil }
         let label = names[at]
         return (label, label.position.x + (label.place == .right ? 18 : -18), label.position.y)
@@ -1664,7 +1710,8 @@ enum ScriptRunner {
         for lens in [Lens.map, .changes, .freeUp] {
             model.setLens(lens)
             collect("list", model.shownRows)
-            collect("names around the ring", model.makeLabels())
+            model.chart.relabel()
+            collect("names around the ring", model.chart.labels)
         }
         for window in [ChangeWindow.lastScan, .days(7), .days(30), .untouched(365)] {
             collect("changes", AppModel.changeMap(tree: tree, window: window, rules: model.rules, facts: model.facts).rows(tree: tree, rules: model.rules))
@@ -1815,7 +1862,7 @@ enum ScriptRunner {
         }
         print(String(format: "scan %.2fs, %d files, %d nodes, %d link records", tree.scanSeconds, tree.totalFiles[0], tree.count, tree.links.count))
         if tree.isPartial { print("still reading \(formatBytes(tree.totals[Int(tree.hidden)])), \(model.scanFiles) files so far") }
-        print(String(format: "pieces %d, labels %d, last scan loaded in %.1f ms", model.engine.layout.pieces.count, model.labels.count, model.cacheLoadMilliseconds))
+        print(String(format: "pieces %d, labels %d, last scan loaded in %.1f ms", model.engine.layout.pieces.count, (model.chart.labels.count ?? 0), model.cacheLoadMilliseconds))
         print("last scan \(model.lastScanNote); read in full \(Int(Date().timeIntervalSince(tree.fullReadAt))) s ago, journal \(tree.journal == nil ? "none" : "kept"), whole \(tree.isWhole)")
         print("focus \(model.displayName(model.focus)), planned \(model.plan.count), you'd get back \(formatBytes(model.planNumbers.total)), message: \(model.message ?? "none")")
         print("plan:")

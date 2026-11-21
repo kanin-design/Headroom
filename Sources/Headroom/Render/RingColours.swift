@@ -61,29 +61,17 @@ struct RingColours {
         }
         // A folder that already has a colour keeps it. A new one takes the next free colour, unless that would nearly match
         // the piece before it. With nothing remembered yet, that gives the biggest thing the first colour, and so on down.
-        typealias Colours = BranchColours<DiskTree>
         let key = focus == 0 ? tree.rootPath : (tree.path(focus) ?? tree.name(focus))
-        var known = memory.view(key)
-        var used = Set(known.values)
-        var changed = false
+        var hues = HueMemory(memory.view(key))
         var previous: Float?
         for item in items where tree.totals[Int(item)] > smallest {
             let n = tree.nodes[Int(item)]
             let name = String(decoding: UnsafeBufferPointer(start: tree.names + Int(n.nameOffset), count: Int(n.nameLength)), as: UTF8.self)
-            var index = known[name]
-            if index == nil {
-                var next = 0
-                while used.contains(next) || previous.map({ Colours.apart(Colours.hue(next), $0) < Colours.neighbourGap }) == true { next += 1 }
-                index = next
-                known[name] = next
-                used.insert(next)
-                changed = true
-            }
-            let hue = Colours.hue(index ?? 0)
+            let hue = hues.hue(for: name, after: previous)
             previous = hue
             branches.paint(item, hue: hue)
         }
-        if changed { memory.set(key, known) }
+        if hues.changed { memory.set(key, hues.indices) }
         if !tree.isPartial { memory.saveIfNeeded() }
     }
 

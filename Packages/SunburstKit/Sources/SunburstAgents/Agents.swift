@@ -156,6 +156,9 @@ public final class Agents {
         }
     }
 
+    /// How many calls are waiting for the user's answer.
+    var waitingCalls: Int { waiting.values.reduce(0) { $0 + $1.count } }
+
     private func settle(_ key: String, _ answer: Bool?) {
         for (_, continuation) in waiting.removeValue(forKey: key) ?? [:] { continuation.resume(returning: answer) }
     }

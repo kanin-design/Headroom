@@ -331,12 +331,8 @@ extension AppModel {
         refreshShownRows()
         savePlan()
         refreshPlanNumbers()
-        engine.apply(drawing(tree), .live)
         // What's under the pointer now says something different.
-        if let pointer = lastPointer {
-            lastHoverIndex = -1
-            setHover(engine.layout.hit(angle: pointer.angle, radius: pointer.radius))
-        }
+        refreshRing(.live, repoint: true)
     }
 
     func refreshPlanNumbers() {
@@ -427,7 +423,7 @@ extension AppModel {
     /// Pointing at the button shows what it would take before you press it: its boxes light in the list, its files on the
     /// ring, and the free space grows by that much.
     func pointAtRecommended(_ on: Bool) {
-        guard let tree else { return }
+        guard tree != nil else { return }
         recommendedHot = on
         guard on else {
             point(at: nil)
@@ -494,7 +490,7 @@ extension AppModel {
                 guard let self, !Task.isCancelled else { return }
                 self.pointing = nil
                 self.highlight(nodes: [])
-                Motion.animate(.easeOut(duration: 0.16)) { self.labels = self.makeLabels() }
+                Motion.animate(.easeOut(duration: 0.16)) { self.chart.namer = HeadroomNames(model: self) }
             }
             return
         }
@@ -506,16 +502,15 @@ extension AppModel {
         pointing = Pointing(id: id, title: row?.title ?? box.title, bytes: bytes, color: color)
         highlight(nodes: rows.flatMap(\.nodes))
         // The biggest of what's lit gets its name around the ring.
-        var picks: [LabelPlacer.Pick] = []
+        var picks: [(at: Int, name: HeadroomNames.Named)] = []
         let layout = engine.layout
         for one in rows.prefix(40) {
-            guard let at = layout.bestPiece(for: one.nodes, tree: tree), !picks.contains(where: { $0.index == at }) else { continue }
-            picks.append(LabelPlacer.Pick(index: at, title: one.title, value: formatBytes(one.gain), score: Double(layout.pieces[at].size)))
+            guard let at = layout.bestPiece(for: one.nodes, in: tree), !picks.contains(where: { $0.at == at }) else { continue }
+            picks.append((at, HeadroomNames.Named(nodes: one.nodes, title: one.title, value: formatBytes(one.gain))))
         }
-        picks.sort { $0.score > $1.score }
+        picks.sort { layout.pieces[$0.at].size > layout.pieces[$1.at].size }
         Motion.animate(.easeOut(duration: 0.14)) {
-            labels = LabelPlacer.place(layout: layout, ring: ring, lens: .freeUp, tree: tree, model: self, only: Array(picks.prefix(7)))
-            labelsVisible = true
+            chart.namer = HeadroomNames(model: self, only: picks.prefix(7).map(\.name))
         }
     }
 
@@ -641,7 +636,7 @@ extension AppModel {
         refreshShownRows()
         savePlan()
         refreshPlanNumbers()
-        engine.apply(drawing(tree), .live)
+        refreshRing(.live)
     }
 
     func removeFromPlan(_ item: PlanItem) {
@@ -779,16 +774,12 @@ extension AppModel {
     // MARK: Showing the after
 
     func setPreviewAfter(_ on: Bool) {
-        guard on != previewingAfter, let tree else { return }
+        guard on != previewingAfter, tree != nil else { return }
         if on, planNumbers.total == 0 || mode != .freeUp || planNumbers.after == nil { return }
         previewingAfter = on
-        Motion.animate(.easeOut(duration: 0.12)) { labelsVisible = false }
-        if on, let after = planNumbers.after {
-            engine.apply(drawing(tree, after: after), .settle)
-        } else {
-            engine.apply(drawing(tree), .settle)
-            placeLabels(after: 0.3)
-        }
+        // The names are for the disk as it is: they step aside while the after shows.
+        Motion.animate(.easeOut(duration: 0.12)) { chart.showsLabels = !on }
+        refreshRing(.settle)
     }
 
     // MARK: Opening things

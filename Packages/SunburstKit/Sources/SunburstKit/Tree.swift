@@ -1,10 +1,11 @@
 import Foundation
 
-/// The tree a sunburst is drawn from. The package never owns it: the host keeps its own tree and answers these questions
-/// about it. Nodes are numbers. Node 0 is the root, and 0 as a child or a sibling means there is none. Children are listed
+/// The data a sunburst is drawn from. The kit never owns it: the app keeps its own tree and answers these questions about
+/// it. Nodes are numbers. Node 0 is the root, and 0 as a child or a sibling means there is none. Children are listed
 /// biggest first.
 ///
-/// Only the first group is required. The rest are the host's choices, with defaults that draw a plain sunburst.
+/// The tree says only what exists, how big it is and what it is. How it's drawn (bands, a split, how many rings, what's
+/// cut into stretches) is the chart's: see `SunburstParts`.
 public protocol SunburstTree {
     // MARK: Shape
 
@@ -17,45 +18,39 @@ public protocol SunburstTree {
     func ownSize(of node: UInt32) -> UInt64
     /// A folder that's nearly all one subfolder is drawn as one piece with it. Only folders chain.
     func isFolder(_ node: UInt32) -> Bool
-    /// How its piece is drawn.
-    func style(of node: UInt32) -> PieceStyle
     /// A number from its name that stays the same from one tree to the next, so a piece can glide from its old place to
     /// its new one when the tree changes.
     func nameKey(of node: UInt32) -> UInt64
 
-    // MARK: Host's choices
+    // MARK: What a node is
 
-    /// The root is two halves of the ring, whatever their sizes, such as one disk beside another.
-    var hasHalves: Bool { get }
-    /// Which of the root's children are the halves.
-    func isHalf(_ node: UInt32) -> Bool
-    /// The root has a thin band around the middle, and the rings of folders start outside it.
-    var hasBand: Bool { get }
-    /// Around the root, lower ranks are drawn first, then biggest first.
-    func rootRank(of node: UInt32) -> Int
-    /// A shape of its own in the first ring, such as free space: nothing inside it is drawn, and it reaches as far out as the
-    /// rest of the ring does on average, so its area matches its share.
-    func isPlainShape(_ node: UInt32) -> Bool
-    /// Whether the tree has an order of its own. Then things in a folder are drawn by group first, and a folder whose
-    /// contents fall in more than one group is drawn as one stretch for each, coloured by the first thing in it.
-    var hasGroups: Bool { get }
+    /// What the node is, which sets how it looks. By default a folder is a container and anything else an item.
+    func role(of node: UInt32) -> SunburstRole
+    /// Being shared, such as a file a torrent is seeding: drawn with a bright dashed line along its outer edge.
+    func isShared(_ node: UInt32) -> Bool
+    /// Which group the node is in, for rings drawn by group (`SunburstParts.Rings.Order.byGroup`), such as a place:
+    /// on both disks, only on this one. Nil for none.
     func group(of node: UInt32) -> UInt8?
     /// Still being read: what looks like nearly all of it may turn out to be a small part, so it doesn't chain yet.
     func isStillGrowing(_ node: UInt32) -> Bool
-    /// Drawn as a piece of its own however thin, never gathered into "smaller items": a film or an episode in a library,
-    /// say, that should always be there to point at.
-    func isAlwaysDrawn(_ node: UInt32) -> Bool
-    /// The node's piece cut into stretches side by side, in this order, such as one for each place its files are in, or for
-    /// what's selected and what isn't. What's inside it is drawn under the whole piece. Nil, the default, for one piece. A
-    /// node drawn in stretches isn't also cut by groups.
-    func stretches(of node: UInt32) -> [SunburstStretch]?
     /// Whether the tree has a node with this number, so a number from outside, such as an agent's, can be checked before the
     /// tree is asked anything about it. By default it's looked for from the root down; a tree that numbers its nodes in a
     /// row can answer at once.
     func hasNode(_ node: UInt32) -> Bool
+    /// Whether `node` is `folder` or inside it. By default it walks up from the node; a tree that numbers its nodes in
+    /// depth-first order can answer at once.
+    func isInside(_ node: UInt32, _ folder: UInt32) -> Bool
+
+    // MARK: Lighting
+
+    /// A set of nodes, each with everything inside it, as lighting asks about it once for every piece on the ring.
+    associatedtype Branches: SunburstNodeSet = SunburstNodes<Self>
+    /// These nodes as a set, for lighting: by default one that walks up from each node it's asked about. A tree that numbers
+    /// its nodes in depth-first order can answer from ranges, much faster on a big ring.
+    func branches(_ nodes: [UInt32]) -> Branches
 }
 
-/// One stretch of a node's piece: see `SunburstTree.stretches(of:)`.
+/// One stretch of a node's piece: see `SunburstParts.Rings.cuts`.
 public struct SunburstStretch: Sendable, Equatable {
     /// How much of the node it is: its angle is its share of all the node's stretches.
     public var size: UInt64
@@ -74,17 +69,24 @@ public struct SunburstStretch: Sendable, Equatable {
     }
 }
 
+public extension SunburstTree where Branches == SunburstNodes<Self> {
+    func branches(_ nodes: [UInt32]) -> SunburstNodes<Self> { SunburstNodes(nodes, in: self) }
+}
+
 public extension SunburstTree {
-    var hasHalves: Bool { false }
-    func isHalf(_ node: UInt32) -> Bool { false }
-    var hasBand: Bool { false }
-    func rootRank(of node: UInt32) -> Int { 0 }
-    func isPlainShape(_ node: UInt32) -> Bool { false }
-    var hasGroups: Bool { false }
+    func role(of node: UInt32) -> SunburstRole { isFolder(node) ? .container : .item }
+    func isShared(_ node: UInt32) -> Bool { false }
     func group(of node: UInt32) -> UInt8? { nil }
     func isStillGrowing(_ node: UInt32) -> Bool { false }
-    func isAlwaysDrawn(_ node: UInt32) -> Bool { false }
-    func stretches(of node: UInt32) -> [SunburstStretch]? { nil }
+
+    func isInside(_ node: UInt32, _ folder: UInt32) -> Bool {
+        var at = node
+        while true {
+            if at == folder { return true }
+            if at == 0 { return false }
+            at = parent(of: at)
+        }
+    }
 
     func hasNode(_ node: UInt32) -> Bool {
         if node == 0 { return true }
@@ -110,5 +112,17 @@ public extension SunburstTree {
             c = nextSibling(of: c)
         }
         return out
+    }
+
+    /// How many levels the node is below the root: 0 for the root.
+    @inlinable
+    func depth(of node: UInt32) -> Int {
+        var depth = 0
+        var at = node
+        while at != 0 {
+            at = parent(of: at)
+            depth += 1
+        }
+        return depth
     }
 }

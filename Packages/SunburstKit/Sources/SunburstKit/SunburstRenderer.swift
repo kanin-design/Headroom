@@ -31,6 +31,7 @@ struct UniformsGPU {
     var litAbove: Float = 1         // how lit a piece has to be to count as lit, for that
     var top: Float = -1             // the piece pointed at, which lies over all the others; -1 when there's none
     var dither: Float = 1           // 1 adds the pixel of noise that keeps dark gradients smooth, 0 leaves it out
+    var dialSides: Float = 1        // how many wholes the scale counts across: 1 for the circle, 2 for two sides each 0...100%
     var tint: SIMD4<Float> = .zero  // the colour lit pieces take on, and in w how much
 }
 
@@ -64,6 +65,7 @@ struct UniformsGPU {
     private(set) var instanceCount = 0
     private var emphasisSlot = 0
     private var emphasisOffset = 0
+    private var tintSharesOffset = 0
 
     private var piecesTexture: MTLTexture?
     private var glowTexture: MTLTexture?
@@ -107,7 +109,7 @@ struct UniformsGPU {
               let comp = pipeline("quad_vertex", "composite", format: Self.outputFormat, blended: false),
               // Both are replaced by ones of the right size as soon as there's something to draw.
               let instances = device.makeBuffer(length: MemoryLayout<SegmentGPU>.stride, options: .storageModeShared),
-              let emphasis = device.makeBuffer(length: 3 * MemoryLayout<Float>.stride, options: .storageModeShared)
+              let emphasis = device.makeBuffer(length: 3 * 2 * MemoryLayout<Float>.stride, options: .storageModeShared)
         else { return nil }
         segmentPipeline = seg
         downPipeline = down
@@ -145,7 +147,8 @@ struct UniformsGPU {
         }
         // Short of memory, the buffers already here stay, and so does the number of pieces they're drawn with: a number
         // larger than a buffer holds would have the GPU read past its end.
-        let needed = instances.count * 3 * MemoryLayout<Float>.stride
+        // Three places, each with how lit each piece is and then how much of the tint it takes.
+        let needed = instances.count * 3 * 2 * MemoryLayout<Float>.stride
         if emphasisBuffer.length < needed {
             guard let bigger = device.makeBuffer(length: needed * 2, options: .storageModeShared) else { return }
             emphasisBuffer = bigger
@@ -156,20 +159,24 @@ struct UniformsGPU {
         instanceCount = instances.count
     }
 
-    /// How lit each piece is now, and which one is pointed at, if any.
-    func writeEmphasis(_ values: [Float], top: Int? = nil) {
+    /// How lit each piece is now, how much of the tint each takes, and which one is pointed at, if any.
+    func writeEmphasis(_ values: [Float], tintShares: [Float], top: Int? = nil) {
         self.top = top
-        guard !values.isEmpty else { return }
+        guard !values.isEmpty, tintShares.count == values.count else { return }
         let bytes = values.count * MemoryLayout<Float>.stride
         // The buffer is three places of the same size, used in turn, so the frames the GPU is still drawing keep reading
-        // theirs whole, also when the number of pieces has just changed.
+        // theirs whole, also when the number of pieces has just changed. Each holds the emphasis, then the tint shares.
         let place = emphasisBuffer.length / 3 / MemoryLayout<Float>.stride * MemoryLayout<Float>.stride
         // A buffer that couldn't grow keeps the emphasis it last held, rather than one the GPU would read past its end.
-        guard bytes <= place else { return }
+        guard bytes * 2 <= place else { return }
         emphasisSlot = (emphasisSlot + 1) % 3
         emphasisOffset = emphasisSlot * place
+        tintSharesOffset = emphasisOffset + bytes
         values.withUnsafeBytes { raw in
             (emphasisBuffer.contents() + emphasisOffset).copyMemory(from: raw.baseAddress!, byteCount: bytes)
+        }
+        tintShares.withUnsafeBytes { raw in
+            (emphasisBuffer.contents() + tintSharesOffset).copyMemory(from: raw.baseAddress!, byteCount: bytes)
         }
         mostLit = values.max() ?? 0
     }
@@ -260,6 +267,7 @@ struct UniformsGPU {
             e.setVertexBuffer(instanceBuffer, offset: 0, index: 0)
             e.setVertexBytes(&u, length: MemoryLayout<UniformsGPU>.stride, index: 1)
             e.setVertexBuffer(emphasisBuffer, offset: emphasisOffset, index: 2)
+            e.setVertexBuffer(emphasisBuffer, offset: tintSharesOffset, index: 3)
             e.setFragmentBytes(&u, length: MemoryLayout<UniformsGPU>.stride, index: 1)
             if instanceCount > 0 {
                 // Past 1, emphasis lifts a piece outward, and while a tint shows a lit piece may be drawn wider than its

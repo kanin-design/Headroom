@@ -26,9 +26,13 @@ public struct ItemTree<Item> {
     @usableFromInline let siblings: [UInt32]
     @usableFromInline let totals: [UInt64]
     @usableFromInline let owns: [UInt64]
+    @usableFromInline let roles: [SunburstRole]
 
     /// A tree of `root` and everything inside it. `children` may give nil or an empty list for an item with nothing inside.
-    public init<Size: BinaryInteger>(_ root: Item, name: (Item) -> String, size: (Item) -> Size, children: (Item) -> [Item]?) {
+    /// `role`, if given, says what an item is, such as money not yet spent being room (`SunburstRole.room`); by default an
+    /// item with items inside it is a container and the rest are items.
+    public init<Size: BinaryInteger>(_ root: Item, name: (Item) -> String, size: (Item) -> Size, children: (Item) -> [Item]?,
+                                     role: ((Item) -> SunburstRole?)? = nil) {
         var items: [Item] = [], names: [String] = [], parents: [UInt32] = [], owns: [UInt64] = []
         // Depth first without recursion, so a deep tree can't run out of stack: each item is numbered before what's inside it,
         // and what's inside it in the order given.
@@ -75,6 +79,7 @@ public struct ItemTree<Item> {
         self.siblings = siblings
         self.totals = totals
         self.owns = owns
+        roles = items.indices.map { at in role?(items[at]) ?? (firstChildren[at] != 0 ? .container : .item) }
     }
 
     /// The item a node stands for.
@@ -109,7 +114,7 @@ extension ItemTree: SunburstTree {
     @inlinable public func size(of node: UInt32) -> UInt64 { totals[Int(node)] }
     @inlinable public func ownSize(of node: UInt32) -> UInt64 { owns[Int(node)] }
     @inlinable public func isFolder(_ node: UInt32) -> Bool { firstChildren[Int(node)] != 0 }
-    @inlinable public func style(of node: UInt32) -> PieceStyle { firstChildren[Int(node)] != 0 ? .folder : .file }
+    @inlinable public func role(of node: UInt32) -> SunburstRole { roles[Int(node)] }
     @inlinable public func nameKey(of node: UInt32) -> UInt64 { keys[Int(node)] }
     @inlinable public func hasNode(_ node: UInt32) -> Bool { Int(node) < items.count }
 }

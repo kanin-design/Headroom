@@ -67,6 +67,8 @@ struct PairPicture {
     let drivePath: String
     let driveName: String
     let places: [UInt32: PairPlace]
+    /// What's backed up: each file that's on both halves, or was moved to the drive, and each folder that's all such files.
+    let backedUp: Set<UInt32>
     /// Files and bytes in each place, for the legend.
     let counts: [PairPlace: (files: Int, bytes: UInt64)]
     /// What each half holds: the Mac's without the files moved off it, which are only drawn there.
@@ -347,6 +349,14 @@ struct PairPicture {
             for k in 0..<PairPlace.allCases.count { byPlace[p * PairPlace.allCases.count + k] &+= byPlace[i * PairPlace.allCases.count + k] }
             i -= 1
         }
+        // Backed up: a file on both halves or moved to the drive, and a folder that's nothing else.
+        let kept = [PairPlace.both.rawValue, PairPlace.moved.rawValue], width = PairPlace.allCases.count
+        var backedUp = Set(places.compactMap { kept.contains($0.value.rawValue) ? $0.key : nil })
+        for i in 3..<n where tree.nodes[i].has(NodeFlag.directory) {
+            let row = byPlace[(i * width)..<((i + 1) * width)]
+            let all = row.reduce(UInt64(0), &+)
+            if all > 0, kept.reduce(UInt64(0), { $0 &+ row[i * width + $1] }) == all { backedUp.insert(UInt32(i)) }
+        }
         for i in 3..<n where tree.nodes[i].has(NodeFlag.directory) && places[UInt32(i)] == nil {
             let row = byPlace[(i * PairPlace.allCases.count)..<((i + 1) * PairPlace.allCases.count)]
             if let best = row.indices.max(by: { row[$0] < row[$1] }), row[best] > 0 {
@@ -357,7 +367,7 @@ struct PairPicture {
         for (node, place) in places { tree.order[node] = place.rank }
         let macTotal = tree.totals[Int(mac)]
         return PairPicture(tree: tree, macSide: mac, driveSide: drive, macPath: macPath, drivePath: drivePath, driveName: driveName,
-                           places: places, counts: counts, macBytes: macTotal &- min(ghostBytes, macTotal), driveBytes: tree.totals[Int(drive)],
+                           places: places, backedUp: backedUp, counts: counts, macBytes: macTotal &- min(ghostBytes, macTotal), driveBytes: tree.totals[Int(drive)],
                            driveRel: driveFiles.reduce(into: [:]) { $0[$1.value.node] = $1.key }, driveNodes: driveFiles.mapValues(\.node),
                            driveSizes: driveFiles.reduce(into: [:]) { $0[$1.value.node] = $1.value.size },
                            macRel: macFiles.reduce(into: [:]) { $0[$1.value.node] = $1.key }, online: online, readAt: readAt,

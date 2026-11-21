@@ -143,7 +143,7 @@ final class RingTests: XCTestCase {
         let d = deepDisk()
         for style in [RingStyle.standard, .tapered] {
             for focus in [d.node("/Volumes/Fake"), d.node(deep(2)), 0] {
-                let measured = RingLayout.fill(tree: d.tree, focus: focus, style: style)
+                let measured = RingLayout.fill(tree: d.tree, focus: focus, parts: d.tree.parts(RingSizes(depth: 6, style: style)))
                 let drawn = RingLayout.build(tree: d.tree, focus: focus, colorer: { _ in .zero }, sizes: RingSizes(depth: RingSizes.most, style: style))
                 XCTAssertGreaterThan(measured.count, 3)
                 // With fewer rings than the most, each sits further out and goes at least as far around.
@@ -191,7 +191,7 @@ final class RingTests: XCTestCase {
                 XCTAssertEqual(layout.smallerPiece(in: at), pieces.firstIndex { $0.isSmaller && Int($0.parent) == at })
             }
             XCTAssertEqual(layout.outerSmaller, pieces.firstIndex { $0.isSmaller && $0.parent < 0 })
-            XCTAssertEqual(layout.freePiece, pieces.firstIndex { $0.style == .free })
+            XCTAssertEqual(layout.roomPiece, pieces.firstIndex { $0.role == .room })
             // Too small to draw: what holds it stands in.
             XCTAssertNil(layout.piece(of: tiny))
             let holder = try XCTUnwrap(layout.nearestPiece(to: tiny, tree: d.tree))

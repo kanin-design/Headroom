@@ -112,7 +112,7 @@ struct BackupPanel: View {
                 }, enabled: !model.isCleaning, deselect: { picks in
                     let gone = Set(picks.map(\.path))
                     Motion.animate(.snappy(duration: 0.2)) { model.driveSelection.removeAll { gone.contains($0.path) } }
-                    if let tree = model.tree { model.engine.apply(model.drawing(tree), .live) }
+                    model.refreshRing(.live)
                 }, folderName: { model.shownFolder($0) })
             }
         }

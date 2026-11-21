@@ -21,12 +21,21 @@ extension AppModel {
     // MARK: Drives
 
     func refreshDrives() {
-        let now = DriveInfo.connected()
+        var now = DriveInfo.connected()
+        // A location chosen on a drive the Finder doesn't list, such as a server's share mounted out of sight, is connected too
+        // while it's mounted.
+        for place in backup.usedLocations where !now.contains(where: { $0.isSame(as: place.drive) }) {
+            if let there = DriveInfo.mounted(at: place.drive.mountPath), there.isSame(as: place.drive) { now.append(there) }
+        }
         if now != drives { drives = now }
         // A drive that's back, perhaps renamed or mounted somewhere else, is the same drive by its ID.
         if let wanted = backup.destination?.drive, let found = connected(wanted), found != wanted {
             backup.destination?.drive = found
             for at in backup.knownDrives.indices where backup.knownDrives[at].isSame(as: found) { backup.knownDrives[at] = found }
+            if var places = backup.locations {
+                for at in places.indices where places[at].drive.isSame(as: found) { places[at].drive = found }
+                backup.locations = places
+            }
         }
         readBackupFolderOnce()
     }
@@ -82,15 +91,27 @@ extension AppModel {
     /// Where Backup's files go, while it's connected.
     var destinationDrive: DriveInfo? { backup.destination.flatMap { connected($0.drive) } }
 
-    /// The drives the right capsule offers: every connected one, then the ones used before that aren't connected now.
-    var destinationChoices: [DriveInfo] {
-        var out = drives
-        for known in backup.knownDrives where !drives.contains(where: { $0.isSame(as: known) }) {
-            var away = known
-            away.isConnected = false
-            out.append(away)
+    /// The locations Backup has used, first in the right capsule's list: each as its drive is now, connected or not.
+    var usedLocations: [BackupDestination] {
+        let current = backup.destination
+        var out: [BackupDestination] = []
+        for var place in backup.usedLocations {
+            if let now = connected(place.drive) { place.drive = now } else { place.drive.isConnected = false }
+            // The same name in the same place twice, as a drive formatted again is: one row, the one in use, or connected.
+            if let at = out.firstIndex(where: { $0.title == place.title && $0.root == place.root }) {
+                let inUse = { (p: BackupDestination) in current.map(p.isSame) ?? false }
+                if !inUse(out[at]), inUse(place) || (place.drive.isConnected && !out[at].drive.isConnected) { out[at] = place }
+            } else {
+                out.append(place)
+            }
         }
         return out
+    }
+
+    /// The rest of the right capsule's list: the drives connected now that no used location is on.
+    var otherDrives: [DriveInfo] {
+        let used = backup.usedLocations
+        return drives.filter { drive in !used.contains { $0.drive.isSame(as: drive) } }
     }
 
     /// Why a drive can't be where Backup's files go, or nil when it can.
@@ -105,23 +126,14 @@ extension AppModel {
         guard !isCleaning, whyNotDestination(drive) == nil else { return }
         // Picks on another drive's half don't carry over.
         if backup.destination.map({ !$0.drive.isSame(as: drive) }) ?? false { backup.drivePicks = nil }
-        backup.destination = BackupDestination(drive: drive, folder: folder)
-        if let at = backup.knownDrives.firstIndex(where: { $0.isSame(as: drive) }) {
-            backup.knownDrives[at] = drive
-        } else if !drive.isBoot {
-            backup.knownDrives.append(drive)
-        }
+        backup.use(BackupDestination(drive: drive, folder: folder))
         saveBackup()
         // Both disks, with this one.
         if mode == .backup, showDriveSide || showGhosts { applyGhosts() }
     }
 
-    /// Choose Folder…: where on a connected drive Backup's files go.
+    /// Choose Folder…: any folder as where Backup's files go, on a drive or a server's share, starting where they go now.
     func chooseDestinationFolder() {
-        guard let drive = destinationDrive ?? drives.first(where: { whyNotDestination($0) == nil }) else {
-            showTip("Connect a drive first.")
-            return
-        }
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
@@ -129,9 +141,28 @@ extension AppModel {
         panel.allowsMultipleSelection = false
         panel.prompt = "Choose"
         panel.message = "Choose where Backup puts files. They go in \(BackupPaths.macFolder), at their full path."
-        panel.directoryURL = URL(fileURLWithPath: BackupDestination(drive: drive, folder: backup.destination?.folder ?? "").root)
-        guard panel.runModal() == .OK, let url = panel.url, let holder = DriveInfo.holding(url.path), whyNotDestination(holder) == nil else { return }
-        chooseDestination(holder, folder: BackupPaths.fromDriveTop(url.path, mount: holder.mountPath))
+        panel.directoryURL = URL(fileURLWithPath: backup.destination.flatMap { connected($0.drive) != nil ? $0.root : nil } ?? "/Volumes")
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        if let why = chooseDestination(folder: url.path) { showTip(why) }
+    }
+
+    /// A folder as where Backup's files go, wherever it's mounted. Says why not when it can't be.
+    @discardableResult
+    func chooseDestination(folder path: String) -> String? {
+        guard !isCleaning else { return "Headroom is busy." }
+        // Spelled as the system spells it, so it reads from the top of its drive: /tmp is /private/tmp.
+        let real = PathMath.canonical(path)
+        guard let holder = DriveInfo.holding(real) else { return "That folder isn't there." }
+        switch whyNotDestination(holder) {
+        case "On the left"?: return "Choose a folder on another disk."
+        case let why?: return "\(holder.name) is \(why.lowercased())."
+        case nil: break
+        }
+        guard let folder = BackupPaths.folder(real, onDriveAt: PathMath.canonical(holder.mountPath)) else { return "That folder isn't there." }
+        // A drive the Finder doesn't list joins the ones Backup knows are there.
+        if connected(holder) == nil { drives.append(holder) }
+        chooseDestination(holder, folder: folder)
+        return nil
     }
 
     // MARK: Big files
@@ -350,7 +381,7 @@ extension AppModel {
                 driveSelection += added
                 showTip(added.count == 1 ? "Selected 1 file" : "Selected \(added.count) files")
             }
-            engine.apply(drawing(tree), .live)
+            refreshRing(.live)
             return
         }
         // On this Mac: the files in it big enough for Backup. What else it won't take, it says no to.
@@ -397,12 +428,12 @@ extension AppModel {
         } else {
             driveSelection.append(file)
         }
-        if let tree { engine.apply(drawing(tree), .live) }
+        refreshRing(.live)
     }
 
     func deselectDriveFile(_ file: DriveFile) {
         driveSelection.removeAll { $0.path == file.path }
-        if let tree { engine.apply(drawing(tree), .live) }
+        refreshRing(.live)
     }
 
     /// Copies files from the drive into the same place in the folder on the Mac, checked against the hash beside each, or
@@ -633,7 +664,7 @@ extension AppModel {
     func backupChanged() {
         saveBackup()
         planner = nil
-        if mode == .backup, let tree { engine.apply(drawing(tree), .live) }
+        if mode == .backup { refreshRing(.live) }
     }
 
     /// What the ring stripes in Backup: the files on its list.

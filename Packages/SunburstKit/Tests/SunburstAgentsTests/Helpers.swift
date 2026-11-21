@@ -181,6 +181,5 @@ struct PathTree: SunburstTree {
     func size(of node: UInt32) -> UInt64 { totals[Int(node)] }
     func ownSize(of node: UInt32) -> UInt64 { nodes[Int(node)].own }
     func isFolder(_ node: UInt32) -> Bool { nodes[Int(node)].folder }
-    func style(of node: UInt32) -> PieceStyle { nodes[Int(node)].folder ? .folder : .file }
     func nameKey(of node: UInt32) -> UInt64 { UInt64(truncatingIfNeeded: nodes[Int(node)].name.hashValue) }
 }

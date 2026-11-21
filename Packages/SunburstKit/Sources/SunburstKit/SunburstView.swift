@@ -39,10 +39,14 @@ public final class SunburstView: NSView {
 
     /// For a window whose content reaches under its title bar: a press along the top or on empty background moves the window,
     /// and a double-click along the top does what System Settings says a title bar's does. Off by default.
-    public var movesWindow = false
+    public var movesWindow = false {
+        didSet { if movesWindow, window != nil { watchForDoubleClicksOnTop() } }
+    }
     /// Whether the view takes the keyboard when it appears in a window, so keys reach `onKey` at once. Off by default; a
-    /// click on the view always gives it the keyboard.
-    public var takesKeyboardFocus = false
+    /// click on the view always gives it the keyboard. Set while the view is already in a window, it takes the keyboard then.
+    public var takesKeyboardFocus = false {
+        didSet { if takesKeyboardFocus, !oldValue, window != nil { takeKeyboardSoon() } }
+    }
 
     // MARK: Callbacks
 
@@ -141,11 +145,14 @@ public final class SunburstView: NSView {
         updateDrawableSize()
         startAnimating()
         // With the keyboard from the start, keys simply work.
-        if takesKeyboardFocus {
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                self.window?.makeFirstResponder(self)
-            }
+        if takesKeyboardFocus { takeKeyboardSoon() }
+    }
+
+    /// Takes the keyboard once the window has finished what it's doing.
+    private func takeKeyboardSoon() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.window?.makeFirstResponder(self)
         }
     }
 

@@ -207,7 +207,7 @@ final class ChartTests: XCTestCase {
         var tree = plain
         let films = tree.node("Films")
         tree.cut[films] = [SunburstStretch(size: 1, key: 0), SunburstStretch(size: 1, key: 1), SunburstStretch(size: 1, key: 2)]
-        let chart = SunburstChart(tree: tree, name: { tree.nodes[Int($0)].name }, engine: SunburstEngine(reducesMotion: { false }))
+        let chart = SunburstChart(tree: tree, name: { tree.nodes[Int($0)].name }, parts: tree.parts, engine: SunburstEngine(reducesMotion: { false }))
         let at = try XCTUnwrap(chart.engine.layout.piece(of: films))
         let second = chart.engine.layout.pieces[at + 1]
         chart.pointerMoved(to: (angle: second.midAngle, radius: (second.r0 + second.r1) / 2))
@@ -217,9 +217,9 @@ final class ChartTests: XCTestCase {
 
     func testASharedPieceHasABrightDashedEdge() throws {
         try XCTSkipIf(MTLCreateSystemDefaultDevice() == nil, "no GPU here")
-        func total(_ style: PieceStyle) throws -> Double {
+        func total(shared: Bool) throws -> Double {
             var (_, tree) = chart()
-            tree.nodes[Int(tree.node("Films"))].style = style
+            tree.nodes[Int(tree.node("Films"))].shared = shared
             let finished = tree
             let chart = SunburstChart(tree: finished, name: { finished.nodes[Int($0)].name }, engine: SunburstEngine(reducesMotion: { false }))
             let image = try XCTUnwrap(chart.picture(width: 400, height: 300, dithered: false))
@@ -227,7 +227,7 @@ final class ChartTests: XCTestCase {
             for y in stride(from: 0, to: 300, by: 3) { for x in stride(from: 0, to: 400, by: 3) { sum += try brightness(of: image, x: x, y: y) } }
             return sum
         }
-        XCTAssertGreaterThan(try total(.shared), try total(.folder) * 1.002)
+        XCTAssertGreaterThan(try total(shared: true), try total(shared: false) * 1.002)
     }
 
     /// A tree sized by one thing can say another: here each node's text is how many files are in it.
@@ -245,7 +245,7 @@ final class ChartTests: XCTestCase {
         let gathered = try XCTUnwrap(summary.pieces.first(where: \.isGathered))
         XCTAssertEqual(gathered.sizeText, SunburstFormat.bytes(gathered.size), "smaller items are part of a node: their own size")
 
-        chart.setPlace(center: CGPoint(x: 400, y: 300), radius: 250, size: CGSize(width: 800, height: 600))
+        chart.place(center: CGPoint(x: 400, y: 300), radius: 250, size: CGSize(width: 800, height: 600))
         XCTAssertTrue(chart.labels.contains { $0.title == "Films" && $0.value == "32 files" }, "\(chart.labels.map(\.value))")
         let films = try XCTUnwrap(chart.engine.layout.piece(of: tree.node("Films")))
         chart.hover(piece: films)
@@ -256,6 +256,7 @@ final class ChartTests: XCTestCase {
         // A stretch is part of its node too.
         tree.cut[tree.node("Films")] = [SunburstStretch(size: 2, key: 0), SunburstStretch(size: 1, key: 1)]
         chart.tree = tree
+        chart.parts = tree.parts
         let stretch = try XCTUnwrap(chart.engine.layout.piece(of: tree.node("Films")))
         chart.hover(piece: stretch)
         XCTAssertEqual(chart.readout.text, SunburstFormat.bytes(2))
@@ -265,10 +266,10 @@ final class ChartTests: XCTestCase {
     }
 
     func testReadoutSplitsTheUnitOff() {
-        XCTAssertEqual(ReadoutView.split("4.2 GB").0, "4.2")
-        XCTAssertEqual(ReadoutView.split("4.2 GB").1, "GB")
-        XCTAssertEqual(ReadoutView.split("1,024").1, "", "no unit, nothing split off")
-        XCTAssertEqual(ReadoutView.split("12 3").1, "", "a number isn't a unit")
+        XCTAssertEqual(SunburstNumber.split("4.2 GB").0, "4.2")
+        XCTAssertEqual(SunburstNumber.split("4.2 GB").1, "GB")
+        XCTAssertEqual(SunburstNumber.split("1,024").1, "", "no unit, nothing split off")
+        XCTAssertEqual(SunburstNumber.split("12 3").1, "", "a number isn't a unit")
     }
 
     private func brightness(of image: CGImage, x: Int, y: Int) throws -> Double {
