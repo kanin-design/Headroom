@@ -17,7 +17,10 @@ struct RootView: View {
                 LabelsLayer(model: model)
                     .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
 
-                CenterReadout(model: model, ring: ring)
+                CenterIsland(model: model)
+                    .frame(width: CenterIsland.diameter(in: ring), height: CenterIsland.diameter(in: ring))
+                    .position(ring.center)
+                    .allowsHitTesting(false)
 
                 BottomArea(model: model, ring: ring)
                     .frame(width: ring.mapWidth, height: geometry.size.height, alignment: .bottom)

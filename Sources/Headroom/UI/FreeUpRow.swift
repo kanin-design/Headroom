@@ -12,7 +12,7 @@ struct ThingRow: View {
 
     private var isLarge: Bool { scale != nil }
     private var isOpen: Bool { model.expandedRow == row.id }
-    private var isLit: Bool { isHovered || model.hotRow == row.id || (box.map { model.cursorRow == $0.id } ?? false) }
+    private var isLit: Bool { isHovered || model.litRow.isLit(row.id) || (box.map { model.cursorRow == $0.id } ?? false) }
 
     var body: some View {
         let state = model.rowStates[row.id] ?? .none

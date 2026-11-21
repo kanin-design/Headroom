@@ -1,3 +1,4 @@
+import QuartzCore
 import SwiftUI
 
 /// What the middle of the ring says: the name of what's pointed at or in view, its size, and a line below. The chart keeps
@@ -53,7 +54,7 @@ public struct SunburstReadoutView: View {
                 .minimumScaleFactor(0.7)
             }
             .frame(width: d * 0.9, height: room)
-            SunburstNumber(readout.text, size: readout.size, diameter: d)
+            SunburstNumber(readout.text, size: readout.size, diameter: d, about: readout.title)
                 .frame(width: d * 0.9, height: d * 0.28)
             ZStack(alignment: .top) {
                 Color.clear
@@ -70,24 +71,34 @@ public struct SunburstReadoutView: View {
     }
 }
 
-/// The centre's big number, its unit smaller beside it, rolling to each new value: for an app's own centre that should
-/// read like the kit's. `size` sets which way the digits roll; `diameter` is the centre's room. In `color`, with the unit a
-/// little fainter. `widest` is the widest text it will show, such as "−8.88 MB": the number and the unit each keep that much
-/// room, so neither moves as the value changes.
+/// The centre's big number, its unit smaller beside it: for an app's own centre that should read like the kit's. `size` sets
+/// which way the digits roll; `diameter` is the centre's room. In `color`, with the unit a little fainter. `widest` is the
+/// widest text it will show, such as "−8.88 MB": the number and the unit each keep that much room, so neither moves as the
+/// value changes.
+///
+/// The digits roll when the thing the number is about changes size, as while it's measured or after something is removed.
+/// `about` says what that thing is: when it's another thing, as when the pointer moves to another piece, the number just
+/// changes. Rolling digits say "this changed", which isn't what happened, and macOS draws each frame of them on the CPU,
+/// blurred, which at this size is several milliseconds a frame: enough to make the ring's light stutter behind the pointer.
+/// Without `about`, every new value rolls.
 public struct SunburstNumber: View {
     let text: String
     let size: UInt64
     let diameter: CGFloat
     let color: Color
     let widest: String?
+    let subject: AnyHashable?
     @Environment(\.accessibilityReduceMotion) private var reducesMotion
+    @State private var pace = RollPace()
 
-    public init(_ text: String, size: UInt64, diameter: CGFloat, color: Color = .white, widest: String? = nil) {
+    public init(_ text: String, size: UInt64, diameter: CGFloat, color: Color = .white, widest: String? = nil,
+                about subject: AnyHashable? = nil) {
         self.text = text
         self.size = size
         self.diameter = diameter
         self.color = color
         self.widest = widest
+        self.subject = subject
     }
 
     public var body: some View {
@@ -113,7 +124,7 @@ public struct SunburstNumber: View {
         .foregroundStyle(color)
         .lineLimit(1)
         .minimumScaleFactor(0.5)
-        .animation(.snappy(duration: 0.32), value: size)
+        .animation(pace.rolls(to: size, about: subject) ? .snappy(duration: 0.32) : nil, value: size)
     }
 
     /// "4.2 GB" as "4.2" and "GB". Text without a unit at its end stays whole.
@@ -122,5 +133,29 @@ public struct SunburstNumber: View {
         let unit = text[text.index(after: space)...]
         guard !unit.isEmpty, !unit.contains(where: \.isNumber) else { return (text, "") }
         return (String(text[..<space]), String(unit))
+    }
+}
+
+/// Whether a number rolls to its next value: when it's still about the same thing, and the last value was there long
+/// enough to be read. Rolling digits are drawn again on every frame, which is worth it for a value someone watches change
+/// and wasted on one that's replaced at once.
+final class RollPace {
+    /// A value that lasted less than this just changes: about four frames.
+    static let least = 0.07
+
+    private var size: UInt64?
+    private var subject: AnyHashable?
+    private var changedAt = 0.0
+    private var rolls = false
+
+    /// Whether the change to this value rolls: asked on every pass of the view, it answers the same until the value or
+    /// what it's about changes again. The first value is simply there.
+    func rolls(to size: UInt64, about subject: AnyHashable? = nil, now: Double = CACurrentMediaTime()) -> Bool {
+        guard size != self.size || subject != self.subject else { return rolls }
+        rolls = self.size != nil && subject == self.subject && now - changedAt >= Self.least
+        self.size = size
+        self.subject = subject
+        changedAt = now
+        return rolls
     }
 }

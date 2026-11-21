@@ -62,6 +62,29 @@ public struct RingLight: Sendable, Equatable {
     public var isEmpty: Bool { full.isEmpty && holding.isEmpty }
 }
 
+/// What's lit on a picture, as an engine shows it (`SunburstEngine.setEmphasis(_:)`): the piece pointed at, which stands
+/// out most; what's lit with it; and a colour for what's lit, or for some of it. Everything else steps back.
+public struct RingEmphasis: Sendable, Equatable {
+    /// The piece pointed at, an index into the picture's `pieces`.
+    public var primary: Int?
+    /// What's lit whole, and the pieces on the way out to it, lit less.
+    public var light: RingLight
+    /// One colour that what's lit takes on, and the way out part of.
+    public var tint: SIMD3<Float>?
+    /// With a tint: the pieces that take it. Nil for all that's lit.
+    public var tinted: [Range<Int>]?
+
+    public init(primary: Int? = nil, light: RingLight = RingLight(), tint: SIMD3<Float>? = nil, tinted: [Range<Int>]? = nil) {
+        self.primary = primary
+        self.light = light
+        self.tint = tint
+        self.tinted = tinted
+    }
+
+    /// Nothing is lit.
+    public var isEmpty: Bool { primary == nil && light.isEmpty }
+}
+
 extension RingLayout {
     /// How something too small to draw shows when it's lit: by the piece that holds it, which is its "smaller items" if it
     /// has one.
@@ -135,6 +158,71 @@ extension RingLayout {
     @inlinable
     public func light<T: SunburstTree>(_ nodes: [UInt32], in tree: T, gathered: GatheredLight = .held) -> RingLight {
         light(tree.branches(nodes), in: tree, gathered: gathered)
+    }
+
+    /// What lights when a piece is pointed at: the piece most, everything drawn inside it whole, and the pieces on the way
+    /// out to it less. `lighting` adds what the app says goes with it: the same thing elsewhere, and a colour for all of
+    /// what's lit or for some of the piece and what's inside it.
+    public func emphasis<T: SunburstTree>(pointingAt index: Int, in tree: T, lighting: SunburstLighting? = nil) -> RingEmphasis {
+        var wayOut: [Int] = []
+        var up = _pieces[index].parent
+        while up >= 0 {
+            wayOut.append(contentsOf: stretches(around: Int(up)))
+            up = _pieces[Int(up)].parent
+        }
+        let whole = extent(of: index)
+        var full = [whole]
+        var tinted: [Range<Int>]?
+        if let lighting {
+            if !lighting.also.isEmpty {
+                let more = light(lighting.also, in: tree, gathered: lighting.gathered)
+                full += more.full
+                wayOut += more.holding
+            }
+            if let tints = lighting.tints { tinted = pieces(in: whole, taking: tints) }
+        }
+        return RingEmphasis(primary: index, light: RingLight(full: full, holding: wayOut), tint: lighting?.tint, tinted: tinted)
+    }
+
+    /// What lights for nodes pointed at from outside the ring, such as a row in a list: each with everything inside it, and
+    /// the way out to each. `primary`, one of them, stands out most.
+    public func emphasis<T: SunburstTree>(lighting nodes: [UInt32], primary: UInt32? = nil, in tree: T, gathered: GatheredLight = .shown,
+                                          tint: SIMD3<Float>? = nil) -> RingEmphasis {
+        // The primary's own piece: the first it lights, as it's lit among the others.
+        let own = primary.flatMap { light([$0], in: tree, gathered: gathered).full.first?.lowerBound }
+        return RingEmphasis(primary: own, light: light(nodes, in: tree, gathered: gathered), tint: tint)
+    }
+
+    /// The pieces in `extent` that take a tint: those whose node `tints` says do (a "smaller items" piece with the node that
+    /// holds them), and each stretch of a folder cut by group when everything drawn in that stretch does. So the stretch
+    /// that stands for what's backed up reads as backed up, though its folder as a whole isn't.
+    public func pieces(in extent: Range<Int>, taking tints: (UInt32) -> Bool) -> [Range<Int>] {
+        let base = extent.lowerBound
+        var takes = [Bool](repeating: false, count: extent.count)
+        var inside = [Int32](repeating: 0, count: extent.count), insideTaking = inside
+        // Depth first, so going backwards meets everything drawn in a piece before the piece itself.
+        for i in extent.reversed() {
+            let p = _pieces[i], at = i - base
+            var on = tints(p.node)
+            // A stretch with its own things drawn in it, all of which take the tint.
+            if !on, p.isStretch, inside[at] > 0, inside[at] == insideTaking[at] { on = true }
+            takes[at] = on
+            let parent = Int(p.parent)
+            if parent >= base, parent < extent.upperBound {
+                inside[parent - base] += 1
+                if on { insideTaking[parent - base] += 1 }
+            }
+        }
+        var out: [Range<Int>] = []
+        var i = 0
+        while i < takes.count {
+            guard takes[i] else { i += 1; continue }
+            var end = i + 1
+            while end < takes.count, takes[end] { end += 1 }
+            out.append(base + i..<base + end)
+            i = end
+        }
+        return out
     }
 
     /// The biggest piece that stands for a set, or the outermost of what holds it if it has none: where to put a name for it.

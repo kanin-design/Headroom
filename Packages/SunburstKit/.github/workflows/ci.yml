@@ -12,8 +12,18 @@ jobs:
       - name: Swift
         run: swift --version
       - name: Build and test
-        # Tests that draw are skipped where the machine has no GPU.
+        # Tests that draw are skipped where the machine has no GPU. On a GPU other than the one that drew the snapshot
+        # pictures, they're compared with their edges averaged out.
         run: swift test
+        env:
+          SNAPSHOT_FAILURES: ${{ runner.temp }}/snapshots
+      - name: Keep the pictures that differ
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: snapshots-${{ github.job }}
+          path: ${{ runner.temp }}/snapshots
+          if-no-files-found: ignore
       - name: Build the example app
         run: swift build --package-path Examples/FolderMap
 
@@ -36,5 +46,14 @@ jobs:
         run: swift --version
       - name: Build and test
         run: swift test
+        env:
+          SNAPSHOT_FAILURES: ${{ runner.temp }}/snapshots
+      - name: Keep the pictures that differ
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: snapshots-${{ github.job }}
+          path: ${{ runner.temp }}/snapshots
+          if-no-files-found: ignore
       - name: Build the example app
         run: swift build --package-path Examples/FolderMap

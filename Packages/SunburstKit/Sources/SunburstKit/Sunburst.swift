@@ -1,6 +1,15 @@
 import AppKit
 import SwiftUI
 
+/// The centre, in a view of its own: what it says changes with the pointer, and this way only the centre is made again.
+private struct CentreSlot<Tree: SunburstTree, Centre: View>: View {
+    let chart: SunburstChart<Tree>
+    let diameter: CGFloat
+    let centre: (SunburstReadout, CGFloat) -> Centre
+
+    var body: some View { centre(chart.readout, diameter) }
+}
+
 /// A sunburst chart of a tree: the ring, names on and beside it, a centre in the middle, pointing to light a branch, a
 /// click to zoom into it, and a click in the middle (or Esc) to zoom back out.
 ///
@@ -36,7 +45,7 @@ public struct Sunburst<Tree: SunburstTree, Centre: View>: View {
                 SunburstCanvas(chart: chart)
                 RingPlace(center: ring.center, radius: ring.radius, size: size, engine: chart.engine, view: { [chart] in chart.view })
                 SunburstChartLabels(chart, width: size.width)
-                centre(chart.readout, ring.radius * CGFloat(RingLayout.hole) * 2 * 0.86)
+                CentreSlot(chart: chart, diameter: ring.radius * CGFloat(RingLayout.hole) * 2 * 0.86, centre: centre)
                     .position(ring.center)
                     .allowsHitTesting(false)
             }

@@ -328,9 +328,16 @@ public final class SunburstEngine: @unchecked Sendable {
 
     // MARK: Emphasis
 
-    /// Lifts these pieces and lets the rest step back. Pass nothing to bring everything back. With a tint, what's lit takes on
-    /// that colour, the folders it's in part of it, and a lit piece too small to see is drawn a few points across; with
-    /// `tinted`, only those pieces take it, and the rest keep their own colours.
+    /// Lights what an emphasis says and lets the rest step back; nil, or an empty one, brings everything back. With a tint,
+    /// what's lit takes on that colour, the way out part of it, and a lit piece too small to see is drawn a few points
+    /// across; with `tinted`, only those pieces take it, and the rest keep their own colours.
+    @MainActor public func setEmphasis(_ emphasis: RingEmphasis?) {
+        let emphasis = emphasis ?? RingEmphasis()
+        setEmphasis(primary: emphasis.primary, related: emphasis.light.full, ancestors: emphasis.light.holding, tint: emphasis.tint,
+                    tinted: emphasis.tinted)
+    }
+
+    /// The same, piece by piece: `primary` lifted, `related` lit whole, `ancestors` lit less.
     @MainActor public func setEmphasis(primary: Int?, related: [Range<Int>], ancestors: [Int] = [], tint: SIMD3<Float>? = nil,
                                        tinted: [Range<Int>]? = nil) {
         lock.lock()
@@ -439,6 +446,17 @@ public final class SunburstEngine: @unchecked Sendable {
         return moving
     }
 
+    /// For a check: everything that moves, moved to where it's going, as after a few seconds of frames. A window that isn't
+    /// on screen draws none, so without this a picture of it shows where things were when it last did.
+    @_spi(Diagnostics) public func settle() {
+        lock.withLock {
+            var steps = 0
+            while advance(dt: 1 / 30), steps < 240 { steps += 1 }
+            emphasisChangedSinceDrawn = true
+        }
+        requestFrame()
+    }
+
     /// While the ring is still, the memory its drawing used may be taken back.
     func restDrawing() {
         lock.withLock { renderer?.rest() }
@@ -457,7 +475,9 @@ public final class SunburstEngine: @unchecked Sendable {
     /// The ring as it is now, settled, in an image of `width` by `height` pixels with the ring in the middle: Display P3, 8 bits
     /// a channel. Names and anything else drawn over the ring aren't in it. Nil without a GPU. Works without a window.
     /// Without `dithered`, the faint noise that keeps dark gradients smooth is left out, for a PNG about half the size.
-    @MainActor public func picture(width: Int, height: Int, scale: CGFloat = 2, dithered: Bool = true) -> CGImage? {
+    /// `inPlace` draws the ring where it is in its view (`place`), for a picture of a view of that size, in place of in the
+    /// middle.
+    @MainActor public func picture(width: Int, height: Int, scale: CGFloat = 2, dithered: Bool = true, inPlace: Bool = false) -> CGImage? {
         guard let renderer, width > 0, height > 0 else { return nil }
         let device = renderer.device
         let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: SunburstRenderer.outputFormat, width: width, height: height, mipmapped: false)
@@ -468,8 +488,13 @@ public final class SunburstEngine: @unchecked Sendable {
             var u = uniforms(viewport: CGSize(width: width, height: height), scale: scale, headroom: 1)
             // Settled, in the middle, with room around it for the scale.
             u.t = 1
-            u.center = SIMD2(Float(width), Float(height)) * 0.5
-            u.radius = max(Float(min(width, height)) * 0.5 - Float(scale) * 22, 1)
+            if inPlace, radiusNow > 0 {
+                u.center = centerNow * Float(scale)
+                u.radius = radiusNow * Float(scale)
+            } else {
+                u.center = SIMD2(Float(width), Float(height)) * 0.5
+                u.radius = max(Float(min(width, height)) * 0.5 - Float(scale) * 22, 1)
+            }
             u.dither = dithered ? 1 : 0
             renderer.writeEmphasis(emphasisNow, tintShares: tintShareNow, top: emphasisGoal.firstIndex { $0 > 1 })
             renderer.encode(into: commands, target: target, uniforms: u)

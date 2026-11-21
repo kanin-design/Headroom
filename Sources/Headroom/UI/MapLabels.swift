@@ -135,15 +135,61 @@ private struct NamedLabel: ViewModifier {
     func body(content: Content) -> some View { content.named(NamedThing(node), in: model) }
 }
 
-/// The middle of the ring: the one number that matters, until you point at something else.
+/// The middle of the ring, in a view tree of its own. What it says changes with the pointer, many times a second, and a
+/// change anywhere in the window's own tree has SwiftUI go over the whole window (about 3.5 ms on this window, measured);
+/// here it goes over these few lines. The window places it; the pointer goes straight through it.
+struct CenterIsland: NSViewRepresentable {
+    let model: AppModel
+
+    /// The room the middle has in a ring of this radius.
+    static func diameter(in ring: RingGeometry) -> CGFloat { ring.radius * CGFloat(RingLayout.hole) * 2 * 0.86 }
+
+    func makeNSView(context: Context) -> NSView {
+        Island(CenterReadout(model: model))
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {}
+
+    /// The window says how big the middle is; what it shows never does.
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSView, context: Context) -> CGSize? {
+        proposal.replacingUnspecifiedDimensions()
+    }
+}
+
+/// A view tree of its own inside the window's: a plain view holding a hosting view that fills it. The plain view is what
+/// the window's tree sees, so nothing that changes inside (not even the hosting view saying its size might have) reaches
+/// the window's layout. The pointer goes straight through to what's under it.
+final class Island: NSView {
+    init(_ content: some View) {
+        super.init(frame: .zero)
+        let host = NSHostingView(rootView: content)
+        host.sizingOptions = []
+        host.safeAreaRegions = []
+        host.frame = bounds
+        host.autoresizingMask = [.width, .height]
+        addSubview(host)
+    }
+
+    required init?(coder: NSCoder) { fatalError("not from a nib") }
+
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+/// The middle of the ring: the one number that matters, until you point at something else. It fills the room it's given.
 struct CenterReadout: View {
     let model: AppModel
-    let ring: RingGeometry
 
     var body: some View {
-        let size = ring.radius * CGFloat(RingLayout.hole) * 2 * 0.86
+        GeometryReader { geometry in
+            content(size: min(geometry.size.width, geometry.size.height))
+                .frame(width: geometry.size.width, height: geometry.size.height)
+        }
+    }
+
+    private func content(size: CGFloat) -> some View {
         Group {
-            if let hover = model.hover {
+            if let hover = model.hoverShown {
                 hoverContent(hover, size: size)
             } else if model.focus == 0, let pair = model.pair, pair.tree === model.tree {
                 pairContent(pair, size: size)
@@ -159,8 +205,6 @@ struct CenterReadout: View {
         }
         .frame(width: size, height: size)
         .multilineTextAlignment(.center)
-        .position(ring.center)
-        .allowsHitTesting(false)
     }
 
     /// Every state puts its parts in the same places, so nothing moves with the pointer: the number at the very middle, a
@@ -188,10 +232,12 @@ struct CenterReadout: View {
         }
     }
 
-    private func bigNumber(_ bytes: UInt64, size: CGFloat, color: Color = .white, sign: String = "") -> some View {
+    /// `about` is the thing the number is about: its digits roll when that thing changes size, and just change when the
+    /// number is about something else.
+    private func bigNumber(_ bytes: UInt64, size: CGFloat, color: Color = .white, sign: String = "", about: AnyHashable) -> some View {
         // Changes has a sign in front, so its number keeps room for one whatever it shows.
         SunburstNumber(sign + formatBytes(bytes), size: bytes, diameter: size, color: color,
-                       widest: model.view == .changes ? "−8.88 MB" : "8.88 MB")
+                       widest: model.view == .changes ? "−8.88 MB" : "8.88 MB", about: about)
     }
 
     /// Free space is on screen from the first frame, because the disk itself reports it.
@@ -203,7 +249,7 @@ struct CenterReadout: View {
             let planning = model.planNumbers.total >= 1_000_000 && model.mode == .freeUp
             let preview = free &+ model.planNumbers.total
             let usedShare = 1 - Double(free) / Double(max(capacity, 1))
-            slots(size, number: bigNumber(planning ? preview : free, size: size, color: planning ? Kit.green : .white)) {
+            slots(size, number: bigNumber(planning ? preview : free, size: size, color: planning ? Kit.green : .white, about: "free")) {
                 EmptyView()
             } below: {
                 VStack(spacing: size * 0.012) {
@@ -236,7 +282,8 @@ struct CenterReadout: View {
         let picked = model.backup.items.count + model.driveSelection.count
         let pickedBytes = model.backupBytes &+ model.driveSelection.reduce(UInt64(0)) { $0 &+ $1.bytes }
         let blue = Kit.blue
-        return slots(size, number: bigNumber(picked > 0 ? pickedBytes : pair.macBytes, size: size, color: picked > 0 ? blue : .white)) {
+        return slots(size, number: bigNumber(picked > 0 ? pickedBytes : pair.macBytes, size: size, color: picked > 0 ? blue : .white,
+                                             about: picked > 0 ? "picked" : "on this Mac")) {
             Text(pair.realFolder == 0 ? (model.volume?.shownName ?? "") : pair.folderName)
                 .font(.system(size: size * 0.07, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.9))
@@ -268,7 +315,7 @@ struct CenterReadout: View {
         let hot = model.pointedCopyGroup.flatMap { id in groups.first { $0.id == id } }
         let back = hot.map { $0.kind == .duplicate ? $0.back : $0.size } ?? groups.reduce(UInt64(0)) { $0 &+ $1.back }
         let colour = hot?.colour.swiftUI ?? .white
-        return slots(size, number: bigNumber(back, size: size, color: colour)) {
+        return slots(size, number: bigNumber(back, size: size, color: colour, about: hot?.id ?? "duplicates")) {
             EmptyView()
         } below: {
             VStack(spacing: size * 0.012) {
@@ -295,7 +342,7 @@ struct CenterReadout: View {
         let change = history ? -model.changeTotal : model.changeTotal
         let colour = history ? (change < 0 ? Palette.grew.swiftUI : (change > 0 ? Palette.cool.swiftUI : .white)) : .white
         let sign = history ? (change < 0 ? "−" : (change > 0 ? "+" : "")) : ""
-        return slots(size, number: bigNumber(UInt64(abs(change)), size: size, color: colour, sign: sign)) {
+        return slots(size, number: bigNumber(UInt64(abs(change)), size: size, color: colour, sign: sign, about: "changed")) {
             EmptyView()
         } below: {
             VStack(spacing: size * 0.012) {
@@ -350,7 +397,7 @@ struct CenterReadout: View {
 
     private func folderContent(_ tree: DiskTree, size: CGFloat) -> some View {
         let moved = tree.movedBytes(inside: model.focus)
-        return slots(size, number: bigNumber(tree.bytesHere(model.focus), size: size)) {
+        return slots(size, number: bigNumber(tree.bytesHere(model.focus), size: size, about: model.focus)) {
             HStack(spacing: 2) {
                 Image(systemName: "chevron.left")
                     .font(.system(size: size * 0.05, weight: .bold))
@@ -388,7 +435,7 @@ struct CenterReadout: View {
     }
 
     private func hoverContent(_ hover: HoverInfo, size: CGFloat) -> some View {
-        slots(size, number: bigNumber(hover.bytes, size: size)) {
+        slots(size, number: bigNumber(hover.bytes, size: size, about: [AnyHashable(hover.node), AnyHashable(hover.title)])) {
             Text(hover.title)
                 .font(.system(size: size * 0.072, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.95))

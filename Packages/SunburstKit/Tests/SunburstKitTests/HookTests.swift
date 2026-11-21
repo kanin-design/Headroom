@@ -33,10 +33,10 @@ struct HookTests {
     }
 
     @Test("What else lights with a piece under the pointer lights with it, in its tint")
-    func alsoLight() throws {
+    func lightsMore() throws {
         let (chart, tree) = chart()
         let a = tree.node("Films/a.mov"), c = tree.node("Music/c.mp3")
-        chart.alsoLight = { $0 == a ? .init([c], tint: [1, 0, 0]) : nil }
+        chart.lighting = { $0 == a ? .init(also: [c], tint: [1, 0, 0]) : nil }
         chart.pointerMoved(to: try middle(chart, of: a))
         #expect(chart.engine.litPieces == 4, "a and c, and the folders they're in")
         chart.pointerMoved(to: try middle(chart, of: tree.node("other")))
@@ -48,7 +48,7 @@ struct HookTests {
         let (chart, tree) = chart()
         let films = tree.node("Films"), a = tree.node("Films/a.mov"), b = tree.node("Films/b.mov"), c = tree.node("Music/c.mp3")
         let at = { (node: UInt32) in chart.engine.layout.piece(of: node)! }
-        chart.alsoLight = { _ in SunburstAlsoLit(tint: [0, 1, 0], tints: { $0 == a || $0 == c }) }
+        chart.lighting = { _ in SunburstLighting(tint: [0, 1, 0], tints: { $0 == a || $0 == c }) }
         chart.pointerMoved(to: try middle(chart, of: films))
         let emphasis = chart.engine.emphasis, shares = chart.engine.tintShares
         #expect(emphasis[at(films)] == 2 && emphasis[at(a)] == 1 && emphasis[at(b)] == 1, "the folder and all of it light")
@@ -58,7 +58,7 @@ struct HookTests {
         #expect(chart.engine.tintSharesShown == shares, "from no tint, it starts on the pieces that take it: nothing flashes")
         chart.pointerMoved(to: nil)
         #expect(chart.engine.tintShares == shares, "and it fades from them: who takes it stays until the next tint")
-        chart.alsoLight = { _ in SunburstAlsoLit(tint: [0, 1, 0]) }
+        chart.lighting = { _ in SunburstLighting(tint: [0, 1, 0]) }
         chart.pointerMoved(to: try middle(chart, of: tree.node("other")))
         #expect(chart.engine.tintShares.allSatisfy { $0 == 1 }, "with no say, a tint is for all that's lit")
     }
@@ -80,7 +80,7 @@ struct HookTests {
         #expect(stretches == [first, first + 3] && stretches.allSatisfy { layout.pieces[$0].isStretch }, "one stretch for each group")
         // Pointing at Home lights all of it: the stretch over a and b takes the colour, though Films as a whole doesn't.
         let home = try #require(layout.piece(of: tree.node("Home")))
-        let taking = SunburstChart<TestTree>.pieces(in: layout.extent(of: home), of: layout) { $0 == a || $0 == b }
+        let taking = layout.pieces(in: layout.extent(of: home)) { $0 == a || $0 == b }
         #expect(Set(taking.flatMap { Array($0) }) == [first, first + 1, first + 2], "and not the stretch over c, nor c")
     }
 

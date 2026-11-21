@@ -24,7 +24,7 @@ struct BoxView: View {
 
     private var isOpen: Bool { model.openBoxes.contains(box.id) }
     private var color: Color { box.color.swiftUI }
-    private var isLit: Bool { isHovered || model.hotBox == box.id || model.cursorRow == box.id || (model.recommendedHot && !box.recommended.isEmpty) }
+    private var isLit: Bool { isHovered || model.litBox.isLit(box.id) || model.cursorRow == box.id || (model.recommendedHot && !box.recommended.isEmpty) }
 
     private var thing: NamedThing {
         let model = model, box = box
@@ -235,7 +235,10 @@ struct BoxBar: View {
             let list = pieces
             let color = box.color.swiftUI
             let states = model.rowStates
-            let hotRow = model.pointing?.id ?? model.hotRow
+            // What's pointed at in the panel, or else what the pointer on the ring lights: asked row by row, so only the bar
+            // that holds it is drawn again.
+            let pointing = model.pointing?.id
+            let hotRows = Set(list.compactMap { $0.row?.id }.filter { pointing != nil ? $0 == pointing : model.litRow.isLit($0) })
             Canvas { context, size in
                 let top = (size.height - height) / 2
                 let whole = Path(roundedRect: CGRect(x: 0, y: top, width: width, height: height), cornerRadius: height / 2)
@@ -249,7 +252,7 @@ struct BoxBar: View {
                     if on {
                         selected.addRect(rect)
                     } else {
-                        let hot = piece.row != nil && piece.row?.id == hotRow
+                        let hot = piece.row.map { hotRows.contains($0.id) } ?? false
                         context.fill(Path(rect), with: .color(color.opacity(hot ? 1 : (isLit ? 0.92 : 0.62))))
                     }
                 }

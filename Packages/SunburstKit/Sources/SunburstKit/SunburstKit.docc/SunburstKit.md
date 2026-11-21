@@ -25,7 +25,7 @@ chart.parts = SunburstParts(bands: [.init()], rings: .init(RingSizes(depth: 6)))
 To drive the chart from code, keep a ``SunburstChart`` and show that with ``Sunburst``. Everything a person does with the
 pointer has a call, ``SunburstChart/summary(limit:)`` says what's on the ring in words, and
 ``SunburstChart/picture(width:height:scale:dithered:)`` draws it without a window. What an app does its own way, it says
-through the chart's hooks: ``SunburstChart/alsoLight``, ``SunburstChart/onClick``, ``SunburstChart/namer`` and the centre
+through the chart's hooks: ``SunburstChart/lighting``, ``SunburstChart/onClick``, ``SunburstChart/namer`` and the centre
 slot of ``Sunburst``.
 
 ## Topics
@@ -69,6 +69,7 @@ slot of ``Sunburst``.
 - ``RingLayout``
 - ``Piece``
 - ``RingLight``
+- ``RingEmphasis``
 - ``SunburstNodeSet``
 - ``SunburstNodes``
 - ``SunburstEngine``
@@ -83,5 +84,7 @@ slot of ``Sunburst``.
 - ``LabelPlacer``
 - ``LabelArea``
 - ``LabelLight``
+- ``LabelLights``
+- ``LabelState``
 - ``SunburstLabel``
 - ``SunburstLabels``

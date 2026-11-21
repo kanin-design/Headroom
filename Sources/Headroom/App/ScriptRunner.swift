@@ -124,6 +124,8 @@ final class MainThreadMeter {
     private var observer: CFRunLoopObserver?
     private var wokeAt = 0.0
     private(set) var busy = 0.0, longest = 0.0, over16 = 0, over50 = 0
+    /// How many times the main thread woke for under 1 ms, 1 to 2, 2 to 4, 4 to 8, 8 to 16, and longer, and the time in each.
+    private(set) var wakes = [Int](repeating: 0, count: 6), wakeTime = [Double](repeating: 0, count: 6)
     /// When each stall over 16 ms began, in ms from the start, and how long it was.
     private(set) var stalls: [(at: Double, ms: Double)] = []
     private let began = CFAbsoluteTimeGetCurrent()
@@ -139,6 +141,9 @@ final class MainThreadMeter {
                 let ms = (now - self.wokeAt) * 1000
                 self.busy += ms
                 self.longest = max(self.longest, ms)
+                let bucket = ms < 1 ? 0 : ms < 2 ? 1 : ms < 4 ? 2 : ms < 8 ? 3 : ms < 16 ? 4 : 5
+                self.wakes[bucket] += 1
+                self.wakeTime[bucket] += ms
                 if ms > 16 {
                     self.over16 += 1
                     self.stalls.append(((self.wokeAt - self.began) * 1000, ms))
@@ -154,6 +159,8 @@ final class MainThreadMeter {
         let total = (CFAbsoluteTimeGetCurrent() - began) * 1000
         let cpu = Double(clock_gettime_nsec_np(CLOCK_PROCESS_CPUTIME_ID) - cpuAtStart) / 1e6
         print(String(format: "meter %-30@ cpu %5.1f%%, main %4.1f%%, longest %5.1f ms, over 16 ms %3d, over 50 ms %3d", label as NSString, cpu / total * 100, busy / total * 100, longest, over16, over50))
+        let names = ["under 1 ms", "1 to 2", "2 to 4", "4 to 8", "8 to 16", "over 16"]
+        print("  wakes: " + zip(names, zip(wakes, wakeTime)).map { String(format: "%@ %d (%.0f ms)", $0, $1.0, $1.1) }.joined(separator: ", "))
         if !stalls.isEmpty { print("  stalls at " + stalls.map { String(format: "%.0f ms for %.0f", $0.at, $0.ms) }.joined(separator: ", ")) }
     }
 }
@@ -255,9 +262,9 @@ enum ScriptRunner {
         "button": .plan,
         "speed": .measuring, "meter": .measuring, "pacing": .measuring, "touch": .measuring, "sweep": .measuring,
         "bench": .measuring, "memory": .measuring, "footprint": .measuring, "gpu": .measuring, "headroom": .measuring,
-        "frames": .measuring, "leaks": .measuring, "format": .measuring,
+        "frames": .measuring, "layers": .measuring, "names": .measuring, "leaks": .measuring, "format": .measuring,
         "panel": .window, "scrolls": .window, "voiceover": .window, "size": .window, "jiggle": .window, "collide": .window,
-        "timescale": .window, "shotwindow": .window, "shot": .window, "film": .window, "mouse": .window, "click": .window,
+        "timescale": .window, "shotwindow": .window, "shot": .window, "drawn": .window, "film": .window, "mouse": .window, "click": .window,
         "activate": .window, "float": .window, "hide": .window, "unhide": .window, "minimize": .window, "restore": .window,
         "lose": .window, "redraw": .window, "stopwhenhidden": .window, "windowid": .window, "frame": .window,
         "press": .window, "about": .window,
@@ -1214,7 +1221,7 @@ enum ScriptRunner {
             let start = Date()
             var step = 0.0
             var moves = 0
-            var busy = 0.0
+            var busy = 0.0, slowest = 0.0, asking = 0.0
             while Date().timeIntervalSince(start) < seconds {
                 step += 1
                 let at: NSPoint
@@ -1227,11 +1234,17 @@ enum ScriptRunner {
                 guard let event = NSEvent.mouseEvent(with: .mouseMoved, location: at, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0) else { continue }
                 let began = DispatchTime.now()
                 if parts.first == "panel" { w.contentView?.mouseMoved(with: event) } else { model.mapView?.mouseMoved(with: event) }
-                busy += Double(DispatchTime.now().uptimeNanoseconds - began.uptimeNanoseconds) / 1e6
+                let took = Double(DispatchTime.now().uptimeNanoseconds - began.uptimeNanoseconds) / 1e6
+                busy += took
+                slowest = max(slowest, took)
                 moves += 1
+                // Part of each move is asking the window what's under the pointer, timed here on its own.
+                let asked = DispatchTime.now()
+                _ = w.contentView?.superview?.hitTest(at)
+                asking += Double(DispatchTime.now().uptimeNanoseconds - asked.uptimeNanoseconds) / 1e6
                 try? await Task.sleep(for: .milliseconds(12))
             }
-            print(String(format: "sweep %@: %d moves, %.2f ms each in the call itself", argument, moves, busy / Double(max(moves, 1))))
+            print(String(format: "sweep %@: %d moves, %.2f ms each in the call itself, %.1f ms the slowest; asking what's under the pointer takes %.2f ms", argument, moves, busy / Double(max(moves, 1)), slowest, asking / Double(max(moves, 1))))
         case "bench":
             // What everything costs on this disk, in milliseconds. Nothing here changes anything on disk.
             guard let tree = model.tree else { return }
@@ -1339,6 +1352,29 @@ enum ScriptRunner {
             if result == KERN_SUCCESS {
                 print(String(format: "memory %@: %.0f MB now, %.0f MB at most", argument, Double(info.phys_footprint) / 1e6, Double(info.ledger_phys_footprint_peak) / 1e6))
             }
+        case "names":
+            // names off, names on: the names around the ring hidden or shown, to tell what they cost.
+            model.chart.showsLabels = argument != "off"
+        case "layers":
+            // The window's layers that hold a drawing of their own, biggest first: what's redrawn whole when anything in it
+            // changes.
+            guard let root = mainWindow?.contentView?.superview?.layer else { print("no layers"); return }
+            var found: [(area: CGFloat, line: String)] = []
+            var count = 0
+            func walk(_ layer: CALayer, depth: Int) {
+                count += 1
+                let size = layer.bounds.size
+                if layer.contents != nil || !(layer.sublayers?.isEmpty == false) {
+                    let name = String(describing: type(of: layer))
+                    let at = layer.convert(layer.bounds, to: root)
+                    found.append((size.width * size.height, String(format: "%@ %.0f × %.0f at %.0f, %.0f%@", name, size.width, size.height,
+                                                                   at.minX, at.minY, layer.contents == nil ? "" : " drawn")))
+                }
+                for sub in layer.sublayers ?? [] { walk(sub, depth: depth + 1) }
+            }
+            walk(root, depth: 0)
+            print("layers \(argument): \(count) in all")
+            for item in found.sorted(by: { $0.area > $1.area }).prefix(Int(argument.split(separator: " ").last ?? "") ?? 25) { print("  " + item.line) }
         case "frames":
             print("frames drawn \(argument): \(model.mapView?.framesDrawn ?? -1), ring at \(model.engine.placeNow)")
         case "footprint":
@@ -1451,6 +1487,54 @@ enum ScriptRunner {
             guard let w = mainWindow else { print("no window"); return }
             await picture(of: w, to: argument)
             print("shot \(argument)")
+        case "drawn":
+            // drawn /path/to/picture.png: the window as the app itself draws it, with no screen needed: for when the screen is
+            // locked or asleep, or can't be recorded. The ring is drawn again for it, and everything layered over the ring
+            // is there as it is. Glass, blur and other effects the system adds on screen aren't.
+            guard let w = mainWindow, let root = w.contentView?.superview, let rootLayer = root.layer, let map = model.mapView,
+                  let mapLayer = map.layer else { print("no window"); return }
+            let scale = w.backingScaleFactor
+            let width = Int(root.bounds.width * scale), height = Int(root.bounds.height * scale)
+            // A window nobody can see draws no frames, so nothing on the ring has moved since it last could be.
+            model.engine.settle()
+            guard let space = CGColorSpace(name: CGColorSpace.displayP3),
+                  let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: space,
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { print("no picture"); return }
+            // The ring's own layer is drawn by the GPU, which a layer drawn here knows nothing of. So the ring is drawn into
+            // an image, held by a layer inside its own for as long as this takes: never long enough to reach the screen.
+            let stand = CALayer()
+            stand.frame = mapLayer.bounds
+            stand.contents = model.chart.picture(width: Int(map.bounds.width * scale), height: Int(map.bounds.height * scale), scale: scale, inPlace: true)
+            stand.contentsGravity = .resize
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            mapLayer.addSublayer(stand)
+            context.setFillColor(NSColor(Palette.window).cgColor)
+            context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+            context.scaleBy(x: scale, y: scale)
+            // What the system draws for glass and blur comes out as flat white or black here, over what's behind it. Those
+            // layers are left out, and put back before anything reaches the screen.
+            var left: [CALayer] = []
+            func leaveOutEffects(_ layer: CALayer) {
+                let kind = String(describing: type(of: layer))
+                if !layer.isHidden, ["Backdrop", "Chameleon", "Portal", "SDF"].contains(where: kind.contains) {
+                    layer.isHidden = true
+                    left.append(layer)
+                    return
+                }
+                for sub in layer.sublayers ?? [] { leaveOutEffects(sub) }
+            }
+            leaveOutEffects(rootLayer)
+            rootLayer.render(in: context)
+            for layer in left { layer.isHidden = false }
+            stand.removeFromSuperlayer()
+            CATransaction.commit()
+            guard let image = context.makeImage(),
+                  let out = CGImageDestinationCreateWithURL(URL(fileURLWithPath: argument) as CFURL, "public.png" as CFString, 1, nil) else {
+                print("no picture"); return
+            }
+            CGImageDestinationAddImage(out, image, nil)
+            print(CGImageDestinationFinalize(out) ? "drawn \(argument)" : "couldn't write \(argument)")
         case "about":
             // about /path/to/picture.png: About Headroom from the app menu, as a click on it would open it.
             let titles = { NSApp.windows.filter(\.isVisible).map(\.title) }

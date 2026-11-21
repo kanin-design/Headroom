@@ -47,6 +47,90 @@ public struct LabelLight: Equatable, Sendable {
 
     /// Whether a node's name is lit: the pointer is on it, or on something it lights with.
     public func isLit(_ node: UInt32) -> Bool { self.node == node || lit.contains(node) }
+
+    /// How a node's name stands in this light.
+    public func state(of node: UInt32) -> LabelState {
+        if self.node == node { return .pointedAt }
+        return onAnything && !lit.contains(node) ? .steppedBack : .atRest
+    }
+}
+
+/// How a name stands while the pointer is over the ring.
+public enum LabelState: Sendable {
+    /// As it's drawn with nothing pointed at, or lit with what's pointed at: easy to read.
+    case atRest
+    /// The pointer is on its piece, or on the name: it stands out.
+    case pointedAt
+    /// Something else is pointed at, and it isn't lit with it: a name inside a piece steps back with its piece.
+    case steppedBack
+}
+
+/// Each name's state, kept name by name. A view that reads one name's state is made again only when that name's changes,
+/// so the pointer moving about inside one branch redraws no name at all, and crossing to another redraws the few that
+/// change. A chart keeps one (`SunburstChart.labelLights`), and `SunburstLabels` can read it in place of a `LabelLight`.
+@MainActor
+public final class LabelLights {
+    @Observable
+    final class Entry {
+        var state: LabelState
+        init(_ state: LabelState) { self.state = state }
+    }
+
+    private var entries: [UInt32: Entry] = [:]
+    private var light = LabelLight()
+    private var changedAt = 0.0
+    /// Whether the last change of light fades in: one that follows hard on another, as while the pointer travels across
+    /// the ring, is just there. A fade is drawn on every frame, and there'd be nothing else.
+    private(set) var fades = true
+
+    public init() {}
+
+    /// The state of a node's name. Read in a view's body, it's followed for that name alone.
+    public func state(of node: UInt32) -> LabelState {
+        if let entry = entries[node] { return entry.state }
+        let entry = Entry(light.state(of: node))
+        entries[node] = entry
+        return entry.state
+    }
+
+    /// A new light: each name whose state it changes is told, and no other.
+    public func show(_ light: LabelLight, now: Double = CACurrentMediaTime()) {
+        guard light != self.light else { return }
+        self.light = light
+        fades = now - changedAt >= 0.15
+        changedAt = now
+        for (node, entry) in entries {
+            let state = light.state(of: node)
+            if entry.state != state { entry.state = state }
+        }
+    }
+
+    /// Forgets every name but these: after the names changed.
+    public func keep(_ nodes: Set<UInt32>) {
+        guard entries.count > nodes.count else { return }
+        entries = entries.filter { nodes.contains($0.key) }
+    }
+}
+
+/// Where a name's view reads its state: from a light given whole, or name by name.
+enum LabelLightSource {
+    case whole(LabelLight)
+    case each(LabelLights)
+
+    @MainActor func state(of node: UInt32) -> LabelState {
+        switch self {
+        case .whole(let light): light.state(of: node)
+        case .each(let lights): lights.state(of: node)
+        }
+    }
+
+    /// Whether the change of state just read fades in.
+    @MainActor var fades: Bool {
+        switch self {
+        case .whole: true
+        case .each(let lights): lights.fades
+        }
+    }
 }
 
 /// Where names can go: the ring, the width of the part of the window it's centred in, and how far up and down the names
@@ -378,7 +462,7 @@ public enum LabelPlacer {
 /// with a menu of its own.
 public struct SunburstLabels<Outer: ViewModifier>: View {
     let labels: [SunburstLabel]
-    let light: LabelLight
+    let light: LabelLightSource
     let visible: Bool
     /// The width of the part of the window the ring is centred in.
     let width: CGFloat
@@ -391,7 +475,22 @@ public struct SunburstLabels<Outer: ViewModifier>: View {
                 onLeave: @escaping (Int) -> Void, onOpen: @escaping (_ piece: Int, _ clicks: Int) -> Void,
                 outer: @escaping (SunburstLabel) -> Outer) {
         self.labels = labels
-        self.light = light
+        self.light = .whole(light)
+        self.visible = visible
+        self.width = width
+        self.onEnter = onEnter
+        self.onLeave = onLeave
+        self.onOpen = onOpen
+        self.outer = outer
+    }
+
+    /// The same, lit name by name: a change of light makes again only the names it changes, where a `LabelLight` given whole
+    /// makes them all again.
+    public init(labels: [SunburstLabel], lights: LabelLights, visible: Bool, width: CGFloat, onEnter: @escaping (Int) -> Void,
+                onLeave: @escaping (Int) -> Void, onOpen: @escaping (_ piece: Int, _ clicks: Int) -> Void,
+                outer: @escaping (SunburstLabel) -> Outer) {
+        self.labels = labels
+        light = .each(lights)
         self.visible = visible
         self.width = width
         self.onEnter = onEnter
@@ -406,32 +505,21 @@ public struct SunburstLabels<Outer: ViewModifier>: View {
     public var body: some View {
         ZStack(alignment: .topLeading) {
             ForEach(labels.filter { $0.place != .inside }) { label in
-                let isOn = light.node == label.node
-                LeaderLine(anchor: label.anchor, elbow: label.elbow,
-                           end: CGPoint(x: label.position.x + (label.place == .right ? -7 : 7), y: label.position.y))
-                    .stroke(.white.opacity(isOn ? 0.7 : 0.26), lineWidth: isOn ? 1 : 0.75)
-                    .allowsHitTesting(false)
-                    .transition(Self.comeAndGo)
-                Circle()
-                    .fill(.white.opacity(isOn ? 1 : 0.7))
-                    .frame(width: 3.2, height: 3.2)
-                    .position(label.anchor)
+                LeaderMark(label: label, light: light)
                     .allowsHitTesting(false)
                     .transition(Self.comeAndGo)
             }
 
             ForEach(labels) { label in
                 if label.place == .inside {
-                    InsideLabel(label: label)
-                        .opacity(!light.onAnything || light.isLit(label.node) ? 1 : 0.5)
-                        .animation(.easeOut(duration: 0.14), value: light)
+                    InsideLabel(label: label, light: light)
                         .position(label.position)
                         .allowsHitTesting(false)
                         .transition(Self.comeAndGo)
                 } else {
                     let right = label.place == .right
                     let room = max(right ? width - label.position.x - 6 : label.position.x - 12, 60)
-                    OuterLabel(label: label, isOn: light.node == label.node)
+                    OuterLabel(label: label, light: light)
                         .onHover { inside in
                             if inside { onEnter(label.pieceIndex) } else { onLeave(label.pieceIndex) }
                         }
@@ -471,10 +559,34 @@ private struct LeaderLine: Shape {
     }
 }
 
-private struct InsideLabel: View {
+/// A name's line from its piece, and the dot where it starts. They brighten with the name by fading, which costs no
+/// drawing.
+private struct LeaderMark: View {
     let label: SunburstLabel
+    let light: LabelLightSource
 
     var body: some View {
+        let isOn = light.state(of: label.node) == .pointedAt
+        ZStack(alignment: .topLeading) {
+            LeaderLine(anchor: label.anchor, elbow: label.elbow,
+                       end: CGPoint(x: label.position.x + (label.place == .right ? -7 : 7), y: label.position.y))
+                .stroke(.white, lineWidth: isOn ? 1 : 0.75)
+                .opacity(isOn ? 0.7 : 0.26)
+            Circle()
+                .fill(.white)
+                .frame(width: 3.2, height: 3.2)
+                .opacity(isOn ? 1 : 0.7)
+                .position(label.anchor)
+        }
+    }
+}
+
+private struct InsideLabel: View {
+    let label: SunburstLabel
+    let light: LabelLightSource
+
+    var body: some View {
+        let state = light.state(of: label.node)
         VStack(spacing: 0) {
             Text(label.title)
                 .font(.system(size: label.large ? 14 : 12.5, weight: .semibold))
@@ -488,25 +600,31 @@ private struct InsideLabel: View {
         .shadow(color: label.dark ? .clear : .black.opacity(0.45), radius: 2, y: 0.5)
         .lineLimit(1)
         .fixedSize()
+        .opacity(state == .steppedBack ? 0.5 : 1)
+        .animation(light.fades ? .easeOut(duration: 0.14) : nil, value: state)
     }
 }
 
+/// A name at the side. It brightens under the pointer by fading, not by being written again in another colour, so
+/// nothing is drawn or laid out again for it.
 private struct OuterLabel: View {
     let label: SunburstLabel
-    let isOn: Bool
+    let light: LabelLightSource
 
     var body: some View {
+        let isOn = light.state(of: label.node) == .pointedAt
         VStack(alignment: label.place == .left ? .trailing : .leading, spacing: 0) {
             Text(label.title)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.white.opacity(isOn ? 1 : 0.88))
                 // Beside a panel there's less room: a long name gets a little smaller before it's cut short.
                 .minimumScaleFactor(0.8)
                 .truncationMode(.tail)
+                .opacity(isOn ? 1 : 0.88)
             Text(label.value)
                 .font(.system(size: 11, weight: .regular).monospacedDigit())
-                .foregroundStyle(.white.opacity(isOn ? 0.85 : 0.5))
+                .opacity(isOn ? 0.85 : 0.5)
         }
+        .foregroundStyle(.white)
         .contentTransition(.identity)
         .lineLimit(1)
         .contentShape(Rectangle())

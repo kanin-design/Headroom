@@ -139,8 +139,8 @@ enum SnapshotCases {
     /// How the piece is drawn, in words that stay the same whatever the kit calls it.
     static func look(_ p: Piece) -> String { p.isShared && !p.isSmaller ? "s6" : "s\(Int(p.look))" }
 
-    /// The GPU that draws the pictures here. Another one draws edges a little differently, so pictures are only compared
-    /// with ones the same GPU drew.
+    /// The GPU that draws the pictures here. Another one draws edges a little differently, so its pictures are compared
+    /// with the baseline's less closely.
     static var gpu: String { MTLCreateSystemDefaultDevice()?.name ?? "none" }
 
     /// The settled picture of a case, 360 points square at 2x, with no dither: the bytes and a PNG to look at.

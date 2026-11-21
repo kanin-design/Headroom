@@ -117,7 +117,7 @@ final class AppModel {
     var accessCardDismissed = false
 
     // Where you are
-    var focus: UInt32 = 0 { didSet { if oldValue != focus { pointedThing = nil; closeLook(); refreshShownRows(); refreshChangeRows(); visitChanged() } } }
+    var focus: UInt32 = 0 { didSet { if oldValue != focus { pointedThing = nil; showHover(atOnce: true); closeLook(); refreshShownRows(); refreshChangeRows(); visitChanged() } } }
     /// What the card Shift-Space opens is showing, when it's open.
     var look: Look? { didSet { if look?.node != oldValue?.node { lookMoved() } } }
     var lookCursor: Int?
@@ -163,6 +163,14 @@ final class AppModel {
     var ringsDrawn = RingSizes.saved.depth
     var ringReach = RingSizes.most
     var hover: HoverInfo?
+    /// What the middle of the ring says about what's under the pointer. It follows `hover` at a pace someone can read
+    /// (`showHover(atOnce:)`), and lets go a moment late: the pointer crossing an empty stretch of the ring, or off it for an
+    /// instant, would otherwise have the middle go back to the disk's own number and be built again, many times a second.
+    /// Going somewhere else in the tree lets go at once.
+    var hoverShown: HoverInfo?
+    @ObservationIgnored private var hoverLetGo: Task<Void, Never>?
+    @ObservationIgnored private var hoverPending: Task<Void, Never>?
+    @ObservationIgnored private var hoverShownAt = 0.0
     /// The ring: SunburstKit's chart, for as long as the window is open. It draws, follows the pointer, lights things, zooms
     /// and places the names; what Headroom does its own way it says in the chart's hooks.
     @ObservationIgnored private(set) lazy var chart: SunburstChart<MapTree> = makeChart()
@@ -181,11 +189,14 @@ final class AppModel {
     var openBoxes: Set<String> = []
     /// What you're pointing at in the panel, so the ring and its middle can say so too.
     var pointing: Pointing?
-    /// What's under the pointer on the ring, so the panel can say so too.
-    var hotBox: String?
+    /// What's under the pointer on the ring, so the panel can say so too. A row asks `litBox` and `litRow` whether it's the
+    /// one, so that the pointer moving makes again only the rows it changes.
+    var hotBox: String? { didSet { litBox.light(hotBox) } }
+    @ObservationIgnored let litBox = LitRow()
     /// The pointer is on Select recommended: the boxes it would tick light up.
     var recommendedHot = false
-    var hotRow: String?
+    var hotRow: String? { didSet { litRow.light(hotRow) } }
+    @ObservationIgnored let litRow = LitRow()
     var message: String?
     /// The link story behind whatever the panel is showing.
     var story: LinkStory?
@@ -204,8 +215,9 @@ final class AppModel {
     /// How long the last search took, and how much of it was remembered from before.
     var copiesSeconds: Double?
     var copiesRemembered = 0
-    /// The set being pointed at, in the inspector or on the ring, so its row lights.
-    var hotCopyGroup: String?
+    /// The set being pointed at, in the inspector or on the ring, so its row lights: a row asks `litCopyGroup`.
+    var hotCopyGroup: String? { didSet { litCopyGroup.light(hotCopyGroup) } }
+    @ObservationIgnored let litCopyGroup = LitRow()
     /// The row being pointed at in the inspector: the names around the ring and the middle say where its copies are.
     var pointedCopyGroup: String?
     /// The one copy pointed at in an open row, or 0: leaving it for the row's head lights the whole row again.
@@ -1029,7 +1041,7 @@ final class AppModel {
                                   engine: engine, appears: false)
         chart.colours = { [weak self] tree, _ in self?.colorer(tree.disk) ?? { _ in .zero } }
         chart.namer = HeadroomNames(model: self)
-        chart.alsoLight = { [weak self] node in self?.alsoLit(with: node) }
+        chart.lighting = { [weak self] node in self?.lighting(pointingAt: node) }
         chart.onPoint = { [weak self] pointed in self?.pointed(at: pointed) }
         chart.onClick = { [weak self] click in self?.handle(click) ?? false }
         chart.onBack = { [weak self] in
@@ -1170,6 +1182,12 @@ final class AppModel {
             hover = nil
             hotBox = nil
             hotRow = nil
+            hoverLetGo?.cancel()
+            hoverLetGo = Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(80))
+                guard let self, !Task.isCancelled else { return }
+                self.showHover(atOnce: true)
+            }
             return
         }
         let index = pointed.piece
@@ -1186,12 +1204,16 @@ final class AppModel {
         if view == .copies { hotCopyGroup = copySet(at: p)?.id }
         var info = describe(p, index: index, tree: tree)
         hover = info
-        // Whether its files also have another path, and when it was last used, are worked out off the main thread from
-        // the moment the pointer arrives, and the line shows them when they're ready. Pointing at something else stops it.
+        showHover()
+        // Whether its files also have another path, and when it was last used, are worked out off the main thread once
+        // the pointer has rested there a moment, and the line shows them when they're ready. Pointing at something else
+        // stops it, so a pointer on its way across the ring asks for nothing.
         let wantsLinks = !info.inTrash && !p.isSmaller && !p.role.isSpace && !tree.links.isEmpty && tree.nodes[Int(p.node)].flags & NodeFlag.synthetic == 0
         if hasFullAccess, wantsLinks || info.tellsUse {
             let node = p.node, bytes = p.size, tellsUse = info.tellsUse
             linksTask = Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(80))
+                guard !Task.isCancelled else { return }
                 let work = Task.detached(priority: .userInitiated) {
                     LastUse.find(node, bytes: bytes, links: wantsLinks, use: tellsUse, in: tree)
                 }
@@ -1200,16 +1222,44 @@ final class AppModel {
                 info.links = found.links
                 if let use = found.use { info.note = use }
                 self.hover = info
+                self.showHover()
             }
         }
     }
 
-    /// What a thing under the pointer lights besides itself and what's inside it: nothing elsewhere. On both disks, in Map,
-    /// what in it is backed up takes the colour Backed Up gives it; Backed Up, and Copies, colour what they're about already.
-    private func alsoLit(with node: UInt32) -> SunburstAlsoLit? {
+    /// The middle says what's under the pointer. A pointer on its way across the ring is on something new far more often
+    /// than anyone can read, and every change of the text costs the window a pass of layout and drawing (about 3 ms,
+    /// measured), which is what made the ring's light stutter behind the pointer. So the text changes at most twenty times a
+    /// second: at once when it hasn't just changed, and otherwise as soon as it may, to whatever is under the pointer by
+    /// then. The ring's own light never waits.
+    private func showHover(atOnce: Bool = false) {
+        hoverLetGo?.cancel()
+        hoverLetGo = nil
+        guard hoverShown != hover else { return }
+        let wait = hoverShownAt + 0.05 - CACurrentMediaTime()
+        if atOnce || wait <= 0 {
+            hoverPending?.cancel()
+            hoverPending = nil
+            hoverShown = hover
+            hoverShownAt = CACurrentMediaTime()
+        } else if hoverPending == nil {
+            hoverPending = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(wait))
+                guard let self, !Task.isCancelled else { return }
+                self.hoverPending = nil
+                // Off the ring by now: letting go has its own, later moment.
+                if self.hover != nil { self.showHover(atOnce: true) }
+            }
+        }
+    }
+
+    /// How a thing under the pointer lights the ring, beyond itself and what's inside it: nothing elsewhere. On both disks,
+    /// in Map, what in it is backed up takes the colour Backed Up gives it; Backed Up, and Copies, colour what they're about
+    /// already.
+    private func lighting(pointingAt node: UInt32) -> SunburstLighting? {
         guard view == .map, let tree, let pair, pair.tree === tree else { return nil }
         let backedUp = pair.backedUp
-        return SunburstAlsoLit(tint: PairPlace.both.colour, tints: { backedUp.contains($0) })
+        return SunburstLighting(tint: PairPlace.both.colour, tints: { backedUp.contains($0) })
     }
 
     /// A click on the ring or a name, as Headroom means it. The middle goes back out, or with the card open, shows the folder

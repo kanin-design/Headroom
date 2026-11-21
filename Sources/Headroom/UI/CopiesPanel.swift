@@ -138,7 +138,7 @@ private struct CopySetRow: View {
     var body: some View {
         let state = model.duplicateTick(group)
         let colour = group.colour.swiftUI
-        let isLit = isHovered || model.hotCopyGroup == group.id
+        let isLit = isHovered || model.litCopyGroup.isLit(group.id)
         VStack(alignment: .leading, spacing: 0) {
             head(state, colour, isLit)
             if isOpen { inside(colour) }
@@ -358,6 +358,23 @@ private struct CopyLine: View {
     }
 }
 
+/// One of the sets folded away. It asks for itself whether the pointer on the ring lights it, so the others aren't made
+/// again when it does.
+private struct FoldedRow: View {
+    let model: AppModel
+    let group: CopyGroup
+    let subtitle: String
+    let value: String
+    let open: () -> Void
+
+    var body: some View {
+        NodeRow(title: group.title, subtitle: subtitle, value: value, share: 0, color: group.colour.swiftUI,
+                isLit: model.litCopyGroup.isLit(group.id), showsBar: false,
+                onHover: { inside in model.pointAtCopyGroup(inside ? group : nil) },
+                onTap: open)
+    }
+}
+
 /// What's folded away under the duplicates, as "Done another way" is in Free Up: hardlinks, clones and symlinks, which take no
 /// extra space.
 private struct Folded: View {
@@ -375,10 +392,7 @@ private struct Folded: View {
         Fold(title: title, count: groups.count.formatted(), trailing: total.map(formatBytes), isOpen: isOpen) {
             LazyVStack(spacing: 0) {
                     ForEach(groups.prefix(80)) { group in
-                        NodeRow(title: group.title, subtitle: subtitle(group), value: value(group), share: 0, color: group.colour.swiftUI,
-                                isLit: model.hotCopyGroup == group.id, showsBar: false,
-                                onHover: { inside in model.pointAtCopyGroup(inside ? group : nil) },
-                                onTap: { open(group) })
+                        FoldedRow(model: model, group: group, subtitle: subtitle(group), value: value(group)) { open(group) }
                     }
                 }
                 .padding(.leading, 8)

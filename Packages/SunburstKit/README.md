@@ -196,8 +196,8 @@ The chart does what every ring does the same way. What your app does its own way
 
 ```swift
 chart.isMarked = { node in plan.contains(node) }          // striped, asked per piece: for a selection too big to list
-chart.alsoLight = { node in .init(copies(of: node), gathered: .shown, tint: setColour) }   // more lights with what's pointed at
-chart.alsoLight = { _ in .init(tint: green, tints: { backedUp.contains($0) }) }  // or, in what's pointed at, colour some
+chart.lighting = { node in .init(also: copies(of: node), gathered: .shown, tint: setColour) }  // more lights with what's pointed at
+chart.lighting = { _ in .init(tint: green, tints: { backedUp.contains($0) }) }  // or, in what's pointed at, colour some
 chart.onPoint = { pointed in panel.show(pointed?.node) }  // what's under the pointer, as it changes
 chart.onClick = { click in                                 // return true when handled, so the chart doesn't zoom
     guard case .piece(let pointed) = click.target else { return false }
@@ -215,6 +215,9 @@ Sunburst(chart) { readout, diameter in                     // a centre of your o
     MyCentre(diameter: diameter)                           // SunburstNumber reads like the kit's big number
 }
 ```
+
+`SunburstNumber` rolls its digits when the thing it's `about:` changes size, and just changes when it's about something
+else, as when the pointer moves to another piece.
 
 
 
@@ -242,10 +245,13 @@ let image = chart.picture(width: 1600, height: 1200)       // nil without a GPU
   and `light(_:in:)` says what lights up for a set of nodes, with everything inside them (`RingLight`), asking the tree's
   own set of them (`branches(_:)`).
 - `SunburstEngine` holds the picture on screen and everything that moves: `apply(_:_:)` with a `RingTransition`,
-  `setEmphasis(primary:related:ancestors:tint:)` to light pieces, `setCalm(_:)`, `setGlow(_:)`, `showsScale`.
+  `setEmphasis(_:)` to light pieces (a `RingEmphasis`, which a picture works out: `RingLayout.emphasis(pointingAt:in:lighting:)`),
+  `setCalm(_:)`, `setGlow(_:)`, `showsScale`.
 - `SunburstView` is the `NSView` that draws it, with callbacks for the pointer, keys and VoiceOver; `RingPlace` tells it
   where the ring is on every frame of a SwiftUI animation.
-- `LabelPlacer` works out where names fit, inside pieces and beside the ring, and `SunburstLabels` shows them.
+- `LabelPlacer` works out where names fit, inside pieces and beside the ring, and `SunburstLabels` shows them, lit by a
+  `LabelLight` or, name by name, by a chart's `labelLights`: then the pointer moving makes again only the names whose
+  light changes.
 
 ## Agents
 
@@ -315,6 +321,9 @@ all the root's things, since a split is a part now rather than something the tre
 ## Working on it
 
 - `swift test` runs the tests. Tests that draw are skipped on a machine without a GPU.
+- The snapshot tests hold every layout, name and picture to `Tests/SunburstKitTests/Snapshots/Baseline`. Pictures are
+  compared pixel for pixel on the GPU that drew them (`Baseline/gpu.txt`), and with their edges averaged out on any other,
+  such as CI's. After a change that's meant to be seen, write them again: `SNAPSHOT_OUT=<folder> swift test --filter SnapshotWriter`.
 - The shaders' source is `Sources/SunburstKit/Shaders.metal`. They're built into the package as a string, so an app needs no
   resources of its own: after changing them, run `Scripts/embed-shaders.sh`. A test fails until you do.
 
