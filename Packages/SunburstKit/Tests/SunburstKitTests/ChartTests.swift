@@ -230,6 +230,40 @@ final class ChartTests: XCTestCase {
         XCTAssertGreaterThan(try total(.shared), try total(.folder) * 1.002)
     }
 
+    /// A tree sized by one thing can say another: here each node's text is how many files are in it.
+    func testANodesOwnTextIsWrittenInPlaceOfItsSize() throws {
+        var files: [(String, UInt64)] = [("Films/a.mov", 400 * mb), ("Films/b.mov", 200 * mb), ("other", 300 * mb)]
+        for i in 0..<30 { files.append(("Films/tiny\(i)", 10_000)) }
+        var tree = TestTree(files)
+        let counting = tree
+        func count(_ node: UInt32) -> Int { counting.firstChild(of: node) == 0 ? 1 : counting.children(of: node).map(count).reduce(0, +) }
+        let chart = SunburstChart(tree: counting, name: { counting.nodes[Int($0)].name.isEmpty ? "All" : counting.nodes[Int($0)].name },
+                                  valueText: { "\(count($0)) files" }, engine: SunburstEngine(reducesMotion: { false }))
+        let summary = chart.summary(limit: 100)
+        XCTAssertEqual(summary.sizeText, "33 files")
+        XCTAssertEqual(summary.pieces.first { $0.name == "Films" }?.sizeText, "32 files")
+        let gathered = try XCTUnwrap(summary.pieces.first(where: \.isGathered))
+        XCTAssertEqual(gathered.sizeText, SunburstFormat.bytes(gathered.size), "smaller items are part of a node: their own size")
+
+        chart.setPlace(center: CGPoint(x: 400, y: 300), radius: 250, size: CGSize(width: 800, height: 600))
+        XCTAssertTrue(chart.labels.contains { $0.title == "Films" && $0.value == "32 files" }, "\(chart.labels.map(\.value))")
+        let films = try XCTUnwrap(chart.engine.layout.piece(of: tree.node("Films")))
+        chart.hover(piece: films)
+        XCTAssertEqual(chart.readout.text, "32 files")
+        chart.hover(piece: nil)
+        XCTAssertEqual(chart.readout.text, "33 files", "the middle")
+
+        // A stretch is part of its node too.
+        tree.cut[tree.node("Films")] = [SunburstStretch(size: 2, key: 0), SunburstStretch(size: 1, key: 1)]
+        chart.tree = tree
+        let stretch = try XCTUnwrap(chart.engine.layout.piece(of: tree.node("Films")))
+        chart.hover(piece: stretch)
+        XCTAssertEqual(chart.readout.text, SunburstFormat.bytes(2))
+
+        chart.valueText = nil
+        XCTAssertEqual(chart.summary().sizeText, SunburstFormat.bytes(900 * mb + 300_000), "back to sizes")
+    }
+
     func testReadoutSplitsTheUnitOff() {
         XCTAssertEqual(ReadoutView.split("4.2 GB").0, "4.2")
         XCTAssertEqual(ReadoutView.split("4.2 GB").1, "GB")

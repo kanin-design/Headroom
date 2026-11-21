@@ -5,8 +5,9 @@ Lets AI agents look at a chart and point at things on it, over MCP, once the use
 ## Overview
 
 An app describes itself in an ``AgentHost`` (its name, what agents are told, its folder and its tools) and opens an
-``AgentDoor`` with a closure that answers each call. ``SunburstAgentTools`` gives any `SunburstChart` six tools for free:
-a summary of what's on it, a picture, zooming in and out, and lighting things up.
+``AgentDoor`` with a closure that answers each call. ``SunburstAgentTools`` gives any `SunburstChart` eight tools for free:
+a summary of what's on it, finding things by name, what's inside a node, a picture, zooming in and out, and lighting things
+up.
 
 ```swift
 let door = AgentDoor.open(.myApp) { call in

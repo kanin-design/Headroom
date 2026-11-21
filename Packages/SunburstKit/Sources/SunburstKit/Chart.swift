@@ -18,8 +18,14 @@ public final class SunburstChart<Tree: SunburstTree> {
     /// the middle and what's pointed at, so its node numbers must mean the same things. It can be set many times a second, as
     /// while something is measured: each piece glides on from where it is. For a different tree altogether, use `show(_:)`.
     public var tree: Tree {
-        didSet { if !replacing { redraw(.live) } }
+        didSet {
+            quietTree = tree
+            if !replacing { redraw(.live) }
+        }
     }
+    /// The same tree, read without SwiftUI watching: reading `tree` costs about a microsecond, too much for a lookup made once
+    /// for each node, such as a name while an agent searches the whole tree.
+    @ObservationIgnored private(set) var quietTree: Tree
     /// The node in the middle: 0, the root, until something is zoomed into.
     public private(set) var focus: UInt32 = 0
     /// The node under the pointer, if any.
@@ -39,6 +45,13 @@ public final class SunburstChart<Tree: SunburstTree> {
     }
     /// How a size is written: a number, then a space and a unit, such as "4.20 GB". The readout shows the unit smaller.
     @ObservationIgnored public var sizeText: (UInt64) -> String {
+        didSet { placeLabels(); updateReadout() }
+    }
+    /// What's written for a node in place of its size, on its piece, in the readout and in `summary(limit:)`: for a tree
+    /// whose sizes count one thing while the text should say another, such as films sized by how many there are but shown in
+    /// bytes. Nil, the default, writes the size with `sizeText`. A piece that's only part of a node (a stretch, or "smaller
+    /// items") still writes its own size with `sizeText`.
+    @ObservationIgnored public var valueText: ((UInt32) -> String)? {
         didSet { placeLabels(); updateReadout() }
     }
     /// The colour of each piece, given the node in the middle. By default each branch in view gets its own colour from the
@@ -86,11 +99,14 @@ public final class SunburstChart<Tree: SunburstTree> {
     @ObservationIgnored private var hoverTask: Task<Void, Never>?
 
     /// `name` says what each node is called. `sizeText` writes a size: by default in bytes, as `SunburstFormat.bytes`.
+    /// `valueText`, if given, is written for a node in place of its size.
     public init(tree: Tree, name: @escaping (UInt32) -> String, sizeText: @escaping (UInt64) -> String = SunburstFormat.bytes,
-                engine: SunburstEngine = SunburstEngine()) {
+                valueText: ((UInt32) -> String)? = nil, engine: SunburstEngine = SunburstEngine()) {
         self.tree = tree
+        quietTree = tree
         self.name = name
         self.sizeText = sizeText
+        self.valueText = valueText
         self.engine = engine
         redraw(.appear)
     }
@@ -192,13 +208,13 @@ public final class SunburstChart<Tree: SunburstTree> {
         let order = layout.pieces.indices.sorted { layout.pieces[$0].size > layout.pieces[$1].size }
         let items = order.prefix(max(limit, 0)).map { at -> SunburstSummary.Piece in
             let p = layout.pieces[at]
-            return SunburstSummary.Piece(node: p.node, name: pieceName(p), size: p.size, sizeText: sizeText(p.size),
+            return SunburstSummary.Piece(node: p.node, name: pieceName(p), size: p.size, sizeText: amountText(p),
                                          share: Double(p.size) / Double(max(whole, 1)), ring: Int(p.ring),
                                          inside: p.parent >= 0 ? layout.pieces[Int(p.parent)].tail : focus,
                                          from: Double(p.a0) * 180 / .pi, to: Double(p.a1) * 180 / .pi,
                                          isGathered: p.isSmaller, isMarked: p.marked > 0)
         }
-        return SunburstSummary(focus: focus, name: name(focus), size: whole, sizeText: sizeText(whole), rings: layout.rings,
+        return SunburstSummary(focus: focus, name: name(focus), size: whole, sizeText: amountText(focus), rings: layout.rings,
                                hovered: hovered, pieces: Array(items), more: max(layout.pieces.count - items.count, 0))
     }
 
@@ -388,6 +404,17 @@ public final class SunburstChart<Tree: SunburstTree> {
         p.isSmaller ? (p.smallerCount == 1 ? "1 smaller item" : "\(p.smallerCount) smaller items") : name(p.node)
     }
 
+    /// What's written for a node: its `valueText`, or its size.
+    private func amountText(_ node: UInt32) -> String {
+        valueText?(node) ?? sizeText(tree.size(of: node))
+    }
+
+    /// What's written for a piece: its node's `valueText` when the piece stands for all of the node, or else its own size.
+    private func amountText(_ p: Piece) -> String {
+        if let valueText, !p.isSmaller, p.size == tree.size(of: p.node) { return valueText(p.node) }
+        return sizeText(p.size)
+    }
+
     /// Names for the picture as it is now, after `delay` seconds; until then the old names fade away.
     private func placeLabels(after delay: Double) {
         labelTask?.cancel()
@@ -416,10 +443,10 @@ public final class SunburstChart<Tree: SunburstTree> {
         let order = LabelPlacer.order(layout, halvesFirst: tree.hasHalves)
         var named = LabelPlacer.Placed()
         let inside = LabelPlacer.inside(layout: layout, order: order, area: area, halves: tree.hasHalves, named: &named) { p in
-            p.isSmaller ? nil : (self.name(p.node), self.sizeText(p.size))
+            p.isSmaller ? nil : (self.name(p.node), self.amountText(p))
         }
         let picks = LabelPlacer.bigPieces(layout: layout, order: order, named: &named) { p in
-            (self.name(p.node), self.sizeText(p.size))
+            (self.name(p.node), self.amountText(p))
         }
         labels = inside + LabelPlacer.sides(picks, layout: layout, area: area, eachCounts: false)
     }
@@ -429,13 +456,14 @@ public final class SunburstChart<Tree: SunburstTree> {
         if let hoveredPiece, hoveredPiece < engine.layout.pieces.count {
             let p = engine.layout.pieces[hoveredPiece]
             let share = Double(p.size) / Double(max(whole, 1))
-            readout = SunburstReadout(title: pieceName(p), size: p.size, detail: Self.percent(share) + " of " + name(focus))
+            readout = SunburstReadout(title: pieceName(p), size: p.size, text: amountText(p), detail: Self.percent(share) + " of " + name(focus))
         } else if focus != 0 {
             // Zoomed in: what share of everything this is, and a way back out.
             let share = Double(whole) / Double(max(tree.size(of: 0), 1))
-            readout = SunburstReadout(title: name(focus), size: whole, detail: Self.percent(share) + " of " + name(0), goesBack: true)
+            readout = SunburstReadout(title: name(focus), size: whole, text: amountText(focus), detail: Self.percent(share) + " of " + name(0),
+                                      goesBack: true)
         } else {
-            readout = SunburstReadout(title: name(focus), size: whole, detail: "")
+            readout = SunburstReadout(title: name(focus), size: whole, text: amountText(focus), detail: "")
         }
     }
 
@@ -473,9 +501,19 @@ public final class SunburstChart<Tree: SunburstTree> {
         }
         view.describePiece = { [weak self] piece, share in
             guard let self else { return ("", "") }
-            return (self.pieceName(piece), "\(self.sizeText(piece.size)), \(Self.percent(share))")
+            return (self.pieceName(piece), "\(self.amountText(piece)), \(Self.percent(share))")
         }
         view.onPress = { [weak self] index in self?.click(piece: index) }
+    }
+}
+
+public extension SunburstChart {
+    /// A chart of an `ItemTree`, each piece named from its item: from the tree on the ring, so a tree shown later with
+    /// `show(_:)` names its own pieces.
+    convenience init<Item>(tree: ItemTree<Item>, sizeText: @escaping (UInt64) -> String = SunburstFormat.bytes,
+                           valueText: ((UInt32) -> String)? = nil, engine: SunburstEngine = SunburstEngine()) where Tree == ItemTree<Item> {
+        self.init(tree: tree, name: { tree.name(of: $0) }, sizeText: sizeText, valueText: valueText, engine: engine)
+        name = { [unowned self] node in self.quietTree.name(of: node) }
     }
 }
 
@@ -504,11 +542,19 @@ public struct Sunburst<Tree: SunburstTree>: View {
     }
 
     /// A chart of this tree. `name` says what each node is called; sizes are written in bytes unless `sizeText` says
-    /// otherwise. The chart is made when the view first appears, from the tree it's given then. To show a tree that
-    /// changes, keep a `SunburstChart` and set its `tree`.
-    public init(_ tree: Tree, name: @escaping (UInt32) -> String, sizeText: @escaping (UInt64) -> String = SunburstFormat.bytes) {
+    /// otherwise, and `valueText`, if given, is written for a node in place of its size. The chart is made when the view
+    /// first appears, from the tree it's given then. To show a tree that changes, keep a `SunburstChart` and set its `tree`.
+    public init(_ tree: Tree, name: @escaping (UInt32) -> String, sizeText: @escaping (UInt64) -> String = SunburstFormat.bytes,
+                valueText: ((UInt32) -> String)? = nil) {
         given = nil
-        make = { SunburstChart(tree: tree, name: name, sizeText: sizeText) }
+        make = { SunburstChart(tree: tree, name: name, sizeText: sizeText, valueText: valueText) }
+    }
+
+    /// A chart of an `ItemTree`, each piece named from its item.
+    public init<Item>(_ tree: ItemTree<Item>, sizeText: @escaping (UInt64) -> String = SunburstFormat.bytes,
+                      valueText: ((UInt32) -> String)? = nil) where Tree == ItemTree<Item> {
+        given = nil
+        make = { SunburstChart(tree: tree, sizeText: sizeText, valueText: valueText) }
     }
 
     public var body: some View {
@@ -524,7 +570,7 @@ public struct Sunburst<Tree: SunburstTree>: View {
                                onOpen: { [chart] piece, clicks in chart.click(piece: piece, count: clicks) },
                                outer: { _ in EmptyModifier() })
                     .animation(.easeOut(duration: chart.labelsVisible ? 0.28 : 0.1), value: chart.labelsVisible)
-                ReadoutView(readout: chart.readout, sizeText: chart.sizeText, diameter: ring.radius * CGFloat(RingLayout.hole) * 2 * 0.86)
+                ReadoutView(readout: chart.readout, diameter: ring.radius * CGFloat(RingLayout.hole) * 2 * 0.86)
                     .position(ring.center)
                     .allowsHitTesting(false)
             }
@@ -578,7 +624,10 @@ struct SunburstCanvas<Tree: SunburstTree>: NSViewRepresentable {
 /// What the middle of the ring says: the name of what's pointed at or in view, its size, and its share.
 struct SunburstReadout: Equatable {
     var title = ""
+    /// The size, for the direction the number rolls in as it changes.
     var size: UInt64 = 0
+    /// What's written for it: a number, then a space and a unit, such as "4.20 GB".
+    var text = ""
     var detail = ""
     /// A click in the middle goes back out.
     var goesBack = false
@@ -588,13 +637,12 @@ struct SunburstReadout: Equatable {
 /// nothing jumps as the pointer moves.
 struct ReadoutView: View {
     let readout: SunburstReadout
-    let sizeText: (UInt64) -> String
     let diameter: CGFloat
 
     var body: some View {
         let d = max(diameter, 1)
         let room = d * 0.18
-        let (value, unit) = Self.split(sizeText(readout.size))
+        let (value, unit) = Self.split(readout.text)
         VStack(spacing: 0) {
             ZStack(alignment: .bottom) {
                 Color.clear

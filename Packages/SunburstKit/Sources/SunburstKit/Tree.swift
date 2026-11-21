@@ -49,6 +49,10 @@ public protocol SunburstTree {
     /// what's selected and what isn't. What's inside it is drawn under the whole piece. Nil, the default, for one piece. A
     /// node drawn in stretches isn't also cut by groups.
     func stretches(of node: UInt32) -> [SunburstStretch]?
+    /// Whether the tree has a node with this number, so a number from outside, such as an agent's, can be checked before the
+    /// tree is asked anything about it. By default it's looked for from the root down; a tree that numbers its nodes in a
+    /// row can answer at once.
+    func hasNode(_ node: UInt32) -> Bool
 }
 
 /// One stretch of a node's piece: see `SunburstTree.stretches(of:)`.
@@ -81,6 +85,21 @@ public extension SunburstTree {
     func isStillGrowing(_ node: UInt32) -> Bool { false }
     func isAlwaysDrawn(_ node: UInt32) -> Bool { false }
     func stretches(of node: UInt32) -> [SunburstStretch]? { nil }
+
+    func hasNode(_ node: UInt32) -> Bool {
+        if node == 0 { return true }
+        // Only nodes reached from the root are asked about, so a number the tree doesn't have is never looked up.
+        var stack: [UInt32] = [0]
+        while let at = stack.popLast() {
+            var c = firstChild(of: at)
+            while c != 0 {
+                if c == node { return true }
+                stack.append(c)
+                c = nextSibling(of: c)
+            }
+        }
+        return false
+    }
 
     /// The node's children, in the tree's order.
     func children(of node: UInt32) -> [UInt32] {

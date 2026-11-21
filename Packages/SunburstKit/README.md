@@ -8,10 +8,10 @@ middle to go back out.
 
 <sub>The pictures show the example app's made-up sample.</sub>
 
-- **One line to use.** `Sunburst(tree, name: …)` gives the ring, names on and beside it, a readout in the middle, pointing,
-  zooming, keys and VoiceOver.
-- **Any tree.** It doesn't own your data. Your tree answers a small protocol, and you decide what the colours mean, what's
-  marked and what a click opens.
+- **One line to use.** `Sunburst(tree)` gives the ring, names on and beside it, a readout in the middle, pointing, zooming,
+  keys and VoiceOver.
+- **Any tree.** It doesn't own your data. Hand it the items you already have (`ItemTree`), or answer a small protocol from a
+  tree of your own, and you decide what the colours mean, what's marked and what a click opens.
 - **Fast.** The layout of a whole 2-million-file disk's top six rings, about 400 pieces, takes a third of a millisecond. The
   layout is generic and `@inlinable`, so your build specialises it for your own tree. Every piece is one instanced quad
   shaped on the GPU, so drawing barely depends on how many there are, and the ring only draws while something moves, on a
@@ -27,9 +27,11 @@ Requirements: macOS 14 or later, Swift 6.2 or later. No dependencies.
 
 ## Install
 
-Add this repository's URL as a package dependency, from version 0.2.0: in Xcode with File › Add Package Dependencies…, or in
-`Package.swift` with `.package(url:from:)`. Then add `SunburstKit` to your target's dependencies, and `SunburstAgents` too
-if you want agents.
+Add this repository's URL as a package dependency, up to the next minor version from 0.2.1: in Xcode with File › Add
+Package Dependencies… (Dependency Rule: Up to Next Minor Version), or in `Package.swift` with `.package(url:_:)` and
+`.upToNextMinor(from: "0.2.1")`. Before 1.0, a patch such as 0.2.2 never breaks your code; a minor version such as 0.3.0
+may, and its notes say what. Then add `SunburstKit` to your target's dependencies, and `SunburstAgents` too if you want
+agents.
 
 ## Quick start
 
@@ -37,20 +39,36 @@ if you want agents.
 import SunburstKit
 import SwiftUI
 
-struct ContentView: View {
-    let tree: FileTree      // yours, conforming to SunburstTree
+struct Cost {
+    var name: String
+    var cents = 0
+    var parts: [Cost] = []
+}
+
+struct BudgetView: View {
+    let tree: ItemTree<Cost>
+
+    init(budget: Cost) {
+        tree = ItemTree(budget, name: \.name, size: \.cents, children: \.parts)
+    }
 
     var body: some View {
-        Sunburst(tree, name: { tree.name(of: $0) })
+        Sunburst(tree, sizeText: { "$\($0 / 100)" })
     }
 }
 ```
 
-Sizes are written in bytes ("4.20 GB") unless you pass `sizeText:`. To show a tree that changes, or to drive the chart from
-code, keep a `SunburstChart` and show that:
+`ItemTree` takes items of any type: what each is called, its own size in whole units (bytes, cents, a count), and what's
+inside it. A folder's size is everything in it added up. `tree[node]` gives back the item a node stands for, and
+`tree.nodes(where:)` finds nodes by their items. For a tree of your own, such as one read from disk as it's measured,
+answer `SunburstTree` (below) and say what each node is called: `Sunburst(tree, name: { tree.name(of: $0) })`.
+
+Sizes are written in bytes ("4.20 GB") unless you pass `sizeText:`. To write something else for a node, such as films sized
+by how many there are but shown in bytes, pass `valueText:`. To show a tree that changes, or to drive the chart from code,
+keep a `SunburstChart` and show that:
 
 ```swift
-@State private var chart = SunburstChart(tree: tree, name: { tree.name(of: $0) })
+@State private var chart = SunburstChart(tree: tree)   // an ItemTree; a tree of your own also takes name:
 
 var body: some View {
     Sunburst(chart)
@@ -61,6 +79,7 @@ chart.zoom(into: node)              // into a node; a node with nothing inside i
 chart.zoomOut()                     // one level back out
 chart.highlight([a, b], tint: c)    // light these and the way out to them, in one colour
 chart.marked = [selected]           // drawn striped
+chart.valueText = { node in … }     // a node's own text in place of its size
 chart.tree = updated                // the same tree with new sizes, as often as they come: everything glides
 chart.show(otherTree)               // a different tree: back to its root
 chart.onOpen = { node in … }        // a click on a file, say
@@ -105,6 +124,7 @@ Optional, with defaults that draw a plain sunburst:
 | `isStillGrowing(_:)` | false | Still being measured: it doesn't chain yet |
 | `isAlwaysDrawn(_:)` | false | Drawn as its own piece however thin, never gathered into "smaller items", such as every film in a library |
 | `stretches(of:)` | nil | The node's piece cut into stretches side by side, each with its own size, colour and mark, such as by where its files are and which are selected; what's inside is drawn under the whole piece |
+| `hasNode(_:)` | looks from the root down | Whether the tree has a node with this number, checked before a number from an agent is used; answer at once if your nodes are numbered in a row |
 
 ## Colours
 
@@ -130,7 +150,7 @@ noise that keeps dark gradients smooth on screen, for a PNG about half the size.
 
 ```swift
 let summary = chart.summary(limit: 10)
-print(summary.name, summary.sizeText)                      // Home 92.0 GB
+print(summary.name, summary.sizeText)                      // Home 332 GB
 for piece in summary.pieces { print(piece.name, piece.share) }
 
 let image = chart.picture(width: 1600, height: 1200)       // nil without a GPU
@@ -159,7 +179,7 @@ import SunburstAgents
 extension AgentHost {
     static let myApp = AgentHost(
         name: "FolderMap", version: "1.0",
-        instructions: "FolderMap shows a folder as a sunburst. Call chart_summary to see what's on it.",
+        instructions: "FolderMap shows a folder as a sunburst. Call chart_summary to see what's on it, and chart_find to find something by name.",
         folder: URL.applicationSupportDirectory.appendingPathComponent("FolderMap"),
         tools: SunburstAgentTools.tools)        // + any tools of your own
 }
@@ -178,9 +198,10 @@ command, ready to copy into an agent's settings (`AgentDoor.command`).
   each agent did. Which program is on the other end, and who signed it, is read from the system, so an agent can't pass
   itself off as another program.
 - **Nothing on the network.** The door is a socket file in the app's own folder that only the user can open.
-- **The chart's tools:** `chart_summary` (what's on the ring, in words), `chart_picture` (a PNG of it), `chart_zoom_in`,
-  `chart_zoom_out`, `chart_highlight` and `chart_clear_highlight`. The last four change what the user sees, so an agent
-  allowed only to look can't call them.
+- **The chart's tools:** `chart_summary` (what's on the ring, in words), `chart_find` (things by name anywhere in the
+  tree), `chart_children` (what's inside a node), `chart_picture` (a PNG of it), `chart_zoom_in`, `chart_zoom_out`,
+  `chart_highlight` and `chart_clear_highlight`. The last four change what the user sees, so an agent allowed only to look
+  can't call them. An agent can zoom into or light anything it found, on the ring or not.
 - **Your own tools** are `AgentTool`s beside them, answered in the same closure with an `AgentReply`: JSON, text or an
   image.
 

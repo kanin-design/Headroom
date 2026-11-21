@@ -54,7 +54,7 @@ extension AgentHost {
     /// What agents are told about the app, and the tools they get: the chart's own.
     static let folderMap = AgentHost(
         name: "FolderMap", version: "1.0",
-        instructions: "FolderMap shows a folder as a sunburst. Call chart_summary to see what's on it, chart_picture to look at it, and chart_highlight to point something out to the user.",
+        instructions: "FolderMap shows a folder as a sunburst. Call chart_summary to see what's on it, chart_find to find something by name anywhere in the folder, chart_picture to look at it, and chart_highlight to point something out to the user.",
         folder: URL.applicationSupportDirectory.appendingPathComponent("FolderMap"),
         tools: SunburstAgentTools.tools)
 }
