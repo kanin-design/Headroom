@@ -1,0 +1,121 @@
+import AppKit
+import CoreText
+import os
+import SwiftUI
+
+/// One line of text as the outlines of its glyphs, each where it stands along a straight baseline: what's needed to set
+/// the line along an arc instead. Made once for each text and font and kept, since names are placed again on every change
+/// of picture and are mostly the same names.
+struct GlyphLine: Sendable {
+    struct Glyph: @unchecked Sendable {
+        /// The glyph's outline around its own origin on the baseline, y up. Nil for a space.
+        let outline: CGPath?
+        /// Where its middle is along the baseline, from the start of the line.
+        let middle: CGFloat
+    }
+
+    let glyphs: [Glyph]
+    /// How long the line is.
+    let width: CGFloat
+
+    /// The line of `text` in a font. Kerning and ligatures are as CoreText sets them.
+    static func make(_ text: String, font: NSFont) -> GlyphLine {
+        let key = Key(text: text, font: ObjectIdentifier(font))
+        if let known = cache.withLock({ $0[key] }) { return known }
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: [.font: font]))
+        var glyphs: [Glyph] = []
+        for run in CTLineGetGlyphRuns(line) as? [CTRun] ?? [] {
+            let count = CTRunGetGlyphCount(run)
+            guard count > 0 else { continue }
+            // The run's own font: a character the line's font lacks comes from another.
+            let attributes = CTRunGetAttributes(run) as NSDictionary
+            let runFont = attributes[kCTFontAttributeName as String].map { $0 as! CTFont } ?? font as CTFont
+            var ids = [CGGlyph](repeating: 0, count: count)
+            var positions = [CGPoint](repeating: .zero, count: count)
+            var advances = [CGSize](repeating: .zero, count: count)
+            CTRunGetGlyphs(run, CFRange(location: 0, length: count), &ids)
+            CTRunGetPositions(run, CFRange(location: 0, length: count), &positions)
+            CTRunGetAdvances(run, CFRange(location: 0, length: count), &advances)
+            for i in 0..<count {
+                let half = advances[i].width / 2
+                // Around its own middle, so it turns about that when it's set on the arc.
+                var toMiddle = CGAffineTransform(translationX: -half, y: 0)
+                glyphs.append(Glyph(outline: CTFontCreatePathForGlyph(runFont, ids[i], &toMiddle), middle: positions[i].x + half))
+            }
+        }
+        let made = GlyphLine(glyphs: glyphs, width: CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil)))
+        cache.withLock { known in
+            if known.count > 2048 { known.removeAll(keepingCapacity: true) }
+            known[key] = made
+        }
+        return made
+    }
+
+    private struct Key: Hashable {
+        let text: String
+        let font: ObjectIdentifier
+    }
+
+    private static let cache = OSAllocatedUnfairLock(initialState: [Key: GlyphLine]())
+}
+
+/// A line of text set along an arc of the ring: each glyph stands on a circle around the ring's middle, upright to it. In
+/// the upper half of the ring it reads clockwise with its top outwards; in the lower half it's turned to read the other way
+/// round, top inwards, so no name is ever upside down.
+///
+/// It's a shape, so it's as sharp as the ring at any size, and glides with its piece while sizes change.
+struct ArcText: Shape {
+    let line: GlyphLine
+    /// The ring's middle.
+    var center: CGPoint
+    /// The radius of the circle the baseline follows.
+    var radius: CGFloat
+    /// Where the line's middle is: clockwise from 12 o'clock, in radians.
+    var angle: CGFloat
+    /// Reads anticlockwise, top inwards: for the lower half.
+    let turned: Bool
+    /// Extra room between glyphs, in points: text turned top inwards is squeezed at the top, and reads better let out a
+    /// little.
+    var tracking: CGFloat = 0
+
+    var animatableData: AnimatablePair<AnimatablePair<CGFloat, CGFloat>, CGPoint.AnimatableData> {
+        get { AnimatablePair(AnimatablePair(angle, radius), center.animatableData) }
+        set {
+            angle = newValue.first.first
+            radius = newValue.first.second
+            center.animatableData = newValue.second
+        }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        Path(Self.path(line, center: center, radius: radius, angle: angle, turned: turned, tracking: tracking))
+    }
+
+    /// Whether a name whose middle is at this angle is turned: in the lower half.
+    static func isTurned(at angle: CGFloat) -> Bool { cos(angle) < 0 }
+
+    /// How long the line is along its arc, with its tracking.
+    static func length(_ line: GlyphLine, tracking: CGFloat) -> CGFloat {
+        line.width + tracking * CGFloat(max(line.glyphs.count - 1, 0))
+    }
+
+    static func path(_ line: GlyphLine, center: CGPoint, radius: CGFloat, angle: CGFloat, turned: Bool, tracking: CGFloat = 0) -> CGPath {
+        let path = CGMutablePath()
+        guard radius > 1 else { return path }
+        let half = length(line, tracking: tracking) / 2
+        for (i, glyph) in line.glyphs.enumerated() {
+            guard let outline = glyph.outline else { continue }
+            // How far along the arc from the line's middle, as an angle; the other way round when turned.
+            let along = (glyph.middle + tracking * CGFloat(i) - half) / radius
+            let at = turned ? angle - along : angle + along
+            // The way the baseline runs there: clockwise is (cos, sin) on a screen whose y grows downwards.
+            let turn = turned ? at + .pi : at
+            var place = CGAffineTransform(translationX: center.x + sin(at) * radius, y: center.y - cos(at) * radius)
+                .rotated(by: turn)
+                // Glyphs are drawn y up.
+                .scaledBy(x: 1, y: -1)
+            if let placed = outline.copy(using: &place) { path.addPath(placed) }
+        }
+        return path
+    }
+}

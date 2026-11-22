@@ -1753,7 +1753,7 @@ enum ScriptRunner {
     /// Somewhere on a name around the ring, by its number among those names.
     @MainActor
     private static func labelPoint(_ argument: String, _ model: AppModel) -> (label: SunburstLabel, x: Double, y: Double)? {
-        let names = (model.chart.labels ?? []).filter { $0.place != .inside }
+        let names = (model.chart.labels ?? []).filter(\.isAtSide)
         guard let at = Int(argument), names.indices.contains(at) else { return nil }
         let label = names[at]
         return (label, label.position.x + (label.place == .right ? 18 : -18), label.position.y)

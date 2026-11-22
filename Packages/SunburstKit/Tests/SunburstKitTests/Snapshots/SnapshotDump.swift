@@ -123,7 +123,9 @@ enum SnapshotCases {
             let sides = LabelPlacer.sides(picks, layout: layout, area: area, eachCounts: false)
             for l in inside + sides {
                 out += "L \(String(l.id, radix: 16)) \(l.pieceIndex) \(l.node) \(l.title)|\(l.value) \(bits(l.position.x)),\(bits(l.position.y)) "
-                out += "\(bits(l.anchor.x)),\(bits(l.anchor.y)) \(bits(l.elbow.x)),\(bits(l.elbow.y)) \(l.place) \(l.dark) \(l.large)\n"
+                out += "\(bits(l.anchor.x)),\(bits(l.anchor.y)) \(bits(l.elbow.x)),\(bits(l.elbow.y)) \(l.place) \(l.dark) \(l.large)"
+                if let arc = l.arc { out += " \(arc.lines) \(bits(arc.angle)) \(bits(arc.radius))" }
+                out += "\n"
             }
         }
         if c.colours {

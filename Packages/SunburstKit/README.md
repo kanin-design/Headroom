@@ -249,7 +249,8 @@ let image = chart.picture(width: 1600, height: 1200)       // nil without a GPU
   `setCalm(_:)`, `setGlow(_:)`, `showsScale`.
 - `SunburstView` is the `NSView` that draws it, with callbacks for the pointer, keys and VoiceOver; `RingPlace` tells it
   where the ring is on every frame of a SwiftUI animation.
-- `LabelPlacer` works out where names fit, inside pieces and beside the ring, and `SunburstLabels` shows them, lit by a
+- `LabelPlacer` works out where names fit: inside pieces, set straight or along the piece's arc (a `SunburstLabel` whose
+  `place` is `.along` says how in `arc`), and beside the ring. `SunburstLabels` shows them, lit by a
   `LabelLight` or, name by name, by a chart's `labelLights`: then the pointer moving makes again only the names whose
   light changes.
 

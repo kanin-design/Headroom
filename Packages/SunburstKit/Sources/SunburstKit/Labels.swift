@@ -2,10 +2,33 @@ import AppKit
 import os
 import SwiftUI
 
-/// A name on the ring: inside a piece if it fits, otherwise out at the side with a thin line to its piece.
+/// A name on the ring: inside a piece if it fits, set straight or along the piece's arc; otherwise out at the side with a
+/// thin line to its piece.
 public struct SunburstLabel: Identifiable, Equatable, Sendable {
-    /// Inside its piece, or in the column of names to the left or right of the ring.
-    public enum Place: Sendable { case inside, left, right }
+    /// Inside its piece, set straight; inside it, along its arc (`arc` says how); or in the column of names to the left or
+    /// right of the ring.
+    public enum Place: Sendable { case inside, along, left, right }
+
+    /// How a name is set along its piece's arc.
+    public struct Arc: Equatable, Sendable {
+        public enum Lines: Sendable {
+            /// The name above its size, on two arcs.
+            case stacked
+            /// The name, then its size, on one arc.
+            case inLine
+            /// The name alone: there's no room for its size.
+            case titleOnly
+        }
+
+        /// The ring's middle, in the view's points.
+        public var center: CGPoint
+        /// The radius of the middle of the band the name runs in.
+        public var radius: CGFloat
+        /// Where the name's middle is: clockwise from 12 o'clock, in radians.
+        public var angle: CGFloat
+        public var lines: Lines
+    }
+
     public var id: UInt64
     /// The piece it names, in the layout it was placed for.
     public var pieceIndex: Int
@@ -24,6 +47,11 @@ public struct SunburstLabel: Identifiable, Equatable, Sendable {
     public var dark: Bool
     /// Written larger, as on free space.
     public var large: Bool
+    /// For a name set along its piece's arc (`.along`): how.
+    public var arc: Arc?
+
+    /// Whether it's out at the side, with a line to its piece.
+    public var isAtSide: Bool { place == .left || place == .right }
 }
 
 /// Whether the pointer is on anything on the ring, which named piece it's on, if any, and which names are lit with it.
@@ -158,19 +186,88 @@ public struct LabelArea: Sendable {
 
 /// Places names on and around the ring. What each piece is called, and which pieces are named at the sides, is the host's:
 /// these find where the names fit.
-public enum LabelPlacer {
-    /// The fonts names are drawn in, as `InsideLabel` and `OuterLabel` draw them: a name above, its size below, and both
-    /// larger on free space.
-    private enum Font: Int {
-        case title, value, largeTitle, largeValue
+/// The fonts names inside pieces are drawn in: a name above, its size below, and both larger on free space.
+enum LabelFont: Int {
+    case title, value, largeTitle, largeValue
 
-        // Fonts don't change once made, so any thread may measure with them.
-        nonisolated(unsafe) private static let made: [NSFont] = [
-            .systemFont(ofSize: 12.5, weight: .semibold), .monospacedDigitSystemFont(ofSize: 11, weight: .medium),
-            .systemFont(ofSize: 14, weight: .semibold), .monospacedDigitSystemFont(ofSize: 13, weight: .medium),
-        ]
-        var font: NSFont { Self.made[rawValue] }
+    // Fonts don't change once made, so any thread may measure with them.
+    nonisolated(unsafe) private static let made: [NSFont] = [
+        .systemFont(ofSize: 12.5, weight: .semibold), .monospacedDigitSystemFont(ofSize: 11, weight: .medium),
+        .systemFont(ofSize: 14, weight: .semibold), .monospacedDigitSystemFont(ofSize: 13, weight: .medium),
+    ]
+    var font: NSFont { Self.made[rawValue] }
+}
+
+/// A name set along an arc, worked out: its lines, each on its own circle and with its middle at its own angle. The placer
+/// asks whether it fits its piece; the view draws exactly this.
+struct ArcSetting {
+    struct Line {
+        let text: GlyphLine
+        /// The circle its baseline follows.
+        let radius: CGFloat
+        /// Where its middle is.
+        let angle: CGFloat
+        let tracking: CGFloat
+        let isValue: Bool
+
+        /// How long it is along its arc.
+        var length: CGFloat { ArcText.length(text, tracking: tracking) }
     }
+
+    let lines: [Line]
+    /// Reads anticlockwise, top inwards: in the lower half of the ring.
+    let turned: Bool
+
+    /// How high capitals stand in the name's font and in its size's, and how far apart two lines are.
+    static let titleCap: CGFloat = 8.9, valueCap: CGFloat = 7.8, pitch: CGFloat = 14.5
+    /// The room between a name and its size on one line.
+    static let gap: CGFloat = 7
+    /// The least band a line fits in, and two lines.
+    static let oneLine: CGFloat = 17, twoLines: CGFloat = 31
+    /// Kept clear at each end of the arc.
+    static let pad: CGFloat = 7
+    /// A tighter circle than this squeezes letters into each other.
+    static let leastRadius: CGFloat = 52
+
+    init(title: String, value: String, arc: SunburstLabel.Arc) {
+        let turned = ArcText.isTurned(at: arc.angle)
+        // Out from the middle of the ring is up for text that isn't turned, and down for text that is.
+        let up: CGFloat = turned ? -1 : 1
+        // Turned text has its tops on the inside of the curve, where they crowd; a little air evens it out.
+        let tracking: CGFloat = turned ? 0.5 : 0.12
+        let name = GlyphLine.make(title, font: LabelFont.title.font), size = GlyphLine.make(value, font: LabelFont.value.font)
+        func line(_ text: GlyphLine, cap: CGFloat, raisedBy raise: CGFloat, along: CGFloat = 0, isValue: Bool) -> Line {
+            // The line's own middle sits `raise` above the band's; its baseline half a capital below that.
+            let radius = arc.radius + up * (raise - cap / 2)
+            return Line(text: text, radius: radius, angle: arc.angle + up * along / max(radius, 1), tracking: tracking, isValue: isValue)
+        }
+        switch arc.lines {
+        case .stacked:
+            lines = [line(name, cap: Self.titleCap, raisedBy: Self.pitch / 2, isValue: false),
+                     line(size, cap: Self.valueCap, raisedBy: -Self.pitch / 2, isValue: true)]
+        case .inLine:
+            let nameLength = ArcText.length(name, tracking: tracking), sizeLength = ArcText.length(size, tracking: tracking)
+            let whole = nameLength + Self.gap + sizeLength
+            lines = [line(name, cap: Self.titleCap, raisedBy: 0, along: -(whole - nameLength) / 2, isValue: false),
+                     line(size, cap: Self.titleCap, raisedBy: 0, along: (whole - sizeLength) / 2, isValue: true)]
+        case .titleOnly:
+            lines = [line(name, cap: Self.titleCap, raisedBy: 0, isValue: false)]
+        }
+        self.turned = turned
+    }
+
+    /// Whether every line fits an arc that sweeps this far, with room kept at its ends.
+    func fits(sweep: CGFloat, around angle: CGFloat) -> Bool {
+        lines.allSatisfy { line in
+            let half = line.length / 2 / max(line.radius, 1)
+            let offset = abs(line.angle - angle)
+            return offset + half <= sweep / 2 - Self.pad / max(line.radius, 1)
+        }
+    }
+}
+
+public enum LabelPlacer {
+    private typealias Font = LabelFont
 
     /// How wide text is in one of the fonts. Names are placed again on every change of picture, many times a second while
     /// sizes are arriving, and mostly the same names, so each width is measured once.
@@ -297,17 +394,47 @@ public enum LabelPlacer {
             // Free space reads best out in the open part of the wedge, away from the crowded middle.
             let outward: CGFloat = isFree ? 1.08 : 1
             let halfSpot: CGFloat? = halves && layout.focus == 0 && p.ring == 0 ? sideSpot(p, sides: sides) : nil
-            if let angle = halfSpot ?? fit(w: w, h: h, piece: p, radius: R, outward: outward) {
+            let dark = !isFree && !isHidden && isBright(p.color)
+            let straight = halfSpot ?? fit(w: w, h: h, piece: p, radius: R, outward: outward)
+            // Around the middle, and for free space, a name is set straight wherever it fits. Further out the pieces are
+            // bands, and a straight name fits one only pushed to where the band runs level: there it's set straight if
+            // it fits at the piece's own middle, and otherwise follows the arc, as its neighbours do.
+            let sitsStraight = straight.map { p.ring == 0 || isFree || halfSpot != nil || abs($0 - CGFloat(p.midAngle)) < 0.0001 } ?? false
+            if !sitsStraight, let arc = along(title: said.title, value: said.value, piece: p, area: area) {
+                out.append(SunburstLabel(id: p.key, pieceIndex: i, node: p.node, title: said.title, value: said.value,
+                                    position: point(area, arc.angle, arc.radius), anchor: .zero, elbow: .zero, place: .along,
+                                    dark: dark, large: false, arc: arc))
+            } else if let angle = straight {
                 let rm = CGFloat(p.r0 + p.r1) * 0.5 * R * outward
                 out.append(SunburstLabel(id: p.key, pieceIndex: i, node: p.node, title: said.title, value: said.value,
                                     position: point(area, angle, rm), anchor: .zero, elbow: .zero, place: .inside,
-                                    dark: !isFree && !isHidden && isBright(p.color), large: isFree))
-                named.labelled.insert(i)
-                named.nodes.insert(p.node)
-                if out.count >= 36 { break }
+                                    dark: dark, large: isFree))
+            } else {
+                continue
             }
+            named.labelled.insert(i)
+            named.nodes.insert(p.node)
+            if out.count >= 44 { break }
         }
         return out
+    }
+
+    /// How a piece's name fits along its arc, if it does: the name above its size where the band is thick enough for two
+    /// lines, else both on one line, else the name alone. A long thin piece, which a straight name never fits, holds one
+    /// this way.
+    static func along(title: String, value: String, piece p: Piece, area: LabelArea) -> SunburstLabel.Arc? {
+        let R = area.radius
+        let thickness = CGFloat(p.r1 - p.r0) * R, middle = CGFloat(p.r0 + p.r1) * 0.5 * R
+        guard thickness >= ArcSetting.oneLine, middle >= ArcSetting.leastRadius, !title.isEmpty else { return nil }
+        let sweep = CGFloat(p.sweep), angle = CGFloat(p.midAngle)
+        var arc = SunburstLabel.Arc(center: area.center, radius: middle, angle: angle, lines: .stacked)
+        let ways: [SunburstLabel.Arc.Lines] = (thickness >= ArcSetting.twoLines && !value.isEmpty ? [.stacked] : [])
+            + (value.isEmpty ? [] : [.inLine]) + [.titleOnly]
+        for lines in ways {
+            arc.lines = lines
+            if ArcSetting(title: title, value: value, arc: arc).fits(sweep: sweep, around: angle) { return arc }
+        }
+        return nil
     }
 
     /// Where a side of a split names itself: as near six o'clock as its own arc allows, so two sides are named either side of
@@ -504,7 +631,7 @@ public struct SunburstLabels<Outer: ViewModifier>: View {
 
     public var body: some View {
         ZStack(alignment: .topLeading) {
-            ForEach(labels.filter { $0.place != .inside }) { label in
+            ForEach(labels.filter(\.isAtSide)) { label in
                 LeaderMark(label: label, light: light)
                     .allowsHitTesting(false)
                     .transition(Self.comeAndGo)
@@ -516,6 +643,12 @@ public struct SunburstLabels<Outer: ViewModifier>: View {
                         .position(label.position)
                         .allowsHitTesting(false)
                         .transition(Self.comeAndGo)
+                } else if label.place == .along {
+                    if let arc = label.arc {
+                        ArcLabel(label: label, arc: arc, light: light)
+                            .allowsHitTesting(false)
+                            .transition(Self.comeAndGo)
+                    }
                 } else {
                     let right = label.place == .right
                     let room = max(right ? width - label.position.x - 6 : label.position.x - 12, 60)
@@ -553,7 +686,17 @@ private struct LeaderLine: Shape {
     func path(in rect: CGRect) -> Path {
         var path = Path()
         path.move(to: anchor)
-        path.addLine(to: elbow)
+        // The corner is rounded, as far as both legs allow: a line that turns is easier to follow than one that snaps.
+        let up = hypot(elbow.x - anchor.x, elbow.y - anchor.y), across = hypot(end.x - elbow.x, end.y - elbow.y)
+        let round = min(12, up / 2, across / 2)
+        guard round > 1 else {
+            path.addLine(to: elbow)
+            path.addLine(to: end)
+            return path
+        }
+        path.addLine(to: CGPoint(x: elbow.x + (anchor.x - elbow.x) * round / up, y: elbow.y + (anchor.y - elbow.y) * round / up))
+        path.addQuadCurve(to: CGPoint(x: elbow.x + (end.x - elbow.x) * round / across, y: elbow.y + (end.y - elbow.y) * round / across),
+                          control: elbow)
         path.addLine(to: end)
         return path
     }
@@ -600,6 +743,30 @@ private struct InsideLabel: View {
         .shadow(color: label.dark ? .clear : .black.opacity(0.45), radius: 2, y: 0.5)
         .lineLimit(1)
         .fixedSize()
+        .opacity(state == .steppedBack ? 0.5 : 1)
+        .animation(light.fades ? .easeOut(duration: 0.14) : nil, value: state)
+    }
+}
+
+/// A name set along its piece's arc: the same name and size as a straight one, in the same fonts and colours, as glyph
+/// outlines on circles around the ring's middle.
+private struct ArcLabel: View {
+    let label: SunburstLabel
+    let arc: SunburstLabel.Arc
+    let light: LabelLightSource
+
+    var body: some View {
+        let state = light.state(of: label.node)
+        let setting = ArcSetting(title: label.title, value: label.value, arc: arc)
+        ZStack {
+            ForEach(Array(setting.lines.enumerated()), id: \.offset) { _, line in
+                ArcText(line: line.text, center: arc.center, radius: line.radius, angle: line.angle, turned: setting.turned,
+                        tracking: line.tracking)
+                    .fill(label.dark ? Color.black.opacity(0.84) : Color.white.opacity(0.96))
+                    .opacity(line.isValue ? (label.dark ? 0.72 : 0.78) : 1)
+            }
+        }
+        .shadow(color: label.dark ? .clear : .black.opacity(0.45), radius: 2, y: 0.5)
         .opacity(state == .steppedBack ? 0.5 : 1)
         .animation(light.fades ? .easeOut(duration: 0.14) : nil, value: state)
     }
