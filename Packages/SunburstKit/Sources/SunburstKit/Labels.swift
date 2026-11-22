@@ -60,8 +60,9 @@ public struct LabelLight: Equatable, Sendable {
     public var onAnything = false
     /// The named node the pointer is on, if any.
     public var node: UInt32?
-    /// The named nodes that light with it: what's inside it, and the way out to it. Their names stay as easy to read as
-    /// their pieces are to see.
+    /// The named nodes that light with it: what's inside it, and what else lights with it. Their names stay as easy to read
+    /// as their pieces are to see. The way out to it steps back with the rest: its names would read as naming what's
+    /// pointed at.
     public var lit: Set<UInt32> = []
 
     public init() {}
@@ -818,7 +819,8 @@ private struct OuterLabel: View {
     let light: LabelLightSource
 
     var body: some View {
-        let isOn = light.state(of: label.node) == .pointedAt
+        let state = light.state(of: label.node)
+        let isOn = state == .pointedAt
         VStack(alignment: label.place == .left ? .trailing : .leading, spacing: 0) {
             Text(label.title)
                 .font(.system(size: 12, weight: .medium))
@@ -834,6 +836,10 @@ private struct OuterLabel: View {
         .foregroundStyle(.white)
         .contentTransition(.identity)
         .lineLimit(1)
+        // While something else is pointed at, it steps back as the names inside the ring do, so the name of what's pointed
+        // at is the one that reads.
+        .opacity(state == .steppedBack ? 0.5 : 1)
+        .animation(light.fades ? .easeOut(duration: 0.14) : nil, value: state)
         .contentShape(Rectangle())
     }
 }

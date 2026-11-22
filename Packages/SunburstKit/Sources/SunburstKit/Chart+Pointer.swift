@@ -117,7 +117,9 @@ extension SunburstChart {
     /// Which names light: the pointed-at piece's, and those of the pieces lit with it.
     func labelLightNow() -> LabelLight {
         guard let lit = pointedEmphasis?.light else { return LabelLight(hovering: hovered, named: namedNodes) }
-        let names = labels.filter { label in lit.full.contains { $0.contains(label.pieceIndex) } || lit.holding.contains(label.pieceIndex) }
+        // Not the way out to it: the name of the folder it's in, lit, reads as the name of what's pointed at, and is often
+        // the biggest name on the ring.
+        let names = labels.filter { label in lit.full.contains { $0.contains(label.pieceIndex) } }
         return LabelLight(hovering: hovered, named: namedNodes, lit: Set(names.map(\.node)))
     }
 

@@ -95,7 +95,9 @@ struct HookTests {
         #expect(chart.labelLight.isLit(films) && chart.labelLight.isLit(a), "the folder's name, and those of what's in it")
         #expect(!chart.labelLight.isLit(music), "a name elsewhere steps back")
         chart.pointerMoved(to: try middle(chart, of: a))
-        #expect(chart.labelLight.isLit(films), "the way out to what's pointed at stays readable")
+        #expect(chart.labelLight.isLit(a))
+        #expect(!chart.labelLight.isLit(films), "the folder it's in steps back: its name isn't the name of what's pointed at")
+        #expect(chart.labelLight.state(of: films) == .steppedBack)
     }
 
     @Test("The centre is read again after how names are written changes")

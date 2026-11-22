@@ -262,7 +262,7 @@ enum ScriptRunner {
         "button": .plan,
         "speed": .measuring, "meter": .measuring, "pacing": .measuring, "touch": .measuring, "sweep": .measuring,
         "bench": .measuring, "memory": .measuring, "footprint": .measuring, "gpu": .measuring, "headroom": .measuring,
-        "frames": .measuring, "layers": .measuring, "names": .measuring, "leaks": .measuring, "format": .measuring,
+        "frames": .measuring, "layers": .measuring, "names": .measuring, "middle": .measuring, "leaks": .measuring, "format": .measuring,
         "panel": .window, "scrolls": .window, "voiceover": .window, "size": .window, "jiggle": .window, "collide": .window,
         "timescale": .window, "shotwindow": .window, "shot": .window, "drawn": .window, "film": .window, "mouse": .window, "click": .window,
         "activate": .window, "float": .window, "hide": .window, "unhide": .window, "minimize": .window, "restore": .window,
@@ -1352,6 +1352,9 @@ enum ScriptRunner {
             if result == KERN_SUCCESS {
                 print(String(format: "memory %@: %.0f MB now, %.0f MB at most", argument, Double(info.phys_footprint) / 1e6, Double(info.ledger_phys_footprint_peak) / 1e6))
             }
+        case "middle":
+            // What the middle of the ring says now, and what's under the pointer.
+            print("middle \(argument): says \(model.hoverShown?.title ?? "nothing"), pointer on \(model.hover?.title ?? "nothing")")
         case "names":
             // names off, names on: the names around the ring hidden or shown, to tell what they cost.
             model.chart.showsLabels = argument != "off"
@@ -1577,7 +1580,7 @@ enum ScriptRunner {
             }
             if command == "mouse" {
                 if let e = event(.mouseMoved) { view.mouseMoved(with: e) }
-                print("mouse \(argument) hover: \(model.hover?.title ?? "nothing")")
+                print("mouse \(argument) hover: \(model.hover?.title ?? "nothing"), the middle says: \(model.hoverShown?.title ?? "nothing")")
             } else if let down = event(.leftMouseDown), let up = event(.leftMouseUp) {
                 view.mouseDown(with: down)
                 view.mouseUp(with: up)
