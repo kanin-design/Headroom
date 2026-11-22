@@ -188,12 +188,14 @@ public struct LabelArea: Sendable {
 /// these find where the names fit.
 /// The fonts names inside pieces are drawn in: a name above, its size below, and both larger on free space.
 enum LabelFont: Int {
-    case title, value, largeTitle, largeValue
+    case title, value, largeTitle, largeValue, arcTitle, arcValue
 
     // Fonts don't change once made, so any thread may measure with them.
     nonisolated(unsafe) private static let made: [NSFont] = [
         .systemFont(ofSize: 12.5, weight: .semibold), .monospacedDigitSystemFont(ofSize: 11, weight: .medium),
         .systemFont(ofSize: 14, weight: .semibold), .monospacedDigitSystemFont(ofSize: 13, weight: .medium),
+        // Names along an arc are a step smaller: they're further out, on thinner pieces, and there are more of them.
+        .systemFont(ofSize: 11, weight: .semibold), .monospacedDigitSystemFont(ofSize: 9.5, weight: .medium),
     ]
     var font: NSFont { Self.made[rawValue] }
 }
@@ -215,15 +217,16 @@ struct ArcSetting {
     }
 
     let lines: [Line]
-    /// Reads anticlockwise, top inwards: in the lower half of the ring.
+    /// Reads anticlockwise, top inwards: in the bottom third of the ring.
     let turned: Bool
 
     /// How high capitals stand in the name's font and in its size's, and how far apart two lines are.
-    static let titleCap: CGFloat = 8.9, valueCap: CGFloat = 7.8, pitch: CGFloat = 14.5
+    static let titleCap = LabelFont.arcTitle.font.capHeight, valueCap = LabelFont.arcValue.font.capHeight
+    static let pitch: CGFloat = 12.5
     /// The room between a name and its size on one line.
-    static let gap: CGFloat = 7
+    static let gap: CGFloat = 6
     /// The least band a line fits in, and two lines.
-    static let oneLine: CGFloat = 17, twoLines: CGFloat = 31
+    static let oneLine: CGFloat = 15, twoLines: CGFloat = 27
     /// Kept clear at each end of the arc.
     static let pad: CGFloat = 7
     /// A tighter circle than this squeezes letters into each other.
@@ -235,7 +238,7 @@ struct ArcSetting {
         let up: CGFloat = turned ? -1 : 1
         // Turned text has its tops on the inside of the curve, where they crowd; a little air evens it out.
         let tracking: CGFloat = turned ? 0.5 : 0.12
-        let name = GlyphLine.make(title, font: LabelFont.title.font), size = GlyphLine.make(value, font: LabelFont.value.font)
+        let name = GlyphLine.make(title, font: LabelFont.arcTitle.font), size = GlyphLine.make(value, font: LabelFont.arcValue.font)
         func line(_ text: GlyphLine, cap: CGFloat, raisedBy raise: CGFloat, along: CGFloat = 0, isValue: Bool) -> Line {
             // The line's own middle sits `raise` above the band's; its baseline half a capital below that.
             let radius = arc.radius + up * (raise - cap / 2)
@@ -378,6 +381,8 @@ public enum LabelPlacer {
         let sides = halves ? layout.pieces.lazy.filter { $0.ring == 0 }.count : 0
         let R = area.radius
         guard R > 0, !layout.pieces.isEmpty else { return [] }
+        // The first ring of things, past a band or a split: its names are set straight.
+        let firstRing = layout.levels.firstIndex { !$0.isThin && $0.part != .split } ?? 0
         var out: [SunburstLabel] = []
         for i in order.prefix(160) {
             let p = layout.pieces[i]
@@ -396,11 +401,10 @@ public enum LabelPlacer {
             let halfSpot: CGFloat? = halves && layout.focus == 0 && p.ring == 0 ? sideSpot(p, sides: sides) : nil
             let dark = !isFree && !isHidden && isBright(p.color)
             let straight = halfSpot ?? fit(w: w, h: h, piece: p, radius: R, outward: outward)
-            // Around the middle, and for free space, a name is set straight wherever it fits. Further out the pieces are
-            // bands, and a straight name fits one only pushed to where the band runs level: there it's set straight if
-            // it fits at the piece's own middle, and otherwise follows the arc, as its neighbours do.
-            let sitsStraight = straight.map { p.ring == 0 || isFree || halfSpot != nil || abs($0 - CGFloat(p.midAngle)) < 0.0001 } ?? false
-            if !sitsStraight, let arc = along(title: said.title, value: said.value, piece: p, area: area) {
+            // The first ring is named straight, as it always was. From the second ring out the pieces are bands, and a
+            // name runs clockwise along its band, as its neighbours' do; straight only where it doesn't fit that way.
+            let curves = Int(p.ring) > firstRing && !isFree && halfSpot == nil
+            if curves, let arc = along(title: said.title, value: said.value, piece: p, area: area) {
                 out.append(SunburstLabel(id: p.key, pieceIndex: i, node: p.node, title: said.title, value: said.value,
                                     position: point(area, arc.angle, arc.radius), anchor: .zero, elbow: .zero, place: .along,
                                     dark: dark, large: false, arc: arc))

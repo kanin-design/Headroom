@@ -59,9 +59,9 @@ struct GlyphLine: Sendable {
     private static let cache = OSAllocatedUnfairLock(initialState: [Key: GlyphLine]())
 }
 
-/// A line of text set along an arc of the ring: each glyph stands on a circle around the ring's middle, upright to it. In
-/// the upper half of the ring it reads clockwise with its top outwards; in the lower half it's turned to read the other way
-/// round, top inwards, so no name is ever upside down.
+/// A line of text set along an arc of the ring: each glyph stands on a circle around the ring's middle, upright to it. It
+/// reads clockwise with its top outwards, across the top and down both sides, so names next to each other read the same
+/// way. Only in the bottom third, where that would be upside down, it's turned to read the other way round, top inwards.
 ///
 /// It's a shape, so it's as sharp as the ring at any size, and glides with its piece while sizes change.
 struct ArcText: Shape {
@@ -72,7 +72,7 @@ struct ArcText: Shape {
     var radius: CGFloat
     /// Where the line's middle is: clockwise from 12 o'clock, in radians.
     var angle: CGFloat
-    /// Reads anticlockwise, top inwards: for the lower half.
+    /// Reads anticlockwise, top inwards: for the bottom third.
     let turned: Bool
     /// Extra room between glyphs, in points: text turned top inwards is squeezed at the top, and reads better let out a
     /// little.
@@ -91,8 +91,13 @@ struct ArcText: Shape {
         Path(Self.path(line, center: center, radius: radius, angle: angle, turned: turned, tracking: tracking))
     }
 
-    /// Whether a name whose middle is at this angle is turned: in the lower half.
-    static func isTurned(at angle: CGFloat) -> Bool { cos(angle) < 0 }
+    /// Whether a name whose middle is at this angle is turned: in the bottom third, between 4 and 8 o'clock. Clockwise
+    /// text there would be more than a third of the way to upside down; turned, it never tilts more than 60 degrees.
+    static func isTurned(at angle: CGFloat) -> Bool {
+        var a = angle.truncatingRemainder(dividingBy: 2 * .pi)
+        if a < 0 { a += 2 * .pi }
+        return abs(a - .pi) < .pi / 3
+    }
 
     /// How long the line is along its arc, with its tracking.
     static func length(_ line: GlyphLine, tracking: CGFloat) -> CGFloat {

@@ -35,10 +35,14 @@ struct ArcTextTests {
         #expect(first.midX < 200, "the first letter is on the left")
     }
 
-    @Test("In the lower half it's turned: still left to right, top inwards, never upside down")
+    @Test("It reads clockwise across the top and down both sides; only the bottom third is turned, never upside down")
     func bottom() {
         #expect(!ArcText.isTurned(at: 0.3) && !ArcText.isTurned(at: 2 * .pi - 0.3))
-        #expect(ArcText.isTurned(at: .pi) && ArcText.isTurned(at: .pi * 0.75))
+        // Down the sides, past 3 and 9 o'clock, names still read clockwise, as their neighbours above them do.
+        #expect(!ArcText.isTurned(at: .pi / 2 + 0.3) && !ArcText.isTurned(at: 3 * .pi / 2 - 0.3))
+        #expect(!ArcText.isTurned(at: .pi * 0.66) && !ArcText.isTurned(at: .pi * 1.34))
+        #expect(ArcText.isTurned(at: .pi) && ArcText.isTurned(at: .pi * 0.75) && ArcText.isTurned(at: .pi * 1.25))
+        #expect(ArcText.isTurned(at: -.pi) && !ArcText.isTurned(at: 2 * .pi + 0.3), "any turn of the circle")
         let line = GlyphLine.make("Hxx", font: font)
         let center = CGPoint(x: 200, y: 200)
         let box = ArcText.path(line, center: center, radius: 100, angle: .pi, turned: true).boundingBoxOfPath
@@ -55,7 +59,7 @@ struct ArcTextTests {
         #expect(leftTop < rightTop - 1, "the capital H is on the left")
     }
 
-    @Test("Stacked, the name is above its size: outside it in the upper half, inside it in the lower")
+    @Test("Stacked, the name is above its size: outside it where it reads clockwise, inside it where it's turned")
     func stacked() {
         func setting(at angle: CGFloat) -> ArcSetting {
             ArcSetting(title: "Films", value: "12 GB", arc: .init(center: .zero, radius: 200, angle: angle, lines: .stacked))
@@ -128,6 +132,28 @@ struct ArcTextTests {
         if angle < 0 { angle += 2 * .pi }
         #expect(layout.hit(angle: Float(angle), radius: Float(hypot(dx, dy) / 300)) == at)
         #expect(labels.contains { $0.place == .inside }, "and what fits set straight still is")
+        #expect(labels.filter { layout.pieces[$0.pieceIndex].ring == 0 }.allSatisfy { $0.place == .inside },
+                "the first ring is always set straight")
+    }
+
+    @Test("Past a band, the first ring of things is the one set straight")
+    func pastABand() throws {
+        // The band holds the two folders; what's in them is the first ring of things.
+        var tree = TestTree([("Media/Films/a.mov", 350 * mb), ("Media/Films/b.mov", 250 * mb), ("Media/c.mov", 300 * mb),
+                             ("Other/d.mov", 100 * mb)])
+        tree.hasBand = true
+        let layout = RingLayout.build(tree: tree, focus: 0, parts: tree.parts, colorer: { _ in .zero })
+        #expect(layout.levels.first?.isThin == true)
+        let area = LabelArea(center: CGPoint(x: 500, y: 400), radius: 300, width: 1000, height: 800, bottom: 776)
+        var named = LabelPlacer.Placed()
+        let labels = LabelPlacer.inside(layout: layout, order: LabelPlacer.order(layout), area: area, named: &named) { p in
+            p.isSmaller ? nil : (tree.nodes[Int(p.node)].name, "1 GB")
+        }
+        #expect(!labels.contains { layout.pieces[$0.pieceIndex].ring == 0 }, "nothing is named on the band")
+        let first = labels.filter { layout.pieces[$0.pieceIndex].ring == 1 }
+        #expect(first.count >= 2 && first.allSatisfy { $0.place == .inside })
+        let a = try #require(labels.first { $0.node == tree.node("Media/Films/a.mov") })
+        #expect(layout.pieces[a.pieceIndex].ring == 2 && a.place == .along)
     }
 }
 
