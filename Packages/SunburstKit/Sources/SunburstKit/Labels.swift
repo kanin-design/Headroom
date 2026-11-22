@@ -54,6 +54,50 @@ public struct SunburstLabel: Identifiable, Equatable, Sendable {
     public var isAtSide: Bool { place == .left || place == .right }
 }
 
+/// Where a ring is in its view: its middle and its radius, in the view's points.
+public struct RingPlacement: Sendable, Equatable {
+    public var center: CGPoint
+    public var radius: CGFloat
+
+    public init(center: CGPoint = .zero, radius: CGFloat = 0) {
+        self.center = center
+        self.radius = radius
+    }
+}
+
+extension SunburstLabel {
+    /// The same name, moved with its ring from where it was placed for to where the ring is now: so names stay on the ring
+    /// while it moves and grows or shrinks, as when a window is resized, until they're placed again for where it rests.
+    /// What's on or beside a piece moves and scales with it; a name at the side keeps its size and its room from the next,
+    /// and only follows the ring.
+    public func following(from old: RingPlacement, to new: RingPlacement) -> SunburstLabel {
+        guard old != new, old.radius > 0, new.radius > 0 else { return self }
+        let scale = new.radius / old.radius
+        func moved(_ p: CGPoint) -> CGPoint {
+            CGPoint(x: new.center.x + (p.x - old.center.x) * scale, y: new.center.y + (p.y - old.center.y) * scale)
+        }
+        var out = self
+        if isAtSide {
+            // The column stays the same distance out from the ring's edge; the names keep their places in it.
+            let side: CGFloat = place == .right ? 1 : -1
+            let gap = abs(position.x - old.center.x) - old.radius
+            let lift = new.center.y - old.center.y
+            out.position = CGPoint(x: new.center.x + side * (new.radius + gap), y: position.y + lift)
+            out.anchor = moved(anchor)
+            let elbowGap = abs(elbow.x - old.center.x) - old.radius
+            out.elbow = CGPoint(x: new.center.x + side * (new.radius + elbowGap), y: out.position.y)
+        } else {
+            out.position = moved(position)
+            if var arc {
+                arc.center = moved(arc.center)
+                arc.radius *= scale
+                out.arc = arc
+            }
+        }
+        return out
+    }
+}
+
 /// Whether the pointer is on anything on the ring, which named piece it's on, if any, and which names are lit with it.
 public struct LabelLight: Equatable, Sendable {
     /// Whether the pointer is on the ring at all: then the names of what isn't lit step back.
@@ -637,6 +681,8 @@ public struct SunburstLabels<Outer: ViewModifier>: View {
     let onLeave: (Int) -> Void
     let onOpen: (_ piece: Int, _ clicks: Int) -> Void
     let outer: (SunburstLabel) -> Outer
+    /// Where the names were placed for, and where the ring is now: they follow it.
+    private var follow: (from: RingPlacement, to: RingPlacement)?
 
     public init(labels: [SunburstLabel], light: LabelLight, visible: Bool, width: CGFloat, onEnter: @escaping (Int) -> Void,
                 onLeave: @escaping (Int) -> Void, onOpen: @escaping (_ piece: Int, _ clicks: Int) -> Void,
@@ -666,10 +712,20 @@ public struct SunburstLabels<Outer: ViewModifier>: View {
         self.outer = outer
     }
 
+    /// The names, placed for a ring at `placedFor`, drawn on the ring where it is now (`ring`): while the ring moves, as when
+    /// a window is resized, they move with it. Give it the ring as it's given to `RingPlace`, and in an animation they move
+    /// as the ring does, frame for frame.
+    public func following(_ ring: RingPlacement, placedFor: RingPlacement) -> Self {
+        var copy = self
+        copy.follow = (placedFor, ring)
+        return copy
+    }
+
     /// Quicker than the glide of the names that stay, so a name on its way out is soon gone.
     private static var comeAndGo: AnyTransition { AnyTransition.opacity.animation(.easeOut(duration: 0.18)) }
 
     public var body: some View {
+        let labels = follow.map { f in self.labels.map { $0.following(from: f.from, to: f.to) } } ?? self.labels
         ZStack(alignment: .topLeading) {
             ForEach(labels.filter(\.isAtSide)) { label in
                 LeaderMark(label: label, light: light)

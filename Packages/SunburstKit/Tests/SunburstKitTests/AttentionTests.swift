@@ -275,3 +275,48 @@ struct PaceTests {
 private final class Flag: @unchecked Sendable {
     var isSet = false
 }
+
+/// Names stay on the ring while it moves, as when a window is resized.
+@Suite("Names follow the ring")
+@MainActor
+struct FollowTests {
+    private let mb: UInt64 = 1_000_000
+
+    @Test("A name on a piece moves and scales with the ring; one at the side keeps its room from the edge")
+    func following() {
+        let old = RingPlacement(center: CGPoint(x: 400, y: 300), radius: 200), new = RingPlacement(center: CGPoint(x: 300, y: 250), radius: 100)
+        let inside = SunburstLabel(id: 1, pieceIndex: 0, node: 1, title: "a", value: "1 GB", position: CGPoint(x: 400, y: 200),
+                                   anchor: .zero, elbow: .zero, place: .inside, dark: false, large: false)
+        #expect(inside.following(from: old, to: new).position == CGPoint(x: 300, y: 200), "halfway out, at 12 o'clock, either way")
+        var arc = inside
+        arc.place = .along
+        arc.arc = .init(center: old.center, radius: 150, angle: 0.5, lines: .stacked)
+        let movedArc = arc.following(from: old, to: new).arc
+        #expect(movedArc?.center == new.center && movedArc?.radius == 75 && movedArc?.angle == 0.5)
+        let side = SunburstLabel(id: 2, pieceIndex: 0, node: 2, title: "b", value: "2 GB", position: CGPoint(x: 634, y: 120),
+                                 anchor: CGPoint(x: 541, y: 159), elbow: CGPoint(x: 580, y: 120), place: .right, dark: false, large: false)
+        let movedSide = side.following(from: old, to: new)
+        #expect(movedSide.position == CGPoint(x: 434, y: 70), "34 points out from the edge, as before, and up with the ring")
+        #expect(movedSide.elbow == CGPoint(x: 380, y: 70))
+        #expect(abs(movedSide.anchor.x - 370.5) < 0.001 && abs(movedSide.anchor.y - 179.5) < 0.001, "the line still starts on its piece")
+        #expect(side.following(from: old, to: old) == side)
+    }
+
+    @Test("While the ring moves the names stay, following it, and once it rests they're placed again for where it is")
+    func restsThenPlaces() async throws {
+        let tree = TestTree([("Films/a.mov", 400 * mb), ("Films/b.mov", 200 * mb), ("Music/c.mp3", 150 * mb), ("other", 100 * mb)])
+        let chart = SunburstChart(tree: tree, name: { tree.nodes[Int($0)].name }, engine: SunburstEngine(reducesMotion: { true }))
+        chart.place(center: CGPoint(x: 400, y: 300), radius: 250, size: CGSize(width: 800, height: 600))
+        // The first picture unfurls, and the names come once it has.
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(chart.labelsVisible && !chart.labels.isEmpty)
+        let before = chart.labels
+        #expect(chart.labelsPlacedFor == RingPlacement(center: CGPoint(x: 400, y: 300), radius: 250))
+        chart.place(center: CGPoint(x: 350, y: 280), radius: 200, size: CGSize(width: 700, height: 560))
+        #expect(chart.labelsVisible, "the names don't go while the ring moves")
+        #expect(chart.labels == before && chart.labelsPlacedFor.radius == 250, "they're drawn following it, as placed for where it was")
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(chart.labelsPlacedFor == RingPlacement(center: CGPoint(x: 350, y: 280), radius: 200), "and placed again once it rests")
+        #expect(chart.labelsVisible)
+    }
+}

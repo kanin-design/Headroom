@@ -81,7 +81,8 @@ extension SunburstChart {
     }
 
     /// Where the ring is to rest in its view, in the view's coordinates, and the view's size: on every change, so the names
-    /// follow. While it moves, as when the window is resized, the names wait until it rests. The ring itself is drawn where
+    /// follow. While it moves, as when the window is resized, the names move with it, and once it rests they're placed again
+    /// for where it is. The ring itself is drawn where
     /// its engine is told on each frame (`SunburstEngine.setPlace(center:radius:)`, as `RingPlace` does), and that's where
     /// the pointer finds its pieces.
     public func place(center: CGPoint, radius: CGFloat, size: CGSize) {
@@ -90,7 +91,7 @@ extension SunburstChart {
         let moved = far(place.center.x, center.x) || far(place.center.y, center.y) || far(place.radius, radius)
             || far(place.size.width, size.width) || far(place.size.height, size.height)
         place = (center, radius, size)
-        if first { placeLabels() } else if moved { placeLabels(after: 0.12) }
+        if first { placeLabels() } else if moved { relabelWhenRested() }
     }
 
     /// A click on a name: it opens what it names.

@@ -170,6 +170,8 @@ public final class SunburstChart<Tree: SunburstTree> {
     }
     /// Names wait while the pieces fly to their places after a zoom or a first picture, then fade in.
     public internal(set) var labelsVisible = true
+    /// Where the ring was when the names were placed: they follow it from there as it moves (`SunburstChartLabels`).
+    @ObservationIgnored public internal(set) var labelsPlacedFor = RingPlacement()
     /// Which names light up with what's pointed at.
     public internal(set) var labelLight = LabelLight() {
         didSet { labelLights.show(labelLight) }

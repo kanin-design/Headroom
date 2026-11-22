@@ -44,7 +44,7 @@ public struct Sunburst<Tree: SunburstTree, Centre: View>: View {
             ZStack(alignment: .topLeading) {
                 SunburstCanvas(chart: chart)
                 RingPlace(center: ring.center, radius: ring.radius, size: size, engine: chart.engine, view: { [chart] in chart.view })
-                SunburstChartLabels(chart, width: size.width)
+                SunburstChartLabels(chart, width: size.width, ring: RingPlacement(center: ring.center, radius: ring.radius))
                 CentreSlot(chart: chart, diameter: ring.radius * CGFloat(RingLayout.hole) * 2 * 0.86, centre: centre)
                     .position(ring.center)
                     .allowsHitTesting(false)

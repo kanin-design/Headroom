@@ -14,7 +14,7 @@ struct RootView: View {
                     .frame(width: geometry.size.width, height: geometry.size.height)
                 RingPlace(center: ring.center, radius: ring.radius, size: geometry.size, engine: model.engine, view: { [weak model] in model?.mapView })
 
-                LabelsLayer(model: model)
+                LabelsLayer(model: model, ring: ring)
                     .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
 
                 CenterIsland(model: model)

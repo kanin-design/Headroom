@@ -71,9 +71,22 @@ extension SunburstChart {
         }
     }
 
+    /// The ring moved, as when the window is resized. The names follow it as it goes (`SunburstChartLabels`), and once it
+    /// has rested a moment they're placed again for where it is, gliding there.
+    func relabelWhenRested() {
+        labelTask?.cancel()
+        guard showsLabels else { return }
+        labelTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(0.15))
+            guard let self, !Task.isCancelled, self.showsLabels else { return }
+            withAnimation(.smooth(duration: 0.25)) { self.placeLabels() }
+        }
+    }
+
     /// Names for the picture as it is now, at once.
     func placeLabels() {
         let layout = engine.layout
+        labelsPlacedFor = RingPlacement(center: place.center, radius: place.radius)
         guard place.radius > 0, !layout.pieces.isEmpty else {
             labels = []
             return
@@ -104,28 +117,35 @@ extension SunburstChart {
 
 /// A chart's names around its ring, wired to it: pointing at one lights its piece, and a click opens it. `Sunburst` shows one;
 /// a view of the app's own shows it over the ring. `outer` modifies each name at the side, such as with a menu of its own.
+///
+/// `ring` is where the ring is, as given to `RingPlace`: the names follow it while it moves, as when the window is resized,
+/// and are placed again for where it rests. Without it, they stay where they were placed until then.
 public struct SunburstChartLabels<Tree: SunburstTree, Outer: ViewModifier>: View {
     let chart: SunburstChart<Tree>
     let width: CGFloat
+    let ring: RingPlacement?
     let outer: (SunburstLabel) -> Outer
 
-    public init(_ chart: SunburstChart<Tree>, width: CGFloat, outer: @escaping (SunburstLabel) -> Outer) {
+    public init(_ chart: SunburstChart<Tree>, width: CGFloat, ring: RingPlacement? = nil, outer: @escaping (SunburstLabel) -> Outer) {
         self.chart = chart
         self.width = width
+        self.ring = ring
         self.outer = outer
     }
 
     public var body: some View {
+        let placedFor = chart.labelsPlacedFor
         SunburstLabels(labels: chart.labels, lights: chart.labelLights, visible: chart.labelsVisible, width: width,
                        onEnter: { [chart] in chart.pointerOnLabel(piece: $0) }, onLeave: { [chart] in chart.pointerLeftLabel(piece: $0) },
                        onOpen: { [chart] piece, clicks in chart.labelClicked(piece: piece, count: clicks) },
                        outer: outer)
+            .following(ring ?? placedFor, placedFor: placedFor)
             .animation(.easeOut(duration: chart.labelsVisible ? 0.28 : 0.1), value: chart.labelsVisible)
     }
 }
 
 public extension SunburstChartLabels where Outer == EmptyModifier {
-    init(_ chart: SunburstChart<Tree>, width: CGFloat) {
-        self.init(chart, width: width) { _ in EmptyModifier() }
+    init(_ chart: SunburstChart<Tree>, width: CGFloat, ring: RingPlacement? = nil) {
+        self.init(chart, width: width, ring: ring) { _ in EmptyModifier() }
     }
 }

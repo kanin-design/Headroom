@@ -121,9 +121,13 @@ struct HeadroomNames: SunburstNamer {
 /// The names around the ring, from the chart, each at the side with the menu of what it names.
 struct LabelsLayer: View {
     let model: AppModel
+    /// Where the ring is, as the ring itself is told: the names follow it while it moves.
+    let ring: RingGeometry
 
     var body: some View {
-        SunburstChartLabels(model.chart, width: model.ring.mapWidth) { NamedLabel(model: model, node: $0.node) }
+        SunburstChartLabels(model.chart, width: ring.mapWidth, ring: RingPlacement(center: ring.center, radius: ring.radius)) {
+            NamedLabel(model: model, node: $0.node)
+        }
     }
 }
 
