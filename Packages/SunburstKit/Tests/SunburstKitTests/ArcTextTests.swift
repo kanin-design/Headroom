@@ -130,3 +130,79 @@ struct ArcTextTests {
         #expect(labels.contains { $0.place == .inside }, "and what fits set straight still is")
     }
 }
+
+/// Names out at the sides, when the things they name are crowded together.
+@Suite("Names at the sides")
+@MainActor
+struct SideNameTests {
+    private let mb: UInt64 = 1_000_000
+
+    /// Half the ring is one folder whose six small things end at six o'clock, on the right; the other half is one file.
+    private func crowded() -> (RingLayout, TestTree, [LabelPlacer.Pick]) {
+        var files: [(String, UInt64)] = [("A/big.mov", 300 * mb), ("B.mov", 500 * mb)]
+        for i in 1...6 { files.append(("A/small\(i).mov", UInt64(40 - i) * mb)) }
+        let tree = TestTree(files)
+        let layout = RingLayout.build(tree: tree, focus: 0, parts: tree.parts, colorer: { _ in .zero })
+        let picks = (1...6).map { i -> LabelPlacer.Pick in
+            let at = layout.piece(of: tree.node("A/small\(i).mov"))!
+            return LabelPlacer.Pick(index: at, title: "small\(i)", value: "1 MB", score: Double(40 - i))
+        }
+        return (layout, tree, picks)
+    }
+
+    private let area = LabelArea(center: CGPoint(x: 500, y: 400), radius: 250, width: 1000, height: 800, bottom: 776)
+
+    @Test("Things crowded near six o'clock on one side are named on both")
+    func shared() {
+        let (layout, _, picks) = crowded()
+        #expect(picks.allSatisfy { layout.pieces[$0.index].midAngle < .pi }, "all on the right, to begin with")
+        let labels = LabelPlacer.sides(picks, layout: layout, area: area, eachCounts: true)
+        let right = labels.filter { $0.place == .right }, left = labels.filter { $0.place == .left }
+        #expect(!left.isEmpty && !right.isEmpty)
+        #expect(abs(left.count - right.count) <= 1)
+        // What crossed over is what's nearest six o'clock.
+        let crossed = left.map { layout.pieces[$0.pieceIndex].midAngle }, stayed = right.map { layout.pieces[$0.pieceIndex].midAngle }
+        #expect(crossed.min()! > stayed.max()!)
+    }
+
+    @Test("No name is far from its piece, and no line crosses another")
+    func near() {
+        let (layout, _, picks) = crowded()
+        let labels = LabelPlacer.sides(picks, layout: layout, area: area, eachCounts: true)
+        for side in [SunburstLabel.Place.left, .right] {
+            let names = labels.filter { $0.place == side }.sorted { $0.position.y < $1.position.y }
+            for (a, b) in zip(names, names.dropFirst()) {
+                #expect(b.position.y - a.position.y >= 34.9, "a name has its own room")
+                // Down the right side angles grow; down the left, past six o'clock, they shrink.
+                let first = layout.pieces[a.pieceIndex].midAngle, second = layout.pieces[b.pieceIndex].midAngle
+                #expect(side == .right ? first < second : first > second)
+            }
+            for name in names {
+                let mid = CGFloat(layout.pieces[name.pieceIndex].midAngle)
+                let level = min(max(400 - cos(mid) * (250 + 26), 24), 776)
+                #expect(abs(name.position.y - level) <= 35 * 2.5 + 0.01)
+            }
+        }
+    }
+
+    @Test("Names pushed far from their pieces go, least important first")
+    func farOnesGo() {
+        // Twenty things in the last sixth of the right side: far more than fit near them.
+        var files: [(String, UInt64)] = [("A/big.mov", 300 * mb), ("B.mov", 500 * mb)]
+        for i in 1...20 { files.append(("A/s\(i).mov", UInt64(30 - i) * mb / 3)) }
+        let tree = TestTree(files)
+        let layout = RingLayout.build(tree: tree, focus: 0, parts: tree.parts, colorer: { _ in .zero })
+        let picks = (1...20).compactMap { i -> LabelPlacer.Pick? in
+            layout.piece(of: tree.node("A/s\(i).mov")).map { LabelPlacer.Pick(index: $0, title: "s\(i)", value: "1 MB", score: Double(30 - i)) }
+        }
+        #expect(picks.count >= 10)
+        let labels = LabelPlacer.sides(picks, layout: layout, area: area, eachCounts: true)
+        #expect(!labels.isEmpty && labels.count < picks.count)
+        for name in labels {
+            let mid = CGFloat(layout.pieces[name.pieceIndex].midAngle)
+            let level = min(max(400 - cos(mid) * (250 + 26), 24), 776)
+            #expect(abs(name.position.y - level) <= 35 * 2.5 + 0.01)
+        }
+        #expect(labels.contains { $0.title == "s1" }, "the most important is still named")
+    }
+}

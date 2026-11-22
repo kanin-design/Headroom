@@ -505,14 +505,32 @@ public enum LabelPlacer {
         let spacing: CGFloat = 35
         let maxPerSide = min(max(Int((area.height - 150) / spacing), 3), 7)
         var rightSide: [Pick] = [], leftSide: [Pick] = []
+        // What's near six o'clock is as near one side as the other. It's named on its own side while there's room, and
+        // on the other when its own is full.
+        func isLow(_ c: Pick) -> Bool { abs(layout.pieces[c.index].midAngle - .pi) < 0.6 }
         for c in candidates {
-            let mid = layout.pieces[c.index].midAngle
-            if mid < .pi {
-                if rightSide.count < maxPerSide { rightSide.append(c) }
-            } else if leftSide.count < maxPerSide {
-                leftSide.append(c)
+            let onRight = layout.pieces[c.index].midAngle < .pi
+            if onRight ? rightSide.count < maxPerSide : leftSide.count < maxPerSide {
+                if onRight { rightSide.append(c) } else { leftSide.append(c) }
+            } else if isLow(c), onRight ? leftSide.count < maxPerSide : rightSide.count < maxPerSide {
+                if onRight { leftSide.append(c) } else { rightSide.append(c) }
             }
         }
+        // Many names for things crowded at the bottom of one side stack up far from what they name, their lines crossing
+        // the ring to reach it. The other side takes some, nearest six o'clock first, until the two are about even.
+        func evenOut(from full: inout [Pick], to other: inout [Pick], rightToLeft: Bool) {
+            while full.count >= other.count + 2 {
+                let low = full.indices.filter { at in
+                    let mid = layout.pieces[full[at].index].midAngle
+                    return isLow(full[at]) && (mid < .pi) == rightToLeft
+                }
+                guard let nearest = low.min(by: { abs(layout.pieces[full[$0].index].midAngle - .pi) < abs(layout.pieces[full[$1].index].midAngle - .pi) })
+                else { return }
+                other.append(full.remove(at: nearest))
+            }
+        }
+        evenOut(from: &rightSide, to: &leftSide, rightToLeft: true)
+        evenOut(from: &leftSide, to: &rightSide, rightToLeft: false)
 
         /// How far out this wedge reaches along its own centre line. The line to a name starts there, so it never
         /// crosses the ring.
@@ -537,20 +555,37 @@ public enum LabelPlacer {
             guard !side.isEmpty else { return }
             let reach = R + 26
             struct Slot { var c: Pick; var y: CGFloat; var mid: CGFloat }
-            var slots = side.map { c -> Slot in
-                let mid = CGFloat(layout.pieces[c.index].midAngle)
-                return Slot(c: c, y: cy - cos(mid) * reach, mid: mid)
-            }.sorted { $0.y < $1.y }
+            // Top to bottom in the order the pieces come down this side of the ring, and on past six o'clock for what was
+            // taken from the other side: then no line crosses another.
+            func down(_ mid: CGFloat) -> CGFloat { right ? mid : 2 * .pi - mid }
             let top = area.top, bottom = area.bottom
-            for i in slots.indices {
-                slots[i].y = max(slots[i].y, i == 0 ? top : slots[i - 1].y + spacing)
-            }
-            if let last = slots.last, last.y > bottom {
-                var limit = bottom
-                for i in slots.indices.reversed() {
-                    slots[i].y = min(slots[i].y, limit)
-                    limit = slots[i].y - spacing
+            /// Level with its piece, as near as the view allows.
+            func level(_ mid: CGFloat) -> CGFloat { min(max(cy - cos(mid) * reach, top), bottom) }
+            func stacked(_ picks: [Pick]) -> [Slot] {
+                var slots = picks.map { c -> Slot in
+                    let mid = CGFloat(layout.pieces[c.index].midAngle)
+                    return Slot(c: c, y: cy - cos(mid) * reach, mid: mid)
+                }.sorted { down($0.mid) < down($1.mid) }
+                for i in slots.indices {
+                    slots[i].y = max(slots[i].y, i == 0 ? top : slots[i - 1].y + spacing)
                 }
+                if let last = slots.last, last.y > bottom {
+                    var limit = bottom
+                    for i in slots.indices.reversed() {
+                        slots[i].y = min(slots[i].y, limit)
+                        limit = slots[i].y - spacing
+                    }
+                }
+                return slots
+            }
+            // Names for things crowded together push each other up or down the column, and one pushed far from its piece
+            // reaches it with a long line across the ring and across the others. Those go, least important first, until
+            // every name left is near what it names.
+            var picks = side
+            var slots = stacked(picks)
+            while let far = slots.filter({ abs($0.y - level($0.mid)) > spacing * 2.5 }).min(by: { $0.c.score < $1.c.score }) {
+                picks.removeAll { $0.index == far.c.index && $0.salt == far.c.salt }
+                slots = stacked(picks)
             }
             let columnX = right ? cx + R + 34 : cx - R - 34
             for slot in slots {
@@ -783,9 +818,10 @@ private struct OuterLabel: View {
         VStack(alignment: label.place == .left ? .trailing : .leading, spacing: 0) {
             Text(label.title)
                 .font(.system(size: 12, weight: .medium))
-                // Beside a panel there's less room: a long name gets a little smaller before it's cut short.
+                // Beside a panel there's less room: a long name gets a little smaller before it's cut short, in the middle
+                // as the Finder cuts one, so the end that tells two files apart (a year, a version, a kind) stays.
                 .minimumScaleFactor(0.8)
-                .truncationMode(.tail)
+                .truncationMode(.middle)
                 .opacity(isOn ? 1 : 0.88)
             Text(label.value)
                 .font(.system(size: 11, weight: .regular).monospacedDigit())
