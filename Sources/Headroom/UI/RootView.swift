@@ -142,10 +142,12 @@ private struct MainToolbar: ToolbarContent {
                 .disabled(!model.canGoForward)
                 .help("Forward")
         }
-        // Two pickers with space between: the view, and the mode.
+        // Two pickers with room between: the view, and the mode. One fixed spacer is the system's gap between groups, about 10
+        // points, and the two capsules nearly touch; two make it about 18, and they read as two.
         ToolbarItem(placement: .principal) {
             LensPicker(model: model, lenses: Lens.views, name: "View")
         }
+        ToolbarSpacer(.fixed, placement: .principal)
         ToolbarSpacer(.fixed, placement: .principal)
         ToolbarItem(placement: .principal) {
             LensPicker(model: model, lenses: Lens.actions, name: "Mode")
