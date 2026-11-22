@@ -147,7 +147,7 @@ final class AppModel {
     @ObservationIgnored var trail: [UInt32] = []
     /// How the ring is drawn: Map, Changes or Copies.
     var view: Lens = .map
-    /// What you're doing: Free Up or Backup. It decides the panel, what a click selects and the button at the bottom.
+    /// What you're doing: Free Up or Backup. It decides the panel, what Space selects and the button at the bottom.
     var mode: Lens = .freeUp
     var panelOpen = true { didSet { if oldValue != panelOpen { rememberWindow() } } }
     @ObservationIgnored var inspectorWidthTask: Task<Void, Never>?
@@ -1379,6 +1379,9 @@ final class AppModel {
         return (false, opens)
     }
 
+    /// A click on the ring opens what's there, whatever the mode: a folder zooms in, a file is shown in the inspector and a
+    /// double-click opens it. Selecting for Free Up or Backup is Space, the list's ticks or the card, never a click, so
+    /// the ring can always be browsed.
     func click(piece index: Int, count: Int = 1) {
         guard let tree, index < engine.layout.pieces.count else { return }
         let p = engine.layout.pieces[index]
@@ -1405,18 +1408,9 @@ final class AppModel {
             }
             return
         }
-        // In Backup a click on a big file selects it, and a double-click opens it. Folders open.
-        if mode == .backup, !n.has(NodeFlag.directory), !n.has(NodeFlag.synthetic), !p.isSmaller {
-            if count == 1 { toggleBackup(p.node) }
-            if count < 2 || tree.isGhost(p.node) { return }
-        }
-        // In Free Up a click means "this too", and a double-click opens it, as in the Finder.
-        if mode == .freeUp, !n.has(NodeFlag.free), !p.isSmaller {
-            if count == 1 || count == 2 { togglePiece(p.node) }
-            if count < 2 { return }
-        }
         open(piece: index)
-        if meaning.opensFile { open(NamedThing(p.node)) }
+        // A moved file is only a note here now: there's nothing to open.
+        if meaning.opensFile, !tree.isGhost(p.node) { open(NamedThing(p.node)) }
     }
 
     /// A name around the ring opens what it names, in every view. Selecting is for the ring itself, so that reading a name

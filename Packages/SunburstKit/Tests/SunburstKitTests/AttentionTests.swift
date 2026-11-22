@@ -267,8 +267,7 @@ struct PaceTests {
         try await Task.sleep(for: .milliseconds(160))
         #expect(chart.labelLight.onAnything, "back on a piece in time: they never did")
         chart.pointerMoved(to: nil)
-        try await Task.sleep(for: .milliseconds(200))
-        #expect(!chart.labelLight.onAnything, "and off for good, they come back")
+        #expect(await eventually { !chart.labelLight.onAnything }, "and off for good, they come back")
     }
 }
 
@@ -308,15 +307,26 @@ struct FollowTests {
         let chart = SunburstChart(tree: tree, name: { tree.nodes[Int($0)].name }, engine: SunburstEngine(reducesMotion: { true }))
         chart.place(center: CGPoint(x: 400, y: 300), radius: 250, size: CGSize(width: 800, height: 600))
         // The first picture unfurls, and the names come once it has.
-        try await Task.sleep(for: .milliseconds(500))
-        #expect(chart.labelsVisible && !chart.labels.isEmpty)
+        #expect(await eventually { chart.labelsVisible && !chart.labels.isEmpty })
         let before = chart.labels
         #expect(chart.labelsPlacedFor == RingPlacement(center: CGPoint(x: 400, y: 300), radius: 250))
         chart.place(center: CGPoint(x: 350, y: 280), radius: 200, size: CGSize(width: 700, height: 560))
         #expect(chart.labelsVisible, "the names don't go while the ring moves")
         #expect(chart.labels == before && chart.labelsPlacedFor.radius == 250, "they're drawn following it, as placed for where it was")
-        try await Task.sleep(for: .milliseconds(400))
-        #expect(chart.labelsPlacedFor == RingPlacement(center: CGPoint(x: 350, y: 280), radius: 200), "and placed again once it rests")
+        #expect(await eventually { chart.labelsPlacedFor == RingPlacement(center: CGPoint(x: 350, y: 280), radius: 200) },
+                "and placed again once it rests")
         #expect(chart.labelsVisible)
     }
+}
+
+/// Whether `done` comes true within `seconds`, asked every 20 ms. A wait for something the chart does a moment later: a fixed
+/// sleep is too short on a slow machine, or one whose main actor is busy with other tests, as CI's can be.
+@MainActor
+func eventually(within seconds: Double = 5, _ done: () -> Bool) async -> Bool {
+    let end = Date().addingTimeInterval(seconds)
+    while !done() {
+        if Date() > end { return false }
+        try? await Task.sleep(for: .milliseconds(20))
+    }
+    return true
 }

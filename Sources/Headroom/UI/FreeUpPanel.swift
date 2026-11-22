@@ -38,7 +38,7 @@ struct FreeUpPanel: View {
     private var emptyState: some View {
         // With nothing read, there's no knowing what could go.
         EmptyNote(title: !model.hasFullAccess ? "Needs Full Disk Access" : model.focus == 0 ? "No suggestions" : "No suggestions here",
-                  detail: model.hasFullAccess ? "Click a piece of the ring to select it." : nil)
+                  detail: model.hasFullAccess ? "Point at a piece of the ring and press Space to select it." : nil)
     }
 
     @ViewBuilder

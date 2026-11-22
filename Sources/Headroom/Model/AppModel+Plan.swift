@@ -571,8 +571,7 @@ extension AppModel {
             return
         }
         guard Safety.canTrash(path) else {
-            let isFolder = tree.nodes[Int(node)].firstChild != 0
-            showTip(isFolder ? "\(displayName(node)) is protected. Double-click to open it." : "\(displayName(node)) is protected.")
+            showTip("\(displayName(node)) is protected.")
             return
         }
         plan.add(PlanItem(id: PlanItem.id(pickedByHand: path), title: displayName(node), note: tree.friendlyPath(node), tierRaw: Tier.yourCall.rawValue, paths: [path], byHand: true,

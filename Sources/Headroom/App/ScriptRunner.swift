@@ -262,7 +262,7 @@ enum ScriptRunner {
         "button": .plan,
         "speed": .measuring, "meter": .measuring, "pacing": .measuring, "touch": .measuring, "sweep": .measuring,
         "bench": .measuring, "memory": .measuring, "footprint": .measuring, "gpu": .measuring, "headroom": .measuring,
-        "frames": .measuring, "layers": .measuring, "names": .measuring, "middle": .measuring, "stretches": .measuring, "leaks": .measuring, "format": .measuring,
+        "frames": .measuring, "layers": .measuring, "names": .measuring, "middle": .measuring, "stretches": .measuring, "state": .measuring, "pointon": .measuring, "clickon": .measuring, "clickplace": .measuring, "mapkey": .measuring, "menufor": .measuring, "leaks": .measuring, "format": .measuring,
         "panel": .window, "scrolls": .window, "voiceover": .window, "size": .window, "jiggle": .window, "collide": .window,
         "timescale": .window, "shotwindow": .window, "shot": .window, "drawn": .window, "film": .window, "mouse": .window, "click": .window,
         "activate": .window, "float": .window, "hide": .window, "unhide": .window, "minimize": .window, "restore": .window,
@@ -893,10 +893,13 @@ enum ScriptRunner {
             print("now in \(model.displayName(model.focus)), selected thing \(model.selected.map(model.displayName) ?? "none"), \(model.plan.count) selected")
         case "labelclick":
             // labelclick 2: what a click on that name does. `labelclick 2 2` is the second click of a double-click.
-            let numbers = argument.split(separator: " ").map(String.init)
-            guard let at = labelPoint(numbers.first ?? "", model) else { print("no such name: \(argument)"); return }
+            // `labelclick Containers` clicks the name that says that.
+            var words = argument.split(separator: " ").map(String.init)
+            let clicks = words.count > 1 ? Int(words.last!) : nil
+            if clicks != nil { words.removeLast() }
+            guard let at = labelPoint(words.joined(separator: " "), model) else { print("no such name: \(argument)"); return }
             print("clicking \"\(at.label.title)\", in \(model.displayName(model.focus)), \(model.plan.count) selected")
-            model.chart.labelClicked(piece: at.label.pieceIndex, count: numbers.count > 1 ? Int(numbers[1]) ?? 1 : 1)
+            model.chart.labelClicked(piece: at.label.pieceIndex, count: clicks ?? 1)
             try? await Task.sleep(for: .milliseconds(700))
             print("now in \(model.displayName(model.focus)), selected thing \(model.selected.map(model.displayName) ?? "none"), \(model.plan.count) selected")
         case "volume":
@@ -1352,6 +1355,94 @@ enum ScriptRunner {
             if result == KERN_SUCCESS {
                 print(String(format: "memory %@: %.0f MB now, %.0f MB at most", argument, Double(info.phys_footprint) / 1e6, Double(info.ledger_phys_footprint_peak) / 1e6))
             }
+        case "state":
+            // state label: one line saying what's on screen and selected, for checking what an action did.
+            let pair = model.pair.flatMap { $0.tree === model.tree ? $0 : nil }
+            let shown = pair.map { $0.realFolder == 0 ? "both disks" : "both disks at \($0.folderName)" } ?? model.realName(of: model.focus)
+            let side = pair.map { p in model.focus == 0 ? "" : model.focus == p.macSide ? " (Mac half)" : model.focus == p.driveSide ? " (drive half)" : "" } ?? ""
+            print("state \(argument) | \(model.mode.title) | \(model.view.title) | in \(shown)\(side) | inspector \(model.selected.map { model.realName(of: $0) } ?? "nothing") | free up \(model.plan.items.count) | backup \(model.backup.items.count) | card \(model.look.map { model.realName(of: $0.node) } ?? "closed") | tip \(model.tip ?? "none")")
+        case "pointon", "clickon":
+            // pointon path, clickon path [clicks]: the pointer on that thing's piece, and a click there, as the mouse makes them.
+            let words = argument.split(separator: " ").map(String.init)
+            let clicks = command == "clickon" && words.count > 1 ? Int(words.last!) : nil
+            let path = clicks == nil ? argument : words.dropLast().joined(separator: " ")
+            guard let w = mainWindow, let view = model.mapView, let node = resolve(path, model),
+                  let i = model.engine.layout.pieces.firstIndex(where: { $0.node == node }) else { print("\(command) \(path): not on the ring"); return }
+            let p = model.engine.layout.pieces[i]
+            let angle = Double(p.a0 + p.a1) / 2, radius = Double(p.r0 + p.r1) / 2 * model.ring.radius
+            let at = NSPoint(x: model.ring.center.x + sin(angle) * radius, y: w.frame.height - (model.ring.center.y - cos(angle) * radius))
+            func event(_ type: NSEvent.EventType, _ count: Int) -> NSEvent? {
+                NSEvent.mouseEvent(with: type, location: at, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                   windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: count, pressure: 1)
+            }
+            if let moved = event(.mouseMoved, 0) { view.mouseMoved(with: moved) }
+            try? await Task.sleep(for: .milliseconds(150))
+            if command == "clickon" {
+                for count in 1...max(clicks ?? 1, 1) {
+                    if let down = event(.leftMouseDown, count), let up = event(.leftMouseUp, count) {
+                        view.mouseDown(with: down)
+                        view.mouseUp(with: up)
+                    }
+                }
+                try? await Task.sleep(for: .milliseconds(900))
+            }
+        case "clickplace":
+            // clickplace middle | empty | smaller | free | machalf: a click on the middle of the ring, away from it, on the first
+            // "smaller items", on free space, or on the Mac's half.
+            guard let w = mainWindow, let view = model.mapView else { return }
+            let pieces = model.engine.layout.pieces
+            var point: CGPoint?
+            switch argument {
+            case "middle": point = model.ring.center
+            case "empty": point = CGPoint(x: 12, y: w.frame.height - 80)
+            default:
+                let found: Int?
+                switch argument {
+                case "smaller": found = pieces.firstIndex { $0.isSmaller && $0.ring > 0 }
+                case "free": found = model.tree.flatMap { tree in pieces.firstIndex { $0.node == tree.free } }
+                case "machalf": found = model.pair.flatMap { pair in pieces.firstIndex { $0.node == pair.macSide } }
+                default: found = nil
+                }
+                if let found {
+                    let p = pieces[found]
+                    let angle = Double(p.a0 + p.a1) / 2, radius = Double(p.r0 + p.r1) / 2 * model.ring.radius
+                    point = CGPoint(x: model.ring.center.x + sin(angle) * radius, y: model.ring.center.y - cos(angle) * radius)
+                    if argument == "smaller", let tree = model.tree { print("clickplace smaller: in \(tree.name(p.node))") }
+                }
+            }
+            guard let point else { print("clickplace \(argument): none"); return }
+            let at = NSPoint(x: point.x, y: w.frame.height - point.y)
+            for type in [NSEvent.EventType.mouseMoved, .leftMouseDown, .leftMouseUp] {
+                guard let e = NSEvent.mouseEvent(with: type, location: at, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                 windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) else { continue }
+                switch type {
+                case .mouseMoved: view.mouseMoved(with: e)
+                case .leftMouseDown: view.mouseDown(with: e)
+                default: view.mouseUp(with: e)
+                }
+            }
+            try? await Task.sleep(for: .milliseconds(900))
+        case "menufor":
+            // menufor path: the items of that thing's right-click menu on the ring, without showing it.
+            guard let node = resolve(argument, model), let thing = model.thing(onRing: node), let menu = model.menu(for: thing) else {
+                print("menufor \(argument): no menu"); return
+            }
+            print("menufor \(model.realName(of: node)): " + menu.items.map { $0.isSeparatorItem ? "|" : $0.title }.joined(separator: ", "))
+        case "mapkey":
+            // mapkey 49 [shift] [cmd]: a key pressed while the ring has the keyboard, given to the ring's view alone, so no window
+            // comes forward. 49 is Space, 53 Escape, 51 Delete.
+            let words = argument.split(separator: " ")
+            guard let w = mainWindow, let view = model.mapView, let first = words.first, let code = UInt16(first) else { return }
+            var flags: NSEvent.ModifierFlags = []
+            if words.contains("shift") { flags.insert(.shift) }
+            if words.contains("cmd") { flags.insert(.command) }
+            let text = code == 49 ? " " : ""
+            if let e = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
+                                        windowNumber: w.windowNumber, context: nil, characters: text, charactersIgnoringModifiers: text,
+                                        isARepeat: false, keyCode: code) {
+                view.keyDown(with: e)
+            }
+            try? await Task.sleep(for: .milliseconds(600))
         case "stretches":
             // stretches /some/folder: each piece the folder is drawn as, where it is in points, and what's first over it.
             guard let tree = model.tree, let node = resolve(argument, model) else { print("stretches \(argument): no such folder"); return }
@@ -1769,8 +1860,9 @@ enum ScriptRunner {
     @MainActor
     private static func labelPoint(_ argument: String, _ model: AppModel) -> (label: SunburstLabel, x: Double, y: Double)? {
         let names = (model.chart.labels ?? []).filter(\.isAtSide)
-        guard let at = Int(argument), names.indices.contains(at) else { return nil }
-        let label = names[at]
+        // A number counts the names beside the ring; anything else is a name's own text.
+        guard let label = Int(argument).flatMap({ names.indices.contains($0) ? names[$0] : nil }) ?? names.first(where: { $0.title == argument })
+        else { return nil }
         return (label, label.position.x + (label.place == .right ? 18 : -18), label.position.y)
     }
 

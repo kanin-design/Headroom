@@ -62,8 +62,8 @@ writes to them.
 ## What you can do
 
 The toolbar has two pickers. The view, **Map**, **Changes** or **Copies**, sets how the ring is drawn. The mode, **Free Up**
-or **Backup**, sets the inspector, what a click on the ring selects and the button at the bottom. Each mode keeps its own
-selection.
+or **Backup**, sets the inspector, what Space selects on the ring and the button at the bottom. Each mode keeps its own
+selection. A click on the ring always opens what's there.
 
 ### Map
 
@@ -76,12 +76,12 @@ click the middle to go back up.
 ![Free Up: the Trash selected and summed up at the top with the free space after, a short stack of boxes below it, and the files of the box being pointed at lit up on the ring](docs/free-up.jpg)
 
 Things you may want to delete, in boxes named for what they are, biggest first: Caches, Junk, Developer, AI models,
-Unused apps, iPhone backups, Old installers, Screenshots and more. A Mac only gets the boxes it has something for.
-Open a box to see what's in it, one row per app or thing. **Select recommended** ticks what's safe without a second
-thought: caches not in use, and junk. **Largest files**, at the end, lists the biggest files nothing else covers. Point
-at a box and its files light up on the ring. What's selected is summed up at the top: how much, what it frees, and the
-disk's free space after. Nothing happens until you click **Clean**. Then the top says what went to the Trash: **Delete
-permanently** frees the space, and **Undo** puts it all back.
+Unused apps, iPhone backups, Old installers, Screenshots and more. A Mac only gets the boxes it has something for. Open
+a box to see what's in it, one row per app or thing. **Select recommended** ticks what's safe without a second thought:
+caches not in use, and junk. **Largest files**, at the end, lists the biggest files nothing else covers. Point at a box
+and its files light up on the ring, and Space selects whatever is under the pointer there. What's selected is summed up
+at the top: how much, what it frees, and the disk's free space after. Nothing happens until you click **Clean**. Then
+the top says what went to the Trash: **Delete permanently** frees the space, and **Undo** puts it all back.
 
 ### Changes
 
@@ -134,11 +134,11 @@ open it in Terminal or move it to the Trash.
 ![Backup: a disk and its backup drive as the two halves of the ring, with four files selected and summed up at the top of the inspector, ready to move to the drive](docs/backup.jpg)
 
 Backup moves files of 10 MB and up to another drive and leaves a small note in place of each. Choose the drive at the
-bottom right, select files in the list or on the ring, and click **Move**. On the drive, each file goes in a folder named
-for the Mac, at its full path: `/Users/you/Downloads/F.mkv` from a Mac named Studio lands at
-`Backup from Studio/Users/you/Downloads/F.mkv`. Each file is copied and verified against its SHA-256 before the original
-goes to the Trash, so Undo puts it back until you empty it. The note, `name.hrmoved`, is plain text saying where the file
-went and its SHA-256. Nothing else goes on the drive: on a large exFAT drive every small file takes 128 KB.
+bottom right, select files in the list or with Space on the ring, and click **Move**. On the drive, each file goes in a
+folder named for the Mac, at its full path: `/Users/you/Downloads/F.mkv` from a Mac named Studio lands at `Backup from
+Studio/Users/you/Downloads/F.mkv`. Each file is copied and verified against its SHA-256 before the original goes to the
+Trash, so Undo puts it back until you empty it. The note, `name.hrmoved`, is plain text saying where the file went and
+its SHA-256. Nothing else goes on the drive: on a large exFAT drive every small file takes 128 KB.
 
 With a drive chosen, Backup shows both disks: the ring is split into two equal halves, the folder you're in on the Mac on
 the left and the same folder in the drive's backup folder on the right, free space left out. At the top of the disk it's
@@ -149,12 +149,13 @@ only on the drive, moved, or not for Backup (under 10 MB, or part of macOS or an
 one place is drawn in one stretch per place. Moved files are drawn as outlines where they were. The backup folder is read
 once whenever the drive is plugged in, so with it unplugged its half is what was last read there, dimmed.
 
-Select files on either half, or press Space on one. What's selected is summed up at the top: how much, what it frees on
-the Mac, where it goes and the room left there, and the files by folder. The button at the bottom does the main thing,
-Move or Copy to Mac, and the panel lists the rest that fits: Copy, Keep on Mac, Verify, Delete. Moving turns the summary
-into the move's progress, file by file. **Select** beside "Only on this Mac" picks everything the drive doesn't have.
-Delete reads both disks again first, and keeps the drive's copy if this Mac's isn't the same. From the Moved list you can
-move a file back, verify it or delete it from the drive. A file is on Free Up's list or Backup's, never both.
+Press Space on a file or folder on either half to select it, or tick it in the list. What's selected is summed up at the
+top: how much, what it frees on the Mac, where it goes and the room left there, and the files by folder. The button at
+the bottom does the main thing, Move or Copy to Mac, and the panel lists the rest that fits: Copy, Keep on Mac, Verify,
+Delete. Moving turns the summary into the move's progress, file by file. **Select** beside "Only on this Mac" picks
+everything the drive doesn't have. Delete reads both disks again first, and keeps the drive's copy if this Mac's isn't
+the same. From the Moved list you can move a file back, verify it or delete it from the drive. A file is on Free Up's
+list or Backup's, never both.
 
 ### Agents
 
