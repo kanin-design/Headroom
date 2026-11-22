@@ -11,10 +11,10 @@ struct DriveRow: View {
 
     var body: some View {
         ZStack {
-            if model.focus != 0 {
-                Breadcrumbs(model: model)
-                    .transition(.opacity)
-            }
+            // Where you are once you're inside a folder, and the way to what's pointed at while something is: in a view tree
+            // of its own, as it changes with the pointer. Never under the capsules at either side.
+            PathIsland(model: model)
+                .padding(.horizontal, 180)
             HStack(spacing: 0) {
                 SourceCapsule(model: model)
                 Spacer(minLength: 12)
@@ -49,7 +49,7 @@ private struct DriveCapsuleLabel: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Text(detail)
-                    .font(.system(size: 10.5).monospacedDigit())
+                    .font(.system(size: 11).monospacedDigit())
                     .foregroundStyle(.white.opacity(0.5))
                     .lineLimit(1)
             }
@@ -164,5 +164,33 @@ private struct DestinationCapsule: View {
             }
         }
         .disabled(why != nil || model.isCleaning)
+    }
+}
+
+/// The path bar in a view tree of its own, like the middle of the ring: it follows the pointer, and a change in the
+/// window's own tree has SwiftUI go over the whole window.
+private struct PathIsland: NSViewRepresentable {
+    let model: AppModel
+
+    func makeNSView(context: Context) -> NSView { Island(PathBar(model: model), passesThrough: false) }
+
+    func updateNSView(_ view: NSView, context: Context) {}
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSView, context: Context) -> CGSize? {
+        proposal.replacingUnspecifiedDimensions()
+    }
+}
+
+/// Shown once you're inside a folder, and on the whole disk while something is pointed at. It stays in place and fades,
+/// rather than being made again each time the pointer crosses a gap.
+private struct PathBar: View {
+    let model: AppModel
+
+    var body: some View {
+        let shown = model.focus != 0 || model.hoverShown != nil
+        Breadcrumbs(model: model)
+            .opacity(shown ? 1 : 0)
+            .allowsHitTesting(shown)
+            .animation(.easeOut(duration: 0.15), value: shown)
     }
 }

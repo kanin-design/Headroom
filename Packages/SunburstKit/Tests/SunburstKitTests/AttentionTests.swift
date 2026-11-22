@@ -317,16 +317,29 @@ struct FollowTests {
                 "and placed again once it rests")
         #expect(chart.labelsVisible)
     }
+
+    @Test("A ring that moves while a new picture flies in still gets its names, placed for where it ends up")
+    func movesWhileFlying() async throws {
+        let tree = TestTree([("Films/a.mov", 400 * mb), ("Films/b.mov", 200 * mb), ("Music/c.mp3", 150 * mb), ("other", 100 * mb)])
+        let chart = SunburstChart(tree: tree, name: { tree.nodes[Int($0)].name }, engine: SunburstEngine(reducesMotion: { true }))
+        // The first picture is flying in: its names wait for it. Meanwhile the window gets its size, then another.
+        #expect(!chart.labelsVisible)
+        chart.place(center: CGPoint(x: 400, y: 300), radius: 250, size: CGSize(width: 800, height: 600))
+        chart.place(center: CGPoint(x: 350, y: 280), radius: 200, size: CGSize(width: 700, height: 560))
+        #expect(await eventually { chart.labelsVisible && !chart.labels.isEmpty }, "the names come all the same")
+        #expect(await eventually { chart.labelsPlacedFor == RingPlacement(center: CGPoint(x: 350, y: 280), radius: 200) })
+    }
 }
 
 /// Whether `done` comes true within `seconds`, asked every 20 ms. A wait for something the chart does a moment later: a fixed
-/// sleep is too short on a slow machine, or one whose main actor is busy with other tests, as CI's can be.
+/// sleep is too short on a slow machine, or one whose main actor is busy with other tests, as CI's can be. It counts its
+/// tries rather than the clock: tests that draw hold the main actor for seconds on CI, and what the chart does next only
+/// gets its turn between tries.
 @MainActor
 func eventually(within seconds: Double = 5, _ done: () -> Bool) async -> Bool {
-    let end = Date().addingTimeInterval(seconds)
-    while !done() {
-        if Date() > end { return false }
+    for _ in 0..<Int(seconds * 50) {
+        if done() { return true }
         try? await Task.sleep(for: .milliseconds(20))
     }
-    return true
+    return done()
 }

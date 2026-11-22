@@ -35,7 +35,7 @@ struct RingColours {
     private var branches: BranchColours<DiskTree>
 
     @MainActor
-    init(tree: DiskTree, focus: UInt32, memory: ColourMemory) {
+    init(tree: DiskTree, focus: UInt32, memory: ColourMemory, palette: SunburstPalette = .spectrum) {
         let total = tree.totals[Int(focus)]
         let smallest = total / 4000
         branches = BranchColours(tree: tree, smallest: smallest)
@@ -61,15 +61,26 @@ struct RingColours {
         }
         // A folder that already has a colour keeps it. A new one takes the next free colour, unless that would nearly match
         // the piece before it. With nothing remembered yet, that gives the biggest thing the first colour, and so on down.
-        let key = focus == 0 ? tree.rootPath : (tree.path(focus) ?? tree.name(focus))
+        // Each palette keeps its own: a place in one palette's order means nothing in another's.
+        let place = focus == 0 ? tree.rootPath : (tree.path(focus) ?? tree.name(focus))
+        let key = palette == .spectrum ? place : place + "|" + palette.id
         var hues = HueMemory(memory.view(key))
-        var previous: Float?
+        var previous: Int?
+        // Branches too small to matter at this level are quiet, in a muted tone of what holds them, so the eye goes to the
+        // big ones and the ring isn't a rainbow of slivers. They take no colour from the palette's order.
+        let quietBelow = Double(total) * Self.quietShare
         for item in items where tree.totals[Int(item)] > smallest {
+            if Double(tree.totals[Int(item)]) < quietBelow {
+                let held = branches.lab(tree.nodes[Int(item)].parent)
+                let hue = held.chroma > 0.01 ? atan2(held.b, held.a) * 180 / .pi : 255
+                branches.paint(item, colour: Lab(lch: 0.46, 0.032, hue))
+                continue
+            }
             let n = tree.nodes[Int(item)]
             let name = String(decoding: UnsafeBufferPointer(start: tree.names + Int(n.nameOffset), count: Int(n.nameLength)), as: UTF8.self)
-            let hue = hues.hue(for: name, after: previous)
-            previous = hue
-            branches.paint(item, hue: hue)
+            let index = hues.index(for: name, after: previous, in: palette)
+            previous = index
+            branches.paint(item, palette: palette, index: index)
         }
         if hues.changed { memory.set(key, hues.indices) }
         if !tree.isPartial { memory.saveIfNeeded() }
@@ -77,4 +88,7 @@ struct RingColours {
 
     /// The colour of a piece. Whatever is too small to have its own takes its folder's.
     func lab(_ node: UInt32) -> Lab { branches.lab(node) }
+
+    /// A branch under this share of what's in the middle is drawn quiet rather than in a colour of its own.
+    static let quietShare = 0.015
 }

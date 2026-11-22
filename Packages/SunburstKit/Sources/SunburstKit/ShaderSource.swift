@@ -56,12 +56,20 @@ struct SegmentOut {
     float tintShare [[flat]];       // how much of the tint it takes
     float marked [[flat]];
     float shared [[flat]];
+    float pointed [[flat]];         // how far it's the piece pointed at, 0...1, which draws its border
 };
+
+// A line just inside a piece's edge, `width` pixels wide, from its distance to the edge (negative inside): 1 on the line.
+static inline float innerLine(float d, float width) {
+    return saturate(width * 0.5 + 0.5 - abs(d + width * 0.5));
+}
 
 static float2 onCircle(float a, float r) { return float2(sin(a), -cos(a)) * r; }
 
 // How far, in points, a folder that goes on past the outermost ring fades out beyond its edge.
 constant float tailPoints = 10.0;
+// How far out, in points, the tick that marks a thin piece pointed at reaches past its edge.
+constant float tickReach = 9.0;
 
 vertex SegmentOut segment_vertex(uint vid [[vertex_id]],
                                  uint iid [[instance_id]],
@@ -89,8 +97,8 @@ vertex SegmentOut segment_vertex(uint vid [[vertex_id]],
             a1 = mid + wide;
         }
     }
-    // Its fade past the edge, if it goes on, is part of what's drawn.
-    float reach = r1 + (s.params.w > 0.0 ? u.scale * tailPoints : 0.0);
+    // Its fade past the edge, if it goes on, is part of what's drawn, and so is the tick outside a thin one pointed at.
+    float reach = r1 + max(s.params.w > 0.0 ? u.scale * tailPoints : 0.0, e > 1.0 ? u.scale * tickReach : 0.0);
 
     // The smallest box around the arc: its four corners, and the circle's extremes where the arc crosses an axis.
     float2 lo = min(min(onCircle(a0, r0), onCircle(a1, r0)), min(onCircle(a0, reach), onCircle(a1, reach)));
@@ -121,6 +129,7 @@ vertex SegmentOut segment_vertex(uint vid [[vertex_id]],
     o.tintShare = share;
     o.marked = mix(s.plan.x, s.plan.y, saturate(u.t));
     o.shared = s.plan.z;
+    o.pointed = saturate(e - 1.0);
     // Lit pieces lie over the ones at rest, lifted ones over those, and the one pointed at over them all, however lit it
     // is yet. Each pass draws one of the layers: a piece that isn't in it gets no area at all.
     float layer = float(iid) == u.top ? 3.0 : (e > 1.0 ? 2.0 : (e > u.litAbove ? 1.0 : 0.0));
@@ -180,7 +189,16 @@ fragment PieceOut segment_fragment(SegmentOut in [[stage_in]], constant Uniforms
         float fade = saturate(1.0 - beyond / (u.scale * tailPoints)) * step(0.0, beyond);
         tail = saturate(0.5 - x) * fade * fade * in.deeper;
     }
-    if (coverage <= 0.0 && tail <= 0.0) discard_fragment();
+    // A thin piece pointed at is marked by a short tick just outside its outer edge, in the middle of its arc, so it can be
+    // found however thin it is. It fades away on pieces wide enough to see.
+    float tick = 0.0;
+    if (in.pointed > 0.001) {
+        float thin = 1.0 - smoothstep(4.0 * u.scale, 8.0 * u.scale, 2.0 * halfLen);
+        float tx = along * r - u.scale;
+        float ty = abs(r - (in.r1 + 5.5 * u.scale)) - 3.0 * u.scale;
+        tick = saturate(0.5 - max(tx, ty)) * thin * in.pointed;
+    }
+    if (coverage <= 0.0 && tail <= 0.0 && tick <= 0.0) discard_fragment();
 
     float e = saturate(in.emphasis);
     float recede = (1.0 - e) * u.dim;
@@ -247,8 +265,7 @@ fragment PieceOut segment_fragment(SegmentOut in [[stage_in]], constant Uniforms
             float stripe = smoothstep(0.0, 0.08, across) * (1.0 - smoothstep(0.5, 0.58, across));
             float3 striped = mix(color * 0.10, color * 1.05, stripe);
             color = mix(color, striped, in.marked);
-            float rim = 1.0 - saturate(-d / (u.scale * 1.15));
-            color += (base * 0.75 + float3(0.10)) * rim * rim * in.marked;
+            color = mix(color, base * 0.95 + float3(0.12), innerLine(d, u.scale) * in.marked);
         }
     }
 
@@ -258,8 +275,19 @@ fragment PieceOut segment_fragment(SegmentOut in [[stage_in]], constant Uniforms
     color = mix(color, float3(dot(color, float3(0.3, 0.6, 0.1))), desat);
     color *= 1.0 + 0.30 * e * u.dim;
 
-    // Past the edge, the fade carries the colour of the edge outward.
-    alpha *= max(coverage, tail * 0.6);
+    // The piece pointed at has a crisp border just inside its edge, in a light tone of its own colour, so it reads as one
+    // shape however small it is and whatever lies next to it. Space and what can't be read take a neutral one.
+    float3 border = float3(0.0);
+    if (in.pointed > 0.001) {
+        bool plain = in.style == StyleFree || in.style == StyleHidden;
+        border = plain ? float3(0.40, 0.44, 0.51) : mix(base, float3(1.0), 0.40);
+        color = mix(color, border, innerLine(d, u.scale) * in.pointed);
+    }
+
+    // Past the edge, the fade carries the colour of the edge outward. The tick is the border's colour.
+    float body = max(coverage, tail * 0.6);
+    if (tick > body) color = border;
+    alpha *= max(body, tick);
     // Each piece gives off its own glow. Only what you're pointing at, and what's inside it, gets the full amount. The
     // folders it sits in get none of that, and everything else keeps its faint glow, which fades as it dims.
     PieceOut out;
@@ -335,7 +363,8 @@ fragment float4 composite(QuadOut in [[stage_in]],
     float3 near = glow.sample(linearClamp, in.uv).rgb;
     float3 far = wide.sample(linearClamp, in.uv).rgb;
 
-    float3 color = background + near * u.bloom * 0.13 + far * u.bloom * 0.17;
+    // With no glow the blur isn't drawn, so what its textures hold isn't read.
+    float3 color = background + (u.bloom > 0.0 ? near * u.bloom * 0.13 + far * u.bloom * 0.17 : float3(0.0));
 
     // A fine scale around the ring: a mark for every 1%, a longer one for every 10%, of the circle or of each side.
     float scalePx = u.scale;

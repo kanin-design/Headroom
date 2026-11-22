@@ -74,8 +74,9 @@ extension SunburstChart {
     /// The ring moved, as when the window is resized. The names follow it as it goes (`SunburstChartLabels`), and once it
     /// has rested a moment they're placed again for where it is, gliding there.
     func relabelWhenRested() {
+        // Names waiting for a new picture are placed when it's ready, for where the ring is then.
+        guard showsLabels, labelsVisible else { return }
         labelTask?.cancel()
-        guard showsLabels else { return }
         labelTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(0.15))
             guard let self, !Task.isCancelled, self.showsLabels else { return }
@@ -94,20 +95,50 @@ extension SunburstChart {
         let area = LabelArea(center: place.center, radius: place.radius, width: place.size.width, height: place.size.height,
                              top: labelInsets.top, bottom: place.size.height - labelInsets.bottom)
         let order = LabelPlacer.order(layout)
+        // Names side by side can be written by what tells them apart, where the whole name doesn't fit.
+        let short = shortensNames ? ShortNames(layout: layout, pieces: order.prefix(260), context: contextNames()) { i in
+            self.name(layout.pieces[i].node)
+        } : ShortNames()
+        shortNames = short
         var named = LabelPlacer.Placed()
         if let namer {
-            let inside = LabelPlacer.inside(layout: layout, order: order, area: area, named: &named) { namer.inside($0) }
-            let picks = namer.sides(layout, order: order, named: &named)
-            labels = inside + LabelPlacer.sides(picks, layout: layout, area: area, eachCounts: !namer.leavesOutRepeats)
+            let inside = LabelPlacer.inside(layout: layout, order: order, area: area, named: &named, short: short) { namer.inside($0) }
+            let picks = withShares(namer.sides(layout, order: order, named: &named), in: layout)
+            labels = inside + LabelPlacer.sides(picks, layout: layout, area: area, eachCounts: !namer.leavesOutRepeats, short: short)
             return
         }
-        let inside = LabelPlacer.inside(layout: layout, order: order, area: area, named: &named) { p in
+        let inside = LabelPlacer.inside(layout: layout, order: order, area: area, named: &named, short: short) { p in
             p.isSmaller ? nil : (self.name(p.node), self.amountText(p))
         }
         let picks = LabelPlacer.bigPieces(layout: layout, order: order, named: &named) { p in
             (self.name(p.node), self.amountText(p))
         }
-        labels = inside + LabelPlacer.sides(picks, layout: layout, area: area, eachCounts: false)
+        labels = inside + LabelPlacer.sides(withShares(picks, in: layout), layout: layout, area: area, eachCounts: false, short: short)
+    }
+
+    /// The names of the node in the middle and of what it's in, which the names inside needn't say again.
+    private func contextNames() -> [String] {
+        var names: [String] = []
+        var at = focus
+        for _ in 0..<64 {
+            names.append(name(at))
+            if at == 0 { break }
+            at = tree.parent(of: at)
+        }
+        return names
+    }
+
+    /// Each name at the side with its share of what's in the middle after its size: "45.2 GB · 9%". Not with a split, whose
+    /// sides are wholes of their own.
+    private func withShares(_ picks: [LabelPlacer.Pick], in layout: RingLayout) -> [LabelPlacer.Pick] {
+        guard showsShares, namer?.valuesAreSizes ?? true, !layout.isSplit else { return picks }
+        let whole = Double(max(tree.size(of: focus), 1))
+        return picks.map { pick in
+            guard pick.index < layout.pieces.count, !pick.value.isEmpty else { return pick }
+            var with = pick
+            with.value += " · " + Self.percent(Double(layout.pieces[pick.index].size) / whole)
+            return with
+        }
     }
 
     static func percent(_ share: Double) -> String {

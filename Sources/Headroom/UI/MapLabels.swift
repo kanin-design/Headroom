@@ -116,6 +116,7 @@ struct HeadroomNames: SunburstNamer {
     /// A name just outside a piece that's already named would say nearly the same thing. Not a copy's: each is a place of
     /// its own, however near the others it is.
     var leavesOutRepeats: Bool { !(lens == .copies && model.pointedCopyGroup != nil) }
+
 }
 
 /// The names around the ring, from the chart, each at the side with the menu of what it names.
@@ -164,7 +165,11 @@ struct CenterIsland: NSViewRepresentable {
 /// the window's tree sees, so nothing that changes inside (not even the hosting view saying its size might have) reaches
 /// the window's layout. The pointer goes straight through to what's under it.
 final class Island: NSView {
-    init(_ content: some View) {
+    private let passesThrough: Bool
+
+    /// `passesThrough` false for one with controls of its own, such as the path bar.
+    init(_ content: some View, passesThrough: Bool = true) {
+        self.passesThrough = passesThrough
         super.init(frame: .zero)
         let host = NSHostingView(rootView: content)
         host.sizingOptions = []
@@ -177,7 +182,7 @@ final class Island: NSView {
     required init?(coder: NSCoder) { fatalError("not from a nib") }
 
     override var isFlipped: Bool { true }
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func hitTest(_ point: NSPoint) -> NSView? { passesThrough ? nil : super.hitTest(point) }
 }
 
 /// The middle of the ring: the one number that matters, until you point at something else. It fills the room it's given.
@@ -211,29 +216,30 @@ struct CenterReadout: View {
         .multilineTextAlignment(.center)
     }
 
-    /// Every state puts its parts in the same places, so nothing moves with the pointer: the number at the very middle, a
-    /// line's room above it for a name, and two lines' room below. A part with nothing to say keeps its room, and text
-    /// that's too long shrinks a little, then is cut short.
-    private func slots<Above: View, Below: View>(_ size: CGFloat, number: some View, @ViewBuilder above: () -> Above,
-                                                 @ViewBuilder below: () -> Below) -> some View {
-        let room = size * 0.18
-        // Each room is held open by something clear, because an empty one would otherwise fold away.
-        return VStack(spacing: 0) {
-            ZStack(alignment: .bottom) {
-                Color.clear
-                above()
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
+    /// Every state puts its parts in the same places (`CentreGrid`), so nothing moves with the pointer or with what's
+    /// written: the icon, the name's room, the number and the lines under it are each placed on their own.
+    private func slots<Above: View, Below: View>(_ size: CGFloat, icon: CentreIcon? = nil, number: some View,
+                                                 @ViewBuilder above: () -> Above, @ViewBuilder below: () -> Below) -> some View {
+        let g = CentreGrid(u: size), mid = size / 2
+        return ZStack {
+            if let icon {
+                CentreIconView(icon: icon, size: g.icon)
+                    .position(x: mid, y: mid + g.iconY)
             }
-            .frame(width: size * 0.9, height: room)
+            // The name sits on the number, as the lines under it hang from it: one line just above it, a second above that.
+            above()
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .frame(width: g.width, height: g.titleHeight, alignment: .bottom)
+                .position(x: mid, y: mid + g.titleY)
             number
-                .frame(height: size * 0.28)
-            ZStack(alignment: .top) {
-                Color.clear
-                below()
-            }
-            .frame(width: size * 0.9, height: room)
+                .frame(height: g.numberHeight)
+                .position(x: mid, y: mid)
+            below()
+                .frame(width: g.width, height: g.belowHeight, alignment: .top)
+                .position(x: mid, y: mid + g.belowTop + g.belowHeight / 2)
         }
+        .frame(width: size, height: size)
     }
 
     /// `about` is the thing the number is about: its digits roll when that thing changes size, and just change when the
@@ -253,24 +259,27 @@ struct CenterReadout: View {
             let planning = model.planNumbers.total >= 1_000_000 && model.mode == .freeUp
             let preview = free &+ model.planNumbers.total
             let usedShare = 1 - Double(free) / Double(max(capacity, 1))
-            slots(size, number: bigNumber(planning ? preview : free, size: size, color: planning ? Kit.green : .white, about: "free")) {
-                EmptyView()
+            slots(size, icon: model.centreIcon(0), number: bigNumber(planning ? preview : free, size: size, color: planning ? Kit.green : .white, about: "free")) {
+                // The disk's name, as a folder's is once you're in it: every state is an icon, a name, a number and a line.
+                Text(model.volume?.shownName ?? "")
+                    .font(.system(size: CentreGrid(u: size).title, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.92))
             } below: {
-                VStack(spacing: size * 0.012) {
+                VStack(spacing: CentreGrid(u: size).lineGap) {
                     Text(planning ? "free after cleaning" : "free of \(formatBytes(capacity))")
-                        .font(.system(size: size * 0.058, weight: .medium))
+                        .font(.system(size: CentreGrid(u: size).detail, weight: .medium))
                         .foregroundStyle(.white.opacity(0.55))
                     if let pointing = model.pointing, model.mode == .freeUp {
                         pointingLine(pointing, size: size)
                     } else if planning {
                         Text("+\(formatBytes(model.planNumbers.total))")
-                            .font(.system(size: size * 0.05, weight: .semibold).monospacedDigit())
+                            .font(.system(size: CentreGrid(u: size).caption, weight: .semibold).monospacedDigit())
                             .foregroundStyle(Kit.green.opacity(0.8))
                     } else if let delta = sinceLast(free) {
                         deltaCapsule(delta, size: size)
                     } else {
                         Text(String(format: "%.0f%% full", usedShare * 100))
-                            .font(.system(size: size * 0.05, weight: .medium).monospacedDigit())
+                            .font(.system(size: CentreGrid(u: size).caption, weight: .medium).monospacedDigit())
                             .foregroundStyle(.white.opacity(0.36))
                     }
                 }
@@ -289,15 +298,15 @@ struct CenterReadout: View {
         return slots(size, number: bigNumber(picked > 0 ? pickedBytes : pair.macBytes, size: size, color: picked > 0 ? blue : .white,
                                              about: picked > 0 ? "picked" : "on this Mac")) {
             Text(pair.realFolder == 0 ? (model.volume?.shownName ?? "") : pair.folderName)
-                .font(.system(size: size * 0.07, weight: .semibold))
+                .font(.system(size: CentreGrid(u: size).title, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.9))
         } below: {
-            VStack(spacing: size * 0.012) {
+            VStack(spacing: CentreGrid(u: size).lineGap) {
                 Text(picked > 0 ? "\(picked) selected" : "on this Mac")
-                    .font(.system(size: size * 0.058, weight: .medium))
+                    .font(.system(size: CentreGrid(u: size).detail, weight: .medium))
                     .foregroundStyle(.white.opacity(0.55))
                 Text(picked > 0 ? "\(formatBytes(pair.macBytes)) on this Mac" : "\(formatBytes(pair.driveBytes)) on \(pair.driveName)")
-                    .font(.system(size: size * 0.05, weight: .medium).monospacedDigit())
+                    .font(.system(size: CentreGrid(u: size).caption, weight: .medium).monospacedDigit())
                     .foregroundStyle(.white.opacity(0.36))
             }
             .lineLimit(1)
@@ -322,14 +331,14 @@ struct CenterReadout: View {
         return slots(size, number: bigNumber(back, size: size, color: colour, about: hot?.id ?? "duplicates")) {
             EmptyView()
         } below: {
-            VStack(spacing: size * 0.012) {
+            VStack(spacing: CentreGrid(u: size).lineGap) {
                 Text(hot.map(\.title) ?? (model.copiesReading ? "in duplicates so far" : "in duplicates"))
-                    .font(.system(size: size * 0.058, weight: .medium))
+                    .font(.system(size: CentreGrid(u: size).detail, weight: .medium))
                     .foregroundStyle(.white.opacity(0.55))
                 if let hot {
                     let outside = model.copiesOutside(hot)
                     Text(outside > 0 ? "+\(outside) outside this folder" : hot.kind == .duplicate ? "reclaimable" : "no extra space")
-                        .font(.system(size: size * 0.05, weight: .medium))
+                        .font(.system(size: CentreGrid(u: size).caption, weight: .medium))
                         .foregroundStyle(colour.opacity(0.8))
                 }
             }
@@ -349,13 +358,13 @@ struct CenterReadout: View {
         return slots(size, number: bigNumber(UInt64(abs(change)), size: size, color: colour, sign: sign, about: "changed")) {
             EmptyView()
         } below: {
-            VStack(spacing: size * 0.012) {
+            VStack(spacing: CentreGrid(u: size).lineGap) {
                 Text(window.isUntouched ? "untouched \(window.span)" : history ? "free space \(when)" : "modified \(when)")
-                    .font(.system(size: size * 0.058, weight: .medium))
+                    .font(.system(size: CentreGrid(u: size).detail, weight: .medium))
                     .foregroundStyle(.white.opacity(0.55))
                 if !history {
                     Text("by date modified")
-                        .font(.system(size: size * 0.05, weight: .medium))
+                        .font(.system(size: CentreGrid(u: size).caption, weight: .medium))
                         .foregroundStyle(.white.opacity(0.36))
                 }
             }
@@ -367,7 +376,7 @@ struct CenterReadout: View {
     /// What you're pointing at in the panel, in its own colour.
     private func pointingLine(_ pointing: Pointing, size: CGFloat) -> some View {
         Text("\(pointing.title): \(formatBytes(pointing.bytes))")
-            .font(.system(size: size * 0.05, weight: .semibold).monospacedDigit())
+            .font(.system(size: CentreGrid(u: size).caption, weight: .semibold).monospacedDigit())
             .foregroundStyle(pointing.color.swiftUI)
             .lineLimit(1)
             .truncationMode(.middle)
@@ -391,34 +400,33 @@ struct CenterReadout: View {
         let down = info.delta < 0
         return HStack(spacing: 3) {
             Image(systemName: down ? "arrow.down" : "arrow.up")
-                .font(.system(size: size * 0.042, weight: .bold))
+                .font(.system(size: CentreGrid(u: size).caption * 0.84, weight: .bold))
             Text("\(formatBytes(UInt64(abs(info.delta)))) \(info.label)")
-                .font(.system(size: size * 0.05, weight: .semibold).monospacedDigit())
+                .font(.system(size: CentreGrid(u: size).caption, weight: .semibold).monospacedDigit())
         }
         .foregroundStyle(down ? Color(red: 1, green: 0.58, blue: 0.48) : Kit.green)
-        .padding(.top, size * 0.01)
     }
 
     private func folderContent(_ tree: DiskTree, size: CGFloat) -> some View {
         let moved = tree.movedBytes(inside: model.focus)
-        return slots(size, number: bigNumber(tree.bytesHere(model.focus), size: size, about: model.focus)) {
+        return slots(size, icon: model.centreIcon(model.focus), number: bigNumber(tree.bytesHere(model.focus), size: size, about: model.focus)) {
             HStack(spacing: 2) {
                 Image(systemName: "chevron.left")
-                    .font(.system(size: size * 0.05, weight: .bold))
+                    .font(.system(size: CentreGrid(u: size).caption, weight: .bold))
                     .foregroundStyle(.white.opacity(0.42))
                 Text(model.displayName(model.focus))
-                    .font(.system(size: size * 0.072, weight: .semibold))
+                    .font(.system(size: CentreGrid(u: size).title, weight: .semibold))
                     .truncationMode(.middle)
             }
             .foregroundStyle(.white.opacity(0.92))
         } below: {
-            VStack(spacing: size * 0.012) {
+            VStack(spacing: CentreGrid(u: size).lineGap) {
                 Text(tree.isStillGrowing(model.focus) ? "so far" : side(tree) ?? shareOfDisk(tree))
-                    .font(.system(size: size * 0.052, weight: .medium))
+                    .font(.system(size: CentreGrid(u: size).detail, weight: .medium))
                     .foregroundStyle(.white.opacity(0.5))
                 if moved > 0 {
                     Text("+ \(formatBytes(moved)) moved")
-                        .font(.system(size: size * 0.05, weight: .medium).monospacedDigit())
+                        .font(.system(size: CentreGrid(u: size).caption, weight: .medium).monospacedDigit())
                         .foregroundStyle(.white.opacity(0.36))
                 }
             }
@@ -439,15 +447,40 @@ struct CenterReadout: View {
     }
 
     private func hoverContent(_ hover: HoverInfo, size: CGFloat) -> some View {
-        slots(size, number: bigNumber(hover.bytes, size: size, about: [AnyHashable(hover.node), AnyHashable(hover.title)])) {
-            Text(hover.title)
-                .font(.system(size: size * 0.072, weight: .semibold))
+        slots(size, icon: hover.icon, number: bigNumber(hover.bytes, size: size, about: [AnyHashable(hover.node), AnyHashable(hover.title)])) {
+            Group {
+                // The real name: on one line if it fits, else on two smaller ones; only then cut where it's like its
+                // neighbours, each way of writing it on one line, then on two, so as much of the name stays as fits.
+                let titles = hover.titles.isEmpty ? [hover.title] : hover.titles
+                ViewThatFits(in: .horizontal) {
+                    ForEach(titles, id: \.self) { title in
+                        Text(title).fixedSize()
+                        // Two lines hold about 48 characters here; a longer one is cut further instead.
+                        if title.count <= 48 {
+                            Text(title)
+                                .font(.system(size: CentreGrid(u: size).twoLineTitle, weight: .semibold))
+                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(width: CentreGrid(u: size).twoLineWidth)
+                        }
+                    }
+                    Text(titles.last ?? hover.title).truncationMode(.middle)
+                }
+                .font(.system(size: CentreGrid(u: size).title, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.95))
-                .truncationMode(.middle)
+            }
         } below: {
+            hoverLine(hover, size: size)
+        }
+    }
+
+    /// The line under the size: its other paths, what changed, when it was last used, or its share.
+    @ViewBuilder
+    private func hoverLine(_ hover: HoverInfo, size: CGFloat) -> some View {
+        Group {
             if let links = hover.links {
                 Text(links)
-                    .font(.system(size: size * 0.072, weight: .semibold))
+                    .font(.system(size: CentreGrid(u: size).status, weight: .semibold))
                     .foregroundStyle(Kit.amber)
                     .lineLimit(2)
                     .minimumScaleFactor(0.85)
@@ -457,13 +490,13 @@ struct CenterReadout: View {
                 // used, it looks as it does on the map.
                 let saysChange = model.view == .changes && !hover.tellsUse
                 Text(hover.note)
-                    .font(.system(size: size * 0.072, weight: saysChange ? .semibold : .medium))
+                    .font(.system(size: CentreGrid(u: size).status, weight: saysChange ? .semibold : .medium))
                     .foregroundStyle(saysChange ? changeColour(shrank: hover.shrank) : .white.opacity(0.72))
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
             } else if !hover.share.isEmpty {
                 Text(hover.share)
-                    .font(.system(size: size * 0.072, weight: .medium))
+                    .font(.system(size: CentreGrid(u: size).status, weight: .medium))
                     .foregroundStyle(.white.opacity(0.5))
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
@@ -471,4 +504,50 @@ struct CenterReadout: View {
             }
         }
     }
+}
+
+/// Where everything in the middle of the ring goes, worked out from its size `u`: the side of the square it's drawn in,
+/// 0.86 of the hole across, about 176 points in a 1400-point window. Every state uses the same places, so nothing moves
+/// with the pointer or with what's written.
+///
+/// Text comes in three sizes a step of ×1.2 apart: the name, what's said about the number, and a quieter third line. The
+/// number is more than three times the name, so there are two clear levels: the number, and what's said about it.
+///
+/// Down the middle, as offsets from the ring's middle: an icon, always in the same place; the name's room, two lines
+/// high, with the name at its foot, so a name of one line sits as close above the number as the line under it hangs
+/// below (0.035 u, about 7 points, between the digits and each); the number, its digits centred on the ring's middle;
+/// and room for two lines under it. A second line of a name grows up toward the icon, which stays where it is.
+/// Everything is inside the hole with room to spare: where the icon is, the hole is still 0.95 u across.
+struct CentreGrid {
+    let u: CGFloat
+
+    // Sizes.
+    var title: CGFloat { u * 0.072 }
+    /// The line under the number while something is pointed at (when it was last used, its other paths, what changed): as
+    /// large as the name, as decided on 2026-11-06.
+    var status: CGFloat { title }
+    var detail: CGFloat { u * 0.060 }
+    var caption: CGFloat { u * 0.050 }
+    /// A name on two lines, a step smaller so both fit the room.
+    var twoLineTitle: CGFloat { u * 0.062 }
+    var icon: CGFloat { detail }
+
+    // Widths.
+    var width: CGFloat { u * 0.86 }
+    var twoLineWidth: CGFloat { u * 0.78 }
+
+    // Places, as offsets of each part's middle from the ring's middle, down positive.
+    // The digits' capitals reach 0.082 u either side of the middle; 0.035 u clear of them sit the name's foot above and the
+    // first line's capitals below.
+    var iconY: CGFloat { -u * 0.31 }
+    /// The name's room runs from 0.249 u above the middle down to 0.100 u above it, where a line's foot sits 0.035 u clear of
+    /// the digits.
+    var titleY: CGFloat { -u * 0.1745 }
+    var titleHeight: CGFloat { u * 0.149 }
+    var numberHeight: CGFloat { u * 0.28 }
+    /// Where the lines under the number start, so the first one's capitals are 0.035 u under the digits, and how much room
+    /// they have.
+    var belowTop: CGFloat { u * 0.103 }
+    var belowHeight: CGFloat { u * 0.2 }
+    var lineGap: CGFloat { detail * 0.25 }
 }

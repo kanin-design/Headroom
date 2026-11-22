@@ -60,9 +60,13 @@ public final class SunburstChart<Tree: SunburstTree> {
         set { if newValue != parts.rings.sizes { parts.rings.sizes = newValue } }
     }
     /// The colour of each piece, given the node in the middle. By default each branch in view gets its own colour from the
-    /// whole spectrum, with everything inside it close to that colour (`BranchColours`).
+    /// palette, with everything inside it close to that colour (`BranchColours`).
     @ObservationIgnored public var colours: ((_ tree: Tree, _ focus: UInt32) -> RingLayout.Colorer)? {
         didSet { if !batching { redraw(.recolor) } }
+    }
+    /// The colours branches take while `colours` is nil, and that a colorer of your own can use too: `.spectrum` by default.
+    @ObservationIgnored public var palette: SunburstPalette = .spectrum {
+        didSet { if palette != oldValue, !batching { redraw(.recolor) } }
     }
     /// Whether pieces too small to matter step back until they're pointed at, so the big ones are easier to see. On by
     /// default.
@@ -75,7 +79,11 @@ public final class SunburstChart<Tree: SunburstTree> {
     }
     /// How strongly pieces glow, from 0 to 1 (the default).
     @ObservationIgnored public var glow: Float = 1 {
-        didSet { engine.setGlow(glow) }
+        didSet { engine.setGlow(showsGlow ? glow : 0) }
+    }
+    /// Whether pieces glow at all. Off, no halo is drawn and the work of drawing one is skipped. On by default.
+    @ObservationIgnored public var showsGlow = true {
+        didSet { if showsGlow != oldValue { engine.setGlow(showsGlow ? glow : 0) } }
     }
 
     // MARK: What's written
@@ -99,6 +107,22 @@ public final class SunburstChart<Tree: SunburstTree> {
     @ObservationIgnored public var namer: (any SunburstNamer)? {
         didSet { namesChanged() }
     }
+    /// Whether a name that doesn't fit is written by what tells it apart from its neighbours (`ShortNames`): "S01E03" for
+    /// one of a season's episodes, rather than the show's name cut short. On by default.
+    @ObservationIgnored public var shortensNames = true {
+        didSet { if shortensNames != oldValue { namesChanged() } }
+    }
+    /// Whether a name at the side says its share of what's in the middle after its size: "45.2 GB · 9%". Off by default:
+    /// the piece's angle already shows its share, and a second number beside every name is more to read.
+    @ObservationIgnored public var showsShares = false {
+        didSet { if showsShares != oldValue { namesChanged() } }
+    }
+    /// The ways the names were written when they were last placed.
+    @ObservationIgnored var shortNames = ShortNames()
+
+    /// The ways a piece's name can be written, longest first, as the names around the ring were last placed: for a readout
+    /// of your own that has less room than the whole name. Just `full` for a piece that isn't among them.
+    public func nameForms(ofPiece index: Int, full: String) -> [String] { shortNames.forms(of: index, full: full) }
     /// Whether names are shown around the ring. On by default; off while the ring shows something passing, say.
     public var showsLabels = true {
         didSet { if showsLabels != oldValue { placeLabels(after: showsLabels ? 0.3 : 0) } }
@@ -352,7 +376,7 @@ public final class SunburstChart<Tree: SunburstTree> {
 
     /// The picture the chart would draw now, made without drawing it: to time it, or for a test.
     @_spi(Diagnostics) public func makeLayout() -> RingLayout {
-        let colorer = colours?(tree, focus) ?? BranchColours(tree: tree, focus: focus).colorer
+        let colorer = colours?(tree, focus) ?? BranchColours(tree: tree, focus: focus, palette: palette).colorer
         let marked = self.marked
         let marker = isMarked ?? (marked.isEmpty ? nil : { marked.contains($0) })
         var layout = RingLayout.build(tree: tree, focus: focus, parts: parts, colorer: colorer, marked: marker)

@@ -294,9 +294,10 @@ struct UniformsGPU {
             }
         }
 
-        // Down through a chain of smaller and smaller copies, then back up: a wide glow from few samples.
+        // Down through a chain of smaller and smaller copies, then back up: a wide glow from few samples. With no glow there's
+        // nothing to spread, and the picture doesn't read it.
         var source = glow
-        for level in levels {
+        for level in levels where u.bloom > 0 {
             var texel = SIMD2<Float>(1 / Float(source.width), 1 / Float(source.height))
             pass(commands, target: level) { e in
                 e.setRenderPipelineState(downPipeline)
@@ -307,7 +308,7 @@ struct UniformsGPU {
             source = level
         }
         var i = levels.count - 2
-        while i >= 1 {
+        while i >= 1, u.bloom > 0 {
             var texel = SIMD2<Float>(0.5 / Float(source.width), 0.5 / Float(source.height))
             let from = source
             pass(commands, target: levels[i]) { e in

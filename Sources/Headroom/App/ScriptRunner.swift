@@ -262,7 +262,7 @@ enum ScriptRunner {
         "button": .plan,
         "speed": .measuring, "meter": .measuring, "pacing": .measuring, "touch": .measuring, "sweep": .measuring,
         "bench": .measuring, "memory": .measuring, "footprint": .measuring, "gpu": .measuring, "headroom": .measuring,
-        "frames": .measuring, "layers": .measuring, "names": .measuring, "middle": .measuring, "stretches": .measuring, "state": .measuring, "pointon": .measuring, "clickon": .measuring, "clickplace": .measuring, "mapkey": .measuring, "menufor": .measuring, "leaks": .measuring, "format": .measuring,
+        "frames": .measuring, "layers": .measuring, "names": .measuring, "palette": .measuring, "glow": .measuring, "exporttree": .measuring, "middle": .measuring, "stretches": .measuring, "state": .measuring, "pointon": .measuring, "clickon": .measuring, "clickplace": .measuring, "mapkey": .measuring, "menufor": .measuring, "leaks": .measuring, "format": .measuring,
         "panel": .window, "scrolls": .window, "voiceover": .window, "size": .window, "jiggle": .window, "collide": .window,
         "timescale": .window, "shotwindow": .window, "shot": .window, "drawn": .window, "film": .window, "mouse": .window, "click": .window,
         "activate": .window, "float": .window, "hide": .window, "unhide": .window, "minimize": .window, "restore": .window,
@@ -1458,6 +1458,38 @@ enum ScriptRunner {
         case "middle":
             // What the middle of the ring says now, and what's under the pointer.
             print("middle \(argument): says \(model.hoverShown?.title ?? "nothing"), pointer on \(model.hover?.title ?? "nothing")")
+        case "exporttree":
+            // exporttree /path/out.json: the disk as read, for another program to draw: every folder and file of at least
+            // 1/200,000 of the disk, with the rest of each folder only counted. Read-only.
+            guard let tree = model.tree else { print("no tree"); return }
+            let least = max(tree.capacityBytes / 200_000, 1)
+            var count = 0
+            func node(_ id: UInt32, depth: Int) -> [String: Any] {
+                let n = tree.nodes[Int(id)]
+                let role = n.has(NodeFlag.free) ? "free" : n.has(NodeFlag.hidden) ? "unreadable"
+                    : n.has(NodeFlag.synthetic) ? "system" : "item"
+                var out: [String: Any] = ["n": id == 0 ? tree.volumeName : tree.name(id), "s": tree.totals[Int(id)],
+                                          "f": n.has(NodeFlag.directory) || n.has(NodeFlag.synthetic) ? 1 : 0, "r": role]
+                count += 1
+                let kids = tree.children(id)
+                let shown = depth < 14 ? kids.filter { tree.totals[Int($0)] >= least } : []
+                if !shown.isEmpty { out["c"] = shown.sorted { tree.totals[Int($0)] > tree.totals[Int($1)] }.map { node($0, depth: depth + 1) } }
+                if kids.count > shown.count { out["o"] = kids.count - shown.count }
+                return out
+            }
+            let root: [String: Any] = ["volume": tree.volumeName, "capacity": tree.capacityBytes, "free": tree.freeBytes,
+                                       "root": node(0, depth: 0)]
+            if let data = try? JSONSerialization.data(withJSONObject: root, options: [.sortedKeys]) {
+                try? data.write(to: URL(fileURLWithPath: argument))
+                print("exported \(count) nodes, \(data.count / 1024) KB")
+            }
+        case "palette":
+            // palette cool: the map in one of SunburstKit's palettes, by id.
+            guard let palette = SunburstPalette.all.first(where: { $0.id == argument }) else { print("no palette \(argument)"); return }
+            model.palette = palette
+        case "glow":
+            // glow off, glow on.
+            model.showsGlow = argument != "off"
         case "names":
             // names off, names on: the names around the ring hidden or shown, to tell what they cost.
             model.chart.showsLabels = argument != "off"

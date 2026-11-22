@@ -507,3 +507,157 @@ imitation, floats over the ring and refracts it. The toolbar and the inspector a
 as they do in any Mac app. Numbers roll instead of snapping. The ring moves on springs. With Reduce Motion, the
 ring dissolves from one picture to the next instead of zooming, numbers change in place, and nothing springs past where
 it's going. VoiceOver reads the ring as a list of what's in the folder you're in.
+
+## Specs
+
+The parts below have been redone more than once, each time undoing something decided before. What's written here is
+decided: every value, and why. **Change these only when the owner asks, and in the same change update the spec: the
+value, and a line in its decision log with the date and the reason.** A value this section doesn't mention isn't free
+to change either; ask. Before touching one of these parts, read its spec and its log.
+
+### The middle of the ring
+
+The middle answers one thing at a glance: how much, of what. It's a number, a name above it, a line under it, and an
+icon. Nothing in it moves when what it says changes, or as the pointer does.
+
+Everything is measured in `u`, the side of the square the middle is drawn in: 0.86 of the hole across, where the hole
+is 0.34 of the ring's radius (`CentreGrid` in `MapLabels.swift`). In a 1400 × 900 window `u` is about 176 points.
+Positions are of each part's middle, from the ring's middle, downward positive.
+
+**Places**
+
+| Part | Where | Notes |
+|---|---|---|
+| Icon | centred at −0.31 u | Fixed: the same place in every state, whatever the name below it |
+| Name | a room from −0.249 u to −0.100 u (0.149 u high), text at its foot | One line sits right on the number; a second line grows upward toward the icon |
+| Number | its digits centred at 0, frame 0.28 u high | The digits' capitals reach ±0.082 u |
+| Under the number | from +0.103 u down, 0.2 u of room, text at its top | Lines 0.015 u apart |
+
+The name's foot and the first line's capitals are each 0.035 u (about 7 points) from the digits: the name, the number
+and the line under it read as one group. Everything is inside the hole; where the icon is, the hole is still 0.95 u
+wide.
+
+**Sizes.** Three text sizes a step of ×1.2 apart, all far below the number, so there are two levels: the number, and
+what's said about it.
+
+| Text | Size | Weight | Colour |
+|---|---|---|---|
+| Number, digits | 0.235 u, rounded, digits of equal width | semibold | white, or the state's colour (below) |
+| Number, unit | 0.105 u, rounded | semibold | white at 0.55 |
+| Name | 0.072 u | semibold | white at 0.95 pointing, 0.92 at rest |
+| The line under the number while pointing | 0.072 u, as large as the name | medium (semibold for links and changes) | below |
+| Detail | 0.060 u | medium | white at 0.5–0.55 |
+| Third line | 0.050 u | medium or semibold | white at 0.36, or its own colour |
+| Icon | a symbol at 0.060 u, regular | | white at 0.5 |
+
+**What each state says**
+
+| State | Icon | Name | Number | Under it |
+|---|---|---|---|---|
+| Pointing at something | its kind (below) | its name | its size | One line, as large as the name: its other paths (amber, semibold, up to two lines), else when it was last used, else in Changes what changed (semibold, in the view's colours). While a scan is under way: "so far" or "not scanned yet" |
+| The whole disk, at rest | the drive | the disk's name | free space (green when Free Up has something to clean: the free space after) | "free of 494 GB" or "free after cleaning"; then one of: what's pointed at in the panel, in its colour; "+X" in green; the change since yesterday with an arrow (green up, salmon down); "N% full" |
+| Inside a folder | its kind | "‹" (0.050 u bold, white at 0.42) and its name | its size | its share of the disk, or "so far", or which side of both disks; then "+ X moved" if files were moved out |
+| Both disks (Backup) | none | the folder's or disk's name | on this Mac, or what's selected in blue | "on this Mac" or "N selected"; then what's on the drive |
+| Changes | none | none | how much changed, with its sign and colour | "free space since …" or "modified in …"; "by date modified" |
+| Copies (Free Up) | none | none | what duplicates take, or a set's in its colour | "in duplicates", or the set's name; then "reclaimable" or how many are elsewhere |
+
+**The name, when it doesn't fit.** The name is always the real name. In order, the first that fits is used: the whole
+name on one line; the whole name on two lines at 0.062 u within 0.78 u, if it's 48 characters or fewer; then the name
+cut with "…" where its neighbours say the same (see *Names on the ring*), each on one line and then on two; last, the
+shortest cut form, cut once more in the middle. Nothing is ever written that isn't in the name, in its order.
+
+**Icons.** The drive for the disk; a house for your home folder; symbols for Desktop, Documents, Downloads, Movies,
+Music, Pictures, Library, Public (in your home folder) and Applications; a folder; the Trash; a gear for macOS's own
+parts; a dashed circle for free space; an eye with a stroke for what can't be read; "…" for smaller items; for files
+their kind (film, waveform, photo, disk image, archive, code, PDF, text, document). An app shows its own icon, 1.6
+times the symbol's size, read off the main thread with a plain app symbol until it's read.
+
+**Never**
+- A share line ("14% of Season 01 · 2.4% of the disk") or anything else the ring already shows.
+- A part that moves when the text changes: every part is placed on its own, never stacked after another.
+- More than one line under the number while pointing.
+- Any text size other than the three above and the number's.
+- Laying it out in the window's own view tree: it changes with every pointer move, and a change in the window's tree
+  costs a pass over the whole window. It's `CenterIsland`, a view tree of its own.
+
+**Decision log**
+
+| Date | Decision | Why |
+|---|---|---|
+| 2026-11-06 | Every part has a fixed place; long text shrinks, then is cut | The middle moved as you pointed at things |
+| 2026-11-06 | The line under the size says when you last used it, and is as large as the name | It repeated the share of the disk the ring already shows |
+| 2026-11-22 | The middle in a view tree of its own; digits roll only when the same thing changes size | Hovering cost too much; numbers rolling between different things read as change |
+| 2026-11-23 | An icon above the name, fixed in place | Asked for after the blind build; "the icon should be fixed in place" |
+| 2026-11-23 | A share line was added, then removed again | "Way too much info": it broke the 2026-11-06 decision |
+| 2026-11-23 | The line under the number briefly made smaller than the name, then put back | It broke the 2026-11-06 decision |
+| 2026-11-23 | The grid above: the name sits on the number, three text sizes, the disk's name at rest | The parts had no fixed grid: seven sizes, a floating name, an icon pushed up by two-line names. The disk's name at rest was proposed by Claude so every state has the same parts; the owner hasn't ruled on it |
+
+### The path bar
+
+The row along the bottom of the map: the disk at the left, where you are in the middle, and in Backup where its files
+go at the right. It's 34 points high (`DriveRow.height`), and everything in it is that height.
+
+- **Where you are**: in a glass capsule, centred in the map with 180 points kept clear at each side. A button for each
+  folder from the disk down, 12 points; the folder you're in semibold, white at 0.95; the others medium, white at 0.6;
+  chevrons 9 points bold, white at 0.35. Too long, it folds: the disk, "…", the last two; then the disk, "…", the last.
+  Shown once you're inside a folder; on the whole disk, only while something is pointed at. It stays in place and
+  fades in and out over 0.15 s.
+- **The way to what's pointed at**: just after the capsule, outside the glass, so the glass never changes size as the
+  pointer moves. Each step a chevron (white at 0.2), a 7-point dot in the piece's colour as drawn, and its name (12
+  points, medium, white at 0.45). What's pointed at is written with its cut forms (see *Names on the ring*), as short as
+  it needs to be before a folder is left out; folders nearest it stay, those nearest the top fold into "…". It may
+  run 150 points past the bar's right edge, except in Backup, where the drive's capsule is.
+- **Never** in the window's own view tree (it's `PathIsland`): a path bar there cost 15% more of the main thread while
+  pointing, and a resizing glass capsule caused dropped frames.
+
+| Date | Decision | Why |
+|---|---|---|
+| 2026-11-23 | The live path, with colour dots | From the blind build: "live path is also good idea, with the color" |
+| 2026-11-23 | Height 34, as the drive's capsule | 28 beside 34 in one row read as unaligned |
+
+### Names on the ring
+
+- **On pieces**: only on the first four rings; the outer rings are for the shape. The first ring is set straight,
+  12.5 points semibold with the size under it at 11 points, digits of equal width; free space 14 and 13. From the second
+  ring out a name runs along its piece, clockwise, turned in the bottom third so it's never upside down, at 11 and 9.5.
+- **At the sides**: the name at 12 points medium (white at 0.88) and its size at 11 regular (white at 0.5), rows 35
+  points apart, the column 34 points out from the ring. Sizes only: no percentages. What can't be read ("Hidden") is
+  named here, so the sizes add up.
+- **A name that doesn't fit** is the real name cut with "…" (`ShortNames`): it keeps its start, the part that tells it
+  apart from its neighbours, and its extension, and leaves out what its neighbours share or the folders around it
+  already say. For `Northwater Mysteries (2021) - S01E03 - 1080p WEB-DL.mkv` among its season: `Northwater…S01E03 - 1080p
+  WEB-DL.mkv`, then `Northwater…S01E03…mkv`, then `North…S01E03…mkv`. It's cut only between words, never inside a pair of brackets, and never around a number alone
+  (`IMG_4821.HEIC`, and `Harbour Lights (2020)` beside `Harbour Lights Reunion (2022)`, stay whole). Neighbours are written alike: as far cut as the one with
+  least room needs. A name at the side uses the longest form that fits its column; if none does, the whole name is cut
+  once, in the middle. **Never** cut twice, never rewritten, never reordered.
+
+| Date | Decision | Why |
+|---|---|---|
+| 2026-11-22 | First ring straight; further out along the arc, clockwise; bottom third turned; a smaller font | "Curved are okay for level 2 and deeper … always clockwise" |
+| 2026-11-23 | Names cut with "…" around what tells them apart, not rewritten | "You cant just replace the filename … show sho…s01e01…mkv" |
+| 2026-11-23 | Names back to the first four rings; no percentages at the sides | "Way too much info and garbage" |
+
+### Pointing at a piece
+
+- The piece pointed at lifts out and glows, and has a border just inside its edge: 1 point, its own colour 40% of the
+  way to white. A piece too thin to see also gets a tick, 2 points wide, just outside its outer edge.
+- A selected piece is striped with a 1-point edge of the same kind.
+
+| Date | Decision | Why |
+|---|---|---|
+| 2026-11-23 | A border on the piece pointed at, in every way of pointing | "Make the hover perfect … with the border around it" |
+| 2026-11-23 | 1 point, softer, not 1.5 points | "Isn't it very thick?" |
+
+### Colours
+
+- **Palettes** (View › Palette, for trying them): Spectrum, the default, gives each branch a hue a golden angle from
+  the last; Cool and Warm draw from a range of hues; Colour-Blind Safe (Okabe and Ito's), Pastel and Mono are set lists.
+  Each palette keeps its own memory of which folder has which colour.
+- **Glow** can be turned off (View › Glow), which also skips the work of drawing it.
+- A branch under 1.5% of what's in the middle is drawn quiet, in a muted tone of what holds it, instead of a colour of
+  its own.
+
+| Date | Decision | Why |
+|---|---|---|
+| 2026-11-23 | Palettes, dynamic and fixed; glow as a switch in the menu | Asked for, "for testing" |
+| 2026-11-23 | Quiet slivers | From the blind build's review, chosen by the owner |

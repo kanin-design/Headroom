@@ -87,6 +87,10 @@ struct HoverInfo: Equatable {
     var inTrash = false
     /// In Changes: the line says it got smaller.
     var shrank = false
+    /// What it is, at a glance, above its name.
+    var icon: CentreIcon?
+    /// Its name, then shorter ways of writing it, longest first: the middle shows the longest that fits.
+    var titles: [String] = []
 }
 
 @MainActor
@@ -158,6 +162,30 @@ final class AppModel {
             ringSizes.save(changedFrom: oldValue)
             relayout(.settle)
         }
+    }
+    /// The map's colours, one of SunburstKit's palettes. A scripted copy starts from the default and keeps nothing.
+    var palette = AppModel.savedPalette {
+        didSet {
+            guard palette != oldValue else { return }
+            if Self.remembersWindow { UserDefaults.standard.set(palette.id, forKey: Self.paletteKey) }
+            chart.redraw(.recolor)
+        }
+    }
+    /// Whether the map glows.
+    var showsGlow = AppModel.savedGlow {
+        didSet {
+            guard showsGlow != oldValue else { return }
+            if Self.remembersWindow { UserDefaults.standard.set(showsGlow, forKey: Self.glowKey) }
+            chart.showsGlow = showsGlow
+        }
+    }
+    static let paletteKey = "palette", glowKey = "glow"
+    private static var savedPalette: SunburstPalette {
+        let id = remembersWindow ? UserDefaults.standard.string(forKey: paletteKey) : nil
+        return SunburstPalette.all.first { $0.id == id } ?? .spectrum
+    }
+    private static var savedGlow: Bool {
+        remembersWindow ? UserDefaults.standard.object(forKey: glowKey) as? Bool ?? true : true
     }
     /// How many rings the picture has now, and how many it could fill. The menu offers no more than that.
     var ringsDrawn = RingSizes.saved.depth
@@ -1041,6 +1069,7 @@ final class AppModel {
         let chart = SunburstChart(tree: MapTree.empty, name: { [weak self] in self?.displayName($0) ?? "" }, sizeText: formatBytes,
                                   engine: engine, appears: false)
         chart.colours = { [weak self] tree, _ in self?.colorer(tree.disk) ?? { _ in .zero } }
+        chart.showsGlow = showsGlow
         chart.namer = HeadroomNames(model: self)
         chart.lighting = { [weak self] node in self?.lighting(pointingAt: node) }
         chart.onPoint = { [weak self] pointed in self?.pointed(at: pointed) }
@@ -1089,7 +1118,7 @@ final class AppModel {
         // Backed Up with no drive to compare with is the map.
         switch view == .copies && mode == .backup ? Lens.map : view {
         case .map, .freeUp, .backup:
-            let colours = RingColours(tree: tree, focus: focus, memory: colourMemory)
+            let colours = RingColours(tree: tree, focus: focus, memory: colourMemory, palette: palette)
             ringColours = colours
             return { colours.lab($0).linearP3 }
         case .changes:
@@ -1105,7 +1134,7 @@ final class AppModel {
     /// thing on the drive looks the same. What the Mac doesn't have takes its folder's colour.
     private func mirroredColorer(_ pair: PairPicture) -> RingLayout.Colorer {
         guard let real = bareTree, Int(pair.realFolder) < real.count else { return { pair.colour($0) } }
-        let colours = RingColours(tree: real, focus: pair.realFolder, memory: colourMemory)
+        let colours = RingColours(tree: real, focus: pair.realFolder, memory: colourMemory, palette: palette)
         let nodes = pair.tree.nodes
         return { node in
             if node == pair.macSide || node == pair.driveSide || node == 0 { return pair.colour(node) }
@@ -1292,6 +1321,13 @@ final class AppModel {
     }
 
     private func describe(_ p: Piece, index: Int, tree: DiskTree) -> HoverInfo {
+        var info = describeLines(p, index: index, tree: tree)
+        info.icon = p.isSmaller ? .symbol("ellipsis") : centreIcon(p.node)
+        info.titles = chart.nameForms(ofPiece: index, full: info.title)
+        return info
+    }
+
+    private func describeLines(_ p: Piece, index: Int, tree: DiskTree) -> HoverInfo {
         // Both sides: where it is. Which half it's in says which side you're pointing at.
         if let pair, pair.tree === tree, !p.isSmaller, var place = pair.places[p.node] {
             // A folder cut into stretches: this stretch's place is that of what it's over.

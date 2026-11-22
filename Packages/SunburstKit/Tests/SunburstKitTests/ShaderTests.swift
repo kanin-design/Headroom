@@ -67,7 +67,8 @@ final class ShaderTests: XCTestCase {
         let inner = SIMD4<Float>(0.5, 1.5, 0.3, 0.5), outer = SIMD4<Float>(0.5, 1.5, 0.5, 0.7)
         renderer.setInstances([SegmentGPU(from: inner, to: inner, colorFrom: red, colorTo: red, params: .zero),
                                SegmentGPU(from: outer, to: outer, colorFrom: blue, colorTo: blue, params: .zero)])
-        renderer.writeEmphasis([1.5, 1.5], tintShares: [1, 1], top: top)
+        // The inner one pointed at, all the way lifted; the outer one halfway back down.
+        renderer.writeEmphasis([2, 1.5], tintShares: [1, 1], top: top)
 
         let side = 400
         let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: SunburstRenderer.outputFormat, width: side, height: side, mipmapped: false)
@@ -88,8 +89,9 @@ final class ShaderTests: XCTestCase {
         commands.commit()
         commands.waitUntilCompleted()
 
-        // The inner one ends 90 pixels out and is lifted 4 more. Halfway into that, in the middle of its arc.
-        let x = 200 + Int((sin(Float(1)) * 92).rounded()), y = 200 - Int((cos(Float(1)) * 92).rounded())
+        // The inner one ends 90 pixels out and is lifted 8 more. Halfway into that, in the middle of its arc, clear of both
+        // pieces' borders.
+        let x = 200 + Int((sin(Float(1)) * 94).rounded()), y = 200 - Int((cos(Float(1)) * 94).rounded())
         var pixel = [Float16](repeating: 0, count: 4)
         target.getBytes(&pixel, bytesPerRow: 4 * MemoryLayout<Float16>.stride, from: MTLRegionMake2D(x, y, 1, 1), mipmapLevel: 0)
         return SIMD4(Float(pixel[0]), Float(pixel[1]), Float(pixel[2]), Float(pixel[3]))

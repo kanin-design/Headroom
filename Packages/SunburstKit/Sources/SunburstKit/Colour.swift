@@ -137,19 +137,24 @@ public struct BranchColours<Tree: SunburstTree> {
         colours.reserveCapacity(2048)
     }
 
-    /// Every branch in view painted, biggest first: what's directly in the node in the middle, each with the next colour that
-    /// isn't close to the one before it.
-    public init(tree: Tree, focus: UInt32 = 0) {
+    /// Every branch in view painted, biggest first: what's directly in the node in the middle, each with the palette's next
+    /// colour that isn't close to the one before it. A branch under `quietBelow` of the node in the middle is quiet slate
+    /// instead, so the eye goes to the big ones and the ring isn't a rainbow of slivers; 0 gives every branch a colour.
+    public init(tree: Tree, focus: UInt32 = 0, palette: SunburstPalette = .spectrum, quietBelow: Double = 0.015) {
         self.init(tree: tree, smallest: tree.size(of: focus) / 4000)
-        var previous: Float?
+        var previous: Int?
         var next = 0
+        let quiet = Double(tree.size(of: focus)) * quietBelow
         for item in RingLayout.visibleChildren(tree: tree, of: focus).kids where tree.size(of: item) > smallest {
             if tree.role(of: item).isSpace { continue }
-            while previous.map({ SunburstHues.apart(SunburstHues.hue(next), $0) < SunburstHues.neighbourGap }) == true { next += 1 }
-            let hue = SunburstHues.hue(next)
-            previous = hue
+            if Double(tree.size(of: item)) < quiet {
+                paint(item, colour: Lab(lch: 0.46, 0.032, 255))
+                continue
+            }
+            while previous.map({ palette.tooClose(next, $0) }) == true { next += 1 }
+            previous = next
+            paint(item, palette: palette, index: next)
             next += 1
-            paint(item, hue: hue)
         }
     }
 
@@ -208,6 +213,44 @@ public struct BranchColours<Tree: SunburstTree> {
         }
     }
 
+    /// A branch in a set colour: the node in `colour`, and everything in it a little lighter each ring out and drifting a
+    /// little around its hue, as `paint(_:hue:)` does, but keeping the colour's own lightness and chroma.
+    public mutating func paint(_ id: UInt32, colour: Lab, depth: Int = 0, step: Int = 0) {
+        let isFile = !tree.isFolder(id)
+        let hue = atan2(colour.b, colour.a) * 180 / .pi
+        var lightness = colour.l + 0.022 * Float(depth) + (step % 2 == 0 ? 0.018 : -0.018)
+        var strength = max(1 - 0.05 * Float(depth), 0.7)
+        if isFile {
+            lightness += 0.07
+            strength = min(strength * 1.12, 1.03)
+        }
+        colours[id] = Lab(lch: min(lightness, 0.93), strength * colour.chroma, hue)
+
+        guard !isFile, tree.firstChild(of: id) != 0, depth < branchDrift.count else { return }
+        let reach = branchDrift[depth]
+        let parentSize = Float(max(tree.size(of: id), 1))
+        var before: UInt64 = 0
+        var index = 0
+        var c = tree.firstChild(of: id)
+        while c != 0 {
+            let size = tree.size(of: c)
+            if size <= smallest { break }
+            let middle = (Float(before) + Float(size) / 2) / parentSize
+            paint(c, colour: Lab(lch: colour.l, colour.chroma, hue + (middle - 0.5) * 2 * reach), depth: depth + 1, step: index)
+            before &+= size
+            index += 1
+            c = tree.nextSibling(of: c)
+        }
+    }
+
+    /// A branch in the colour at this place in a palette's order.
+    public mutating func paint(_ id: UInt32, palette: SunburstPalette, index: Int) {
+        switch palette.kind {
+        case .dynamic: paint(id, hue: palette.hue(index))
+        case .fixed: paint(id, colour: palette.colour(index))
+        }
+    }
+
     /// A branch in quiet slate, with just enough difference to tell the pieces apart, such as what belongs to the system.
     public mutating func paintQuietly(_ id: UInt32, depth: Int = 0) {
         colours[id] = Lab(lch: 0.38 + 0.03 * Float(depth), 0.014, 255)
@@ -239,6 +282,100 @@ public enum SunburstHues {
     }
 }
 
+/// The colours branches take, in order: generated from a range of hues (dynamic), or a set list of colours (fixed). Depth,
+/// drift and the quiet slate of what belongs to the system work the same in every palette.
+public struct SunburstPalette: Sendable, Hashable, Identifiable {
+    public enum Kind: Sendable, Hashable {
+        /// Generated: hues spread over `from` through `through` degrees (past 360 to wrap), each at its best lightness.
+        case dynamic(from: Float, through: Float)
+        /// These colours in order, then again from the first, as OKLab lightness, a and b.
+        case fixed([SIMD3<Float>])
+    }
+
+    /// A short, stable name, for keeping a choice and for menus.
+    public let id: String
+    public let name: String
+    public let kind: Kind
+
+    public init(id: String, name: String, kind: Kind) {
+        self.id = id
+        self.name = name
+        self.kind = kind
+    }
+
+    /// A fixed palette of these colours, in order.
+    public static func fixed(id: String, name: String, _ colours: [Lab]) -> SunburstPalette {
+        SunburstPalette(id: id, name: name, kind: .fixed(colours.map { SIMD3($0.l, $0.a, $0.b) }))
+    }
+
+    /// The hue at this place in a dynamic palette's order. The whole wheel steps a golden angle at a time
+    /// (`SunburstHues`); a range is filled evenly the same way.
+    public func hue(_ index: Int) -> Float {
+        switch kind {
+        case .dynamic(let from, let through):
+            let span = through - from
+            if span >= 359.9 { return SunburstHues.hue(index) }
+            let place = (0.5 + Float(index) * 0.618034).truncatingRemainder(dividingBy: 1)
+            return from + span * place
+        case .fixed:
+            return atan2(colour(index).b, colour(index).a) * 180 / .pi
+        }
+    }
+
+    /// The colour at this place in the order, as it's drawn for the first ring.
+    public func colour(_ index: Int) -> Lab {
+        switch kind {
+        case .dynamic:
+            let h = hue(index), l = Lab.spectrumLightness(h)
+            return Lab(lch: l, 0.95 * Lab.strongestChroma(lightness: l, hue: h), h)
+        case .fixed(let colours):
+            guard !colours.isEmpty else { return Lab(lch: 0.38, 0.014, 255) }
+            let c = colours[((index % colours.count) + colours.count) % colours.count]
+            return Lab(l: c.x, a: c.y, b: c.z)
+        }
+    }
+
+    /// Whether the colours at two places in the order are too alike to sit next to each other on the ring.
+    public func tooClose(_ i: Int, _ j: Int) -> Bool {
+        switch kind {
+        case .dynamic(let from, let through):
+            return SunburstHues.apart(hue(i), hue(j)) < min(SunburstHues.neighbourGap, (through - from) * 0.2)
+        case .fixed(let colours):
+            return colours.count > 1 && (i - j) % colours.count == 0
+        }
+    }
+
+    /// Each branch its own hue from the whole wheel, a golden angle from the one before: the default.
+    public static let spectrum = SunburstPalette(id: "spectrum", name: "Spectrum", kind: .dynamic(from: 0, through: 360))
+    /// Teal through blue and violet to magenta.
+    public static let cool = SunburstPalette(id: "cool", name: "Cool", kind: .dynamic(from: 165, through: 330))
+    /// Rose through red and orange to amber.
+    public static let warm = SunburstPalette(id: "warm", name: "Warm", kind: .dynamic(from: 345, through: 455))
+    /// Okabe and Ito's colours, told apart with any colour vision.
+    public static let colourBlindSafe = fixed(id: "okabe-ito", name: "Colour-Blind Safe", [
+        Lab(lch: 0.753, 0.158, 76.8),   // orange
+        Lab(lch: 0.735, 0.117, 236.2),  // sky blue
+        Lab(lch: 0.621, 0.170, 47.5),   // vermillion
+        Lab(lch: 0.620, 0.130, 165.5),  // bluish green
+        Lab(lch: 0.679, 0.118, 346.3),  // reddish purple
+        Lab(lch: 0.902, 0.172, 105.0),  // yellow
+        Lab(lch: 0.532, 0.131, 244.0),  // blue
+    ])
+    /// Soft, light colours.
+    public static let pastel = fixed(id: "pastel", name: "Pastel", [
+        Lab(lch: 0.80, 0.085, 20), Lab(lch: 0.82, 0.075, 200), Lab(lch: 0.86, 0.080, 95), Lab(lch: 0.78, 0.085, 300),
+        Lab(lch: 0.84, 0.075, 150), Lab(lch: 0.82, 0.080, 60), Lab(lch: 0.78, 0.080, 250),
+    ])
+    /// One blue, told apart by lightness.
+    public static let mono = fixed(id: "mono", name: "Mono", [
+        Lab(lch: 0.64, 0.12, 258), Lab(lch: 0.78, 0.09, 252), Lab(lch: 0.54, 0.13, 262), Lab(lch: 0.71, 0.11, 255),
+        Lab(lch: 0.85, 0.07, 248), Lab(lch: 0.58, 0.12, 260),
+    ])
+
+    /// The palettes the kit comes with, dynamic first.
+    public static let all: [SunburstPalette] = [.spectrum, .cool, .warm, .colourBlindSafe, .pastel, .mono]
+}
+
 /// Which hue each branch has, by name, kept from one picture to the next so a branch keeps its colour however sizes
 /// change. The app keeps `indices` between launches; it's a plain dictionary of name to place in `SunburstHues`' order.
 public struct HueMemory: Sendable, Equatable {
@@ -264,5 +401,18 @@ public struct HueMemory: Sendable, Equatable {
         used.insert(next)
         changed = true
         return SunburstHues.hue(next)
+    }
+
+    /// The place in a palette's order for a branch called `name`, next on the ring after the one at `previous`: the place it
+    /// had, or else the first free one whose colour isn't close to the one before it. Paint it with
+    /// `BranchColours.paint(_:palette:index:)`.
+    public mutating func index(for name: String, after previous: Int?, in palette: SunburstPalette) -> Int {
+        if let known = indices[name] { return known }
+        var next = 0
+        while used.contains(next) || previous.map({ palette.tooClose(next, $0) }) == true { next += 1 }
+        indices[name] = next
+        used.insert(next)
+        changed = true
+        return next
     }
 }

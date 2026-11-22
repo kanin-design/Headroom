@@ -324,14 +324,14 @@ public enum LabelPlacer {
         let measured = ceil((text as NSString).size(withAttributes: [.font: font.font]).width)
         widths.withLock { known in
             // Enough for every name a window shows at once, many times over; past that it starts again.
-            if known.reduce(0, { $0 + $1.count }) > 8192 { known = Array(repeating: [:], count: 4) }
+            if known.reduce(0, { $0 + $1.count }) > 8192 { known = Array(repeating: [:], count: 6) }
             known[font.rawValue][text] = measured
         }
         return measured
     }
 
     /// Widths measured so far, for each font.
-    private static let widths = OSAllocatedUnfairLock(initialState: [[String: CGFloat]](repeating: [:], count: 4))
+    private static let widths = OSAllocatedUnfairLock(initialState: [[String: CGFloat]](repeating: [:], count: 6))
 
     /// Where a box of this size fits inside a piece: its middle if possible, otherwise slid along the arc to where the
     /// ring runs closer to level. A name that fits nearby is better than one out at the side. `outward` moves the box out
@@ -420,7 +420,7 @@ public enum LabelPlacer {
     /// Names inside the pieces, biggest first, wherever they fit. `name` says what a piece is called and what it holds, or
     /// nil to leave it unnamed. A split drawn as a ring has its two sides always named, just either side of six o'clock.
     /// Nothing is named on a band: it's too thin, and the centre says what's pointed at.
-    public static func inside(layout: RingLayout, order: [Int], area: LabelArea, named: inout Placed,
+    public static func inside(layout: RingLayout, order: [Int], area: LabelArea, named: inout Placed, short: ShortNames = ShortNames(),
                               name: (Piece) -> (title: String, value: String)?) -> [SunburstLabel] {
         let halves = layout.levels.first.map { $0.part == .split && !$0.isThin } ?? false
         let sides = halves ? layout.pieces.lazy.filter { $0.ring == 0 }.count : 0
@@ -428,41 +428,69 @@ public enum LabelPlacer {
         guard R > 0, !layout.pieces.isEmpty else { return [] }
         // The first ring of things, past a band or a split: its names are set straight.
         let firstRing = layout.levels.firstIndex { !$0.isThin && $0.part != .split } ?? 0
-        var out: [SunburstLabel] = []
+        // The pieces that could be named, with what they'd say.
+        var candidates: [(index: Int, said: (title: String, value: String), forms: [String])] = []
+        var seen = Set<UInt32>()
         for i in order.prefix(160) {
             let p = layout.pieces[i]
-            if p.isSmaller || p.ring > 3 || named.nodes.contains(p.node) { continue }
+            // The outer rings are for the shape: names go on the first few, where there's room to read them.
+            if p.isSmaller || p.ring > 3 || named.nodes.contains(p.node) || seen.contains(p.node) { continue }
             if Int(p.ring) < layout.levels.count, layout.levels[Int(p.ring)].isThin, !p.isSpace { continue }
             guard let said = name(p) else { continue }
+            seen.insert(p.node)
+            candidates.append((i, said, short.forms(of: i, full: said.title)))
+        }
+
+        /// The name, written as `title`, where it fits on its piece, or nil.
+        func place(_ i: Int, _ title: String, _ value: String) -> SunburstLabel? {
+            let p = layout.pieces[i]
             let isFree = p.role == .room
             // A ghost is drawn faint, whatever its colour, so its name is light like on the dark parts.
             let isHidden = p.role == .unreadable || p.role == .gone
-            // Free space's name is written larger, and measured as it's drawn.
-            let w = isFree ? max(width(said.title, .largeTitle), width(said.value, .largeValue)) + 2
-                           : max(width(said.title, .title), width(said.value, .value)) + 2
-            let h: CGFloat = isFree ? 34 : 31
             // Free space reads best out in the open part of the wedge, away from the crowded middle.
             let outward: CGFloat = isFree ? 1.08 : 1
             let halfSpot: CGFloat? = halves && layout.focus == 0 && p.ring == 0 ? sideSpot(p, sides: sides) : nil
             let dark = !isFree && !isHidden && isBright(p.color)
-            let straight = halfSpot ?? fit(w: w, h: h, piece: p, radius: R, outward: outward)
             // The first ring is named straight, as it always was. From the second ring out the pieces are bands, and a
             // name runs clockwise along its band, as its neighbours' do; straight only where it doesn't fit that way.
             let curves = Int(p.ring) > firstRing && !isFree && halfSpot == nil
-            if curves, let arc = along(title: said.title, value: said.value, piece: p, area: area) {
-                out.append(SunburstLabel(id: p.key, pieceIndex: i, node: p.node, title: said.title, value: said.value,
-                                    position: point(area, arc.angle, arc.radius), anchor: .zero, elbow: .zero, place: .along,
-                                    dark: dark, large: false, arc: arc))
-            } else if let angle = straight {
-                let rm = CGFloat(p.r0 + p.r1) * 0.5 * R * outward
-                out.append(SunburstLabel(id: p.key, pieceIndex: i, node: p.node, title: said.title, value: said.value,
-                                    position: point(area, angle, rm), anchor: .zero, elbow: .zero, place: .inside,
-                                    dark: dark, large: isFree))
-            } else {
-                continue
+            if curves, let arc = along(title: title, value: value, piece: p, area: area) {
+                return SunburstLabel(id: p.key, pieceIndex: i, node: p.node, title: title, value: value,
+                                     position: point(area, arc.angle, arc.radius), anchor: .zero, elbow: .zero, place: .along,
+                                     dark: dark, large: false, arc: arc)
             }
-            named.labelled.insert(i)
-            named.nodes.insert(p.node)
+            // Free space's name is written larger, and measured as it's drawn.
+            let w = isFree ? max(width(title, .largeTitle), width(value, .largeValue)) + 2
+                           : max(width(title, .title), width(value, .value)) + 2
+            let h: CGFloat = isFree ? 34 : 31
+            guard let angle = halfSpot ?? fit(w: w, h: h, piece: p, radius: R, outward: outward) else { return nil }
+            let rm = CGFloat(p.r0 + p.r1) * 0.5 * R * outward
+            return SunburstLabel(id: p.key, pieceIndex: i, node: p.node, title: title, value: value,
+                                 position: point(area, angle, rm), anchor: .zero, elbow: .zero, place: .inside,
+                                 dark: dark, large: isFree)
+        }
+
+        // How far each name has to be cut to fit: all of it, or cut around what tells it apart from its neighbours.
+        var firstFit: [Int: Int] = [:]
+        for c in candidates {
+            if let k = c.forms.indices.first(where: { place(c.index, c.forms[$0], c.said.value) != nil }) { firstFit[c.index] = k }
+        }
+        // Neighbours are written alike: as far cut as the one with least room needs.
+        var level: [Int32: Int] = [:]
+        for c in candidates where c.forms.count > 1 {
+            guard let k = firstFit[c.index] else { continue }
+            let parent = layout.pieces[c.index].parent
+            level[parent] = max(level[parent] ?? 0, k)
+        }
+
+        var out: [SunburstLabel] = []
+        for c in candidates {
+            guard let k = firstFit[c.index] else { continue }
+            let alike = c.forms.count > 1 ? min(max(level[layout.pieces[c.index].parent] ?? k, k), c.forms.count - 1) : k
+            guard let label = place(c.index, c.forms[alike], c.said.value) ?? place(c.index, c.forms[k], c.said.value) else { continue }
+            out.append(label)
+            named.labelled.insert(c.index)
+            named.nodes.insert(layout.pieces[c.index].node)
             if out.count >= 44 { break }
         }
         return out
@@ -505,7 +533,9 @@ public enum LabelPlacer {
             if p.isSmaller || p.role == .room || p.ring > 4 || named.nodes.contains(p.node) { continue }
             let share = Double(p.a1 - p.a0) / (2 * .pi)
             if share < 0.015 { continue }
-            if p.ring == 0 && layout.focus == 0 { continue }
+            // What the whole disk is made of is named on itself, except space that can't be read, which is a hatched wedge
+            // too narrow for its name: it's named here, so the sizes add up.
+            if p.ring == 0 && layout.focus == 0 && p.role != .unreadable { continue }
             // A band's segments aren't named: the centre says what's pointed at.
             if Int(p.ring) < layout.levels.count, layout.levels[Int(p.ring)].isThin, !p.isSpace { continue }
             var a = p.parent
@@ -531,7 +561,8 @@ public enum LabelPlacer {
 
     /// Names out at the sides, best first, each with a thin line to its piece, as many as fit. Unless `eachCounts`, a name
     /// just outside a piece that's already named is left out, as it would say nearly the same thing.
-    public static func sides(_ picks: [Pick], layout: RingLayout, area: LabelArea, eachCounts: Bool) -> [SunburstLabel] {
+    public static func sides(_ picks: [Pick], layout: RingLayout, area: LabelArea, eachCounts: Bool,
+                             short: ShortNames = ShortNames()) -> [SunburstLabel] {
         let R = area.radius
         guard R > 0, !layout.pieces.isEmpty else { return [] }
         let cx = area.center.x, cy = area.center.y
@@ -650,8 +681,14 @@ public enum LabelPlacer {
                 // Never back into the ring, and never past the name.
                 let nameEnd = columnX - side * 7
                 bend = right ? min(max(bend, anchor.x + 6), nameEnd - 8) : max(min(bend, anchor.x - 6), nameEnd + 8)
+                // The longest way of writing the name that the column has room for, as the view gives it room.
+                let room = max(right ? area.width - columnX - 6 : columnX - 12, 60)
+                // It may shrink a fifth before it's cut; a name too long even cut short is cut once, in the middle, never
+                // cut again.
+                let forms = short.forms(of: slot.c.index, full: slot.c.title)
+                let title = forms.first { width($0, .title) * 0.82 <= room } ?? slot.c.title
                 // A name that changes sides is a new label, so it fades across instead of flying over the ring.
-                out.append(SunburstLabel(id: p.key ^ (right ? 0xABCD : 0xDCBA) ^ slot.c.salt, pieceIndex: slot.c.index, node: p.node, title: slot.c.title, value: slot.c.value,
+                out.append(SunburstLabel(id: p.key ^ (right ? 0xABCD : 0xDCBA) ^ slot.c.salt, pieceIndex: slot.c.index, node: p.node, title: title, value: slot.c.value,
                                     position: CGPoint(x: columnX, y: slot.y), anchor: anchor, elbow: CGPoint(x: bend, y: slot.y),
                                     place: right ? .right : .left, dark: false, large: false))
             }

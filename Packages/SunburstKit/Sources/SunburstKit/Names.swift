@@ -13,8 +13,12 @@ public protocol SunburstNamer {
     /// Whether a name just outside a piece that's already named is left out, as it would say nearly the same thing.
     /// True by default.
     var leavesOutRepeats: Bool { get }
+    /// Whether the values at the sides are sizes, so each can say its share of what's in the middle after it
+    /// (`SunburstChart.showsShares`). True by default; false where they say something else, such as a change.
+    var valuesAreSizes: Bool { get }
 }
 
 public extension SunburstNamer {
     var leavesOutRepeats: Bool { true }
+    var valuesAreSizes: Bool { true }
 }

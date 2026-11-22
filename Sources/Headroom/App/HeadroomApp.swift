@@ -93,6 +93,28 @@ private struct RingsCommand: View {
     }
 }
 
+/// The map's colours: SunburstKit's palettes, generated ones first, then fixed sets.
+private struct PaletteCommand: View {
+    let model = AppModel.shared
+
+    var body: some View {
+        Menu("Palette") {
+            ForEach(SunburstPalette.all) { palette in
+                Toggle(palette.name, isOn: Binding(get: { model.palette == palette }, set: { _ in model.palette = palette }))
+            }
+        }
+    }
+}
+
+/// Whether the map glows.
+private struct GlowCommand: View {
+    let model = AppModel.shared
+
+    var body: some View {
+        Toggle("Glow", isOn: Binding(get: { model.showsGlow }, set: { model.showsGlow = $0 }))
+    }
+}
+
 /// Up to the folder this one is in, as in the Finder. Like Esc, it lets go of what's selected first.
 private struct EnclosingFolderCommand: View {
     let model = AppModel.shared
@@ -225,6 +247,8 @@ struct HeadroomApp: App {
                 Button("Back to the Whole Disk") { AppModel.shared.go(to: 0) }
                     .keyboardShortcut(.upArrow, modifiers: [.command, .shift])
                 RingsCommand()
+                PaletteCommand()
+                GlowCommand()
                 Divider()
             }
             // Help is the README, where everything is explained. There's no sidebar to toggle.
