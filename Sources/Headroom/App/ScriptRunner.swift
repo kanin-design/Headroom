@@ -262,7 +262,7 @@ enum ScriptRunner {
         "button": .plan,
         "speed": .measuring, "meter": .measuring, "pacing": .measuring, "touch": .measuring, "sweep": .measuring,
         "bench": .measuring, "memory": .measuring, "footprint": .measuring, "gpu": .measuring, "headroom": .measuring,
-        "frames": .measuring, "layers": .measuring, "names": .measuring, "middle": .measuring, "leaks": .measuring, "format": .measuring,
+        "frames": .measuring, "layers": .measuring, "names": .measuring, "middle": .measuring, "stretches": .measuring, "leaks": .measuring, "format": .measuring,
         "panel": .window, "scrolls": .window, "voiceover": .window, "size": .window, "jiggle": .window, "collide": .window,
         "timescale": .window, "shotwindow": .window, "shot": .window, "drawn": .window, "film": .window, "mouse": .window, "click": .window,
         "activate": .window, "float": .window, "hide": .window, "unhide": .window, "minimize": .window, "restore": .window,
@@ -1351,6 +1351,18 @@ enum ScriptRunner {
             }
             if result == KERN_SUCCESS {
                 print(String(format: "memory %@: %.0f MB now, %.0f MB at most", argument, Double(info.phys_footprint) / 1e6, Double(info.ledger_phys_footprint_peak) / 1e6))
+            }
+        case "stretches":
+            // stretches /some/folder: each piece the folder is drawn as, where it is in points, and what's first over it.
+            guard let tree = model.tree, let node = resolve(argument, model) else { print("stretches \(argument): no such folder"); return }
+            let pieces = model.engine.layout.pieces
+            for (i, p) in pieces.enumerated() where p.node == node {
+                let angle = Double(p.a0 + p.a1) / 2, radius = Double(p.r0 + p.r1) / 2 * model.ring.radius
+                let over = i + 1 < pieces.count && pieces[i + 1].parent == Int32(i) ? tree.name(pieces[i + 1].node) : "nothing"
+                print(String(format: "stretch %d of %@: %.0f°-%.0f°, at %.1f %.1f, %@, colour %.2f %.2f %.2f, tail %@, first over it %@", i, argument,
+                             Double(p.a0) * 180 / .pi, Double(p.a1) * 180 / .pi, model.ring.center.x + sin(angle) * radius,
+                             model.ring.center.y - cos(angle) * radius, formatBytes(p.size), p.color.x, p.color.y, p.color.z,
+                             tree.name(p.tail), over))
             }
         case "middle":
             // What the middle of the ring says now, and what's under the pointer.

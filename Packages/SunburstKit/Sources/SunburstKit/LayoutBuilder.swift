@@ -426,7 +426,10 @@ struct RingBuilder<Tree: SunburstTree> {
                 angle += sweep
                 continue
             }
-            // A folder whose contents are in more than one group is drawn as one stretch for each, over what it's made of.
+            // A folder whose contents are in more than one group is drawn as one stretch for each, over what it's made of. Each
+            // is the folder, so by default each is in the folder's colour: in the colour of the first thing over it, a stretch
+            // reads as that thing, which it isn't, and a click on it opens the folder. In a picture coloured by group, the
+            // colour of what's in it is the group's, and that's what it shows.
             if rings.order == .byGroup, parentNode != 0, hasChildren, ring + 2 < edges.count, case .ring = kind,
                case .ring = plan.kind(ring + 1), let runs = runs(of: id, a0: angle, a1: angle + sweep, childLevel: ring + 1) {
                 let marked: Float = marker?(id) == true ? 1 : 0
@@ -434,7 +437,8 @@ struct RingBuilder<Tree: SunburstTree> {
                     let at = Int32(layout._pieces.count)
                     layout._pieces.append(Piece(node: id, tail: id, key: key ^ (UInt64(r + 1) << 56), a0: run.a0, a1: run.a1, r0: r0, r1: r1,
                                                 ring: Int32(ring), parent: parentPiece, end: at + 1, isSmaller: false, smallerCount: 0,
-                                                color: run.color, role: role, isShared: shared, seed: seed, size: run.bytes, marked: marked,
+                                                color: rings.stretchColours == .contents ? run.color : color, role: role, isShared: shared,
+                                                seed: seed, size: run.bytes, marked: marked,
                                                 isStretch: true))
                     let start = lists.buffer.count
                     lists.buffer.append(contentsOf: run.kids)
@@ -483,8 +487,9 @@ struct RingBuilder<Tree: SunburstTree> {
         around[level] += sweep
     }
 
-    /// One stretch of a folder cut by group: the things in it, its share of the folder, and its colour, which is that of the
-    /// first thing in it. The last stretch also holds what's too small to draw and the folder's own files.
+    /// One stretch of a folder cut by group: the things in it and its share of the folder. The last stretch also holds
+    /// what's too small to draw and the folder's own files. Its colour is the first thing in it's, for when the stretch takes
+    /// the colour of what's in it.
     @usableFromInline
     struct Run {
         @usableFromInline var kids: [UInt32]

@@ -1013,7 +1013,8 @@ final class AppModel {
         let planned = mode == .backup ? backupPlanned() : plannedTest()
         chart.change(transition) {
             chart.tree = MapTree(tree, after: after)
-            chart.parts = tree.parts(ringSizes)
+            // On both disks, Backed Up colours by where things are, so a folder's stretches show their place's colour.
+            chart.parts = tree.parts(ringSizes, byPlace: showsPair && view == .copies)
             chart.isMarked = after == nil ? planned : nil
             chart.calmsTinyPieces = view == .map || showsPair
             if repoint { chart.refreshPointer() }

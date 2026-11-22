@@ -38,8 +38,14 @@ extension DiskTree {
     /// the system), with free space and what's hidden closing the circle. Backup's two sides are a split, thin as that band
     /// is, so the two disks frame their folders the same way; the dial counts each side from 0 to 100%, and the folders are
     /// ordered and cut by where their files are.
-    func parts(_ sizes: RingSizes) -> SunburstParts {
-        if twoSides { return SunburstParts(split: .band, rings: .init(sizes, order: .byGroup), dial: .init(counts: .eachSide)) }
+    ///
+    /// A folder cut by place is drawn as one stretch for each place. Coloured by place (`byPlace`), each stretch shows its
+    /// place's colour; otherwise each is in the folder's own colour, as the folder it is.
+    func parts(_ sizes: RingSizes, byPlace: Bool = false) -> SunburstParts {
+        if twoSides {
+            return SunburstParts(split: .band, rings: .init(sizes, order: .byGroup, stretchColours: byPlace ? .contents : .folder),
+                                 dial: .init(counts: .eachSide))
+        }
         // While a scan is running, the big groups keep their places instead of swapping as they fill up.
         var band = SunburstParts.Band()
         if isPartial {
@@ -86,10 +92,11 @@ struct MapTree: SunburstTree {
 }
 
 extension RingLayout {
-    /// The picture of the disk, or of the disk as it will be after the plan has run, in Headroom's parts.
+    /// The picture of the disk, or of the disk as it will be after the plan has run, in Headroom's parts. `byPlace` is for
+    /// both disks coloured by where things are, as Backed Up colours them.
     static func build(tree: DiskTree, focus: UInt32, colorer: Colorer, marked: Marker? = nil, after: AfterPlan? = nil,
-                      sizes: RingSizes = .saved) -> RingLayout {
-        let parts = tree.parts(sizes)
+                      sizes: RingSizes = .saved, byPlace: Bool = false) -> RingLayout {
+        let parts = tree.parts(sizes, byPlace: byPlace)
         if let after { return build(tree: MapTree(tree, after: after), focus: focus, parts: parts, colorer: colorer, marked: marked) }
         return build(tree: tree, focus: focus, parts: parts, colorer: colorer, marked: marked)
     }

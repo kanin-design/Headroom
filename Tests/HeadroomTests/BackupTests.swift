@@ -366,7 +366,7 @@ final class BackupTests: XCTestCase {
                                                    notes: [], ghosts: false))
         let tree = pair.tree
         XCTAssertTrue(tree.twoSides)
-        let layout = RingLayout.build(tree: tree, focus: 0, colorer: { pair.colour($0) })
+        let layout = RingLayout.build(tree: tree, focus: 0, colorer: { pair.colour($0) }, byPlace: true)
         let halves = layout.pieces.filter { $0.ring == 0 }
         XCTAssertEqual(halves.map(\.node), [pair.driveSide, pair.macSide], "the drive's half, then the Mac's")
         XCTAssertEqual(halves[0].sweep, halves[1].sweep, accuracy: 0.0001, "each half is half, whatever it holds")
@@ -377,6 +377,11 @@ final class BackupTests: XCTestCase {
         XCTAssertEqual(stretches.count, 2)
         XCTAssertEqual(stretches[0].element.color, PairPlace.both.colour, "what's on both comes first")
         XCTAssertEqual(stretches[1].element.color, PairPlace.onlyMac.colour)
+        // In Map's colours, each stretch is Season, in Season's colour, not that of the first thing over it.
+        let inMap = RingLayout.build(tree: tree, focus: 0, colorer: { pair.colour($0) })
+        let mapStretches = inMap.pieces.filter { $0.node == season && $0.ring == 1 }
+        XCTAssertEqual(mapStretches.count, 2)
+        XCTAssertTrue(mapStretches.allSatisfy { $0.color == pair.colour(season) })
         for (index, stretch) in stretches {
             let inside = layout.pieces.filter { $0.parent == Int32(index) }
             XCTAssertEqual(inside.count, 1, "each stretch holds its own file")

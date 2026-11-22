@@ -96,9 +96,18 @@ public extension SunburstParts {
             /// Biggest first.
             case bySize
             /// By the tree's groups (`SunburstTree.group(of:)`) first, then biggest first. A folder whose contents fall in
-            /// more than one group is drawn as one stretch for each, coloured by the first thing in it, so each group's
+            /// more than one group is drawn as one stretch for each (coloured as `stretchColours` says), so each group's
             /// things line up across the rings.
             case byGroup
+        }
+
+        /// The colour of each stretch a folder cut by group is drawn as.
+        public enum StretchColours: Sendable, Equatable {
+            /// The folder's own: each stretch is the folder. For a picture coloured by what things are, where the colour of
+            /// what's in a stretch would make it read as that thing.
+            case folder
+            /// The colour of what's in it: for a picture coloured by group, where that's the group's colour.
+            case contents
         }
 
         /// How many rings, and how thick.
@@ -111,13 +120,17 @@ public extension SunburstParts {
         /// what's selected and what isn't. What's inside it is drawn under the whole piece. Nil, or nil for a node, for one
         /// piece. A node drawn in stretches isn't also cut by groups.
         public var cuts: (@Sendable (UInt32) -> [SunburstStretch]?)?
+        /// With `byGroup`, the colour of each stretch of a folder cut by group: the folder's (the default), or that of what's
+        /// in it.
+        public var stretchColours: StretchColours
 
         public init(_ sizes: RingSizes = RingSizes(), order: Order = .bySize, keep: (@Sendable (UInt32) -> Bool)? = nil,
-                    cuts: (@Sendable (UInt32) -> [SunburstStretch]?)? = nil) {
+                    cuts: (@Sendable (UInt32) -> [SunburstStretch]?)? = nil, stretchColours: StretchColours = .folder) {
             self.sizes = sizes
             self.order = order
             self.keep = keep
             self.cuts = cuts
+            self.stretchColours = stretchColours
         }
     }
 

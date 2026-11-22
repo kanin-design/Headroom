@@ -235,13 +235,23 @@ final class LayoutTests: XCTestCase {
         tree.nodes[Int(tree.node("top/f/a"))].group = 1
         tree.nodes[Int(tree.node("top/f/b"))].group = 0
         tree.nodes[Int(tree.node("top/f/c"))].group = 1
-        let colours: [UInt32: SIMD3<Float>] = [tree.node("top/f/a"): [1, 0, 0], tree.node("top/f/b"): [0, 1, 0], tree.node("top/f/c"): [0, 0, 1]]
+        let colours: [UInt32: SIMD3<Float>] = [tree.node("top/f"): [1, 1, 0], tree.node("top/f/a"): [1, 0, 0], tree.node("top/f/b"): [0, 1, 0],
+                                               tree.node("top/f/c"): [0, 0, 1]]
         let layout = RingLayout.build(tree: tree, focus: 0, parts: tree.parts, colorer: { colours[$0] ?? .zero })
         let f = tree.node("top/f")
         let stretches = layout.pieces.filter { $0.node == f && !$0.isSmaller }
         XCTAssertEqual(stretches.count, 2, "one stretch for each group")
-        XCTAssertEqual(stretches[0].color, [0, 1, 0], "group 0 first, coloured by the first thing in it")
-        XCTAssertEqual(stretches[1].color, [1, 0, 0])
+        // Each stretch is the folder, so each is in the folder's colour: in the colour of what's first over it, it would
+        // read as that.
+        XCTAssertEqual(stretches[0].color, [1, 1, 0])
+        XCTAssertEqual(stretches[1].color, [1, 1, 0])
+        XCTAssertEqual(layout.pieces[layout.pieces.firstIndex { $0.key == stretches[0].key }! + 1].node, tree.node("top/f/b"), "group 0 first")
+        // Coloured by group, each stretch shows the colour of what's in it, which is its group's.
+        var byGroup = tree.parts
+        byGroup.rings.stretchColours = .contents
+        let grouped = RingLayout.build(tree: tree, focus: 0, parts: byGroup, colorer: { colours[$0] ?? .zero })
+            .pieces.filter { $0.node == f && !$0.isSmaller }
+        XCTAssertEqual(grouped.map(\.color), [[0, 1, 0], [1, 0, 0]])
         XCTAssertNotEqual(stretches[0].key, stretches[1].key)
         let inSecond = layout.pieces[(layout.pieces.firstIndex { $0.key == stretches[1].key }! + 1)...].prefix(2).map(\.node)
         XCTAssertEqual(inSecond, [tree.node("top/f/a"), tree.node("top/f/c")])
