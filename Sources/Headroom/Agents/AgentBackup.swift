@@ -73,7 +73,7 @@ enum AgentBackup {
             throw AgentFailure("No such drive connected: \(wanted). Connected: " + model.drives.map(\.name).joined(separator: ", "))
         }
         if let why = model.whyNotDestination(drive) {
-            throw AgentFailure(why == "On the left" ? "That's the disk Headroom is showing. Choose another drive." : "\(drive.name) is \(why.lowercased()).")
+            throw AgentFailure(why == "Disk shown" ? "That's the disk Headroom is showing. Choose another drive." : "\(drive.name) is \(why.lowercased()).")
         }
         guard !model.isCleaning else { throw AgentFailure("Headroom is busy. Try again when it's done.") }
         var folder = (arguments["folder"] as? String ?? "").trimmingCharacters(in: CharacterSet(charactersIn: "/"))

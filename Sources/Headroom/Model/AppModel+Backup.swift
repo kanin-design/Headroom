@@ -116,8 +116,8 @@ extension AppModel {
 
     /// Why a drive can't be where Backup's files go, or nil when it can.
     func whyNotDestination(_ drive: DriveInfo) -> String? {
-        if let source = sourceDrive, drive.isSame(as: source) { return "On the left" }
-        if drive.mountPath == volume?.mountPath { return "On the left" }
+        if let source = sourceDrive, drive.isSame(as: source) { return "Disk shown" }
+        if drive.mountPath == volume?.mountPath { return "Disk shown" }
         if drive.isReadOnly { return "Read-only" }
         return nil
     }
@@ -154,7 +154,7 @@ extension AppModel {
         let real = PathMath.canonical(path)
         guard let holder = DriveInfo.holding(real) else { return "That folder isn't there." }
         switch whyNotDestination(holder) {
-        case "On the left"?: return "Choose a folder on another disk."
+        case "Disk shown"?: return "Choose a folder on another disk."
         case let why?: return "\(holder.name) is \(why.lowercased())."
         case nil: break
         }
@@ -270,7 +270,7 @@ extension AppModel {
     func backupReady() -> (items: [BackupItem], problem: String?) {
         guard let destination = backup.destination else { return ([], "Choose a drive") }
         guard let drive = connected(destination.drive) else { return ([], "Connect \(destination.drive.name)") }
-        if let why = whyNotDestination(drive) { return ([], why == "On the left" ? "Choose another drive" : why) }
+        if let why = whyNotDestination(drive) { return ([], why == "Disk shown" ? "Choose another drive" : why) }
         var items = backup.items.filter { FileManager.default.fileExists(atPath: $0.path) }
         if let largest = drive.largestFile, items.contains(where: { $0.bytes > largest }) {
             items.removeAll { $0.bytes > largest }

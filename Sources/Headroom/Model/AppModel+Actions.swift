@@ -568,7 +568,7 @@ extension AppModel {
         let pieces = engine.layout.pieces
         let hovered = hover.flatMap { $0.pieceIndex < pieces.count && !pieces[$0.pieceIndex].isSmaller ? NamedThing($0.node) : nil }
         guard let thing = pointedThing ?? hovered ?? look.map({ NamedThing($0.node) }) else {
-            showTip("Point at something first")
+            showTip("Point to an item first")
             return
         }
         toggleSelection(of: thing)

@@ -231,7 +231,7 @@ extension AppModel {
             let theirs = rows(of: items, saying: "Selected by \(name).", all: true).sorted { $0.bytes > $1.bytes }
             if !theirs.isEmpty { boxes.append(Box(id: "agent:" + name, title: "Selected by \(name)", detail: count(theirs) + unlisted(items), color: Palette.Box.hand, rows: theirs)) }
         }
-        let own = rows(of: picked.filter { $0.agent == nil }, saying: "Selected on the ring.", all: false)
+        let own = rows(of: picked.filter { $0.agent == nil }, saying: "Selected by you.", all: false)
         if !own.isEmpty { boxes.append(Box(id: "hand", title: "Selected manually", detail: count(own), color: Palette.Box.hand, rows: own)) }
         return boxes
     }
