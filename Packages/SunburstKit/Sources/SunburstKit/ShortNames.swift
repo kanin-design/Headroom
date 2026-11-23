@@ -49,6 +49,12 @@ public struct ShortNames: Sendable {
         return list
     }
 
+    /// The forms of names that sit side by side in a list, in the same order: for each, the name itself, then shorter ways
+    /// to write it, longest first. `around` is the names of the folders they're in, which the names needn't repeat.
+    public static func forms(of names: [String], around: [String] = []) -> [[String]] {
+        forms(names, around: around.map(words))
+    }
+
     // MARK: Working them out
 
     struct Token: Equatable, Sendable {

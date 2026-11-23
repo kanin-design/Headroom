@@ -168,13 +168,17 @@ struct BackupPanel: View {
                 EmptyNote(title: model.workTree?.isPartial == true ? "Waiting for the scan"
                           : model.backupCandidates().isEmpty ? "No files over \(formatBytes(BackupState.smallest)) here" : "Nothing else here")
             }
-            ForEach(rows.prefix(80), id: \.self) { node in
+            let shown = Array(rows.prefix(80))
+            let names = model.workTree.map { tree in shown.map { tree.name($0) } } ?? []
+            let forms = Dictionary(zip(shown, ListNames.forms(names)), uniquingKeysWith: { a, _ in a })
+            ForEach(shown, id: \.self) { node in
                 if let tree = model.workTree, let path = tree.path(node) {
                     let visible = PathMath.visible(path)
                     let when = tree.newest[Int(node)]
-                    FileRow(title: tree.name(node),
-                            detail: DiskTree.friendly((visible as NSString).deletingLastPathComponent)
-                                + (when > 0 ? " · " + LastUse.ago(Date(timeIntervalSince1970: TimeInterval(when)), now: Date()) : ""),
+                    let age = when > 0 ? " · " + LastUse.ago(Date(timeIntervalSince1970: TimeInterval(when)), now: Date()) : ""
+                    let folders = ListNames.folderForms(DiskTree.friendly((visible as NSString).deletingLastPathComponent))
+                    FileRow(title: tree.name(node), titles: forms[node] ?? [],
+                            detail: folders[0] + age, details: folders.map { $0 + age },
                             trailing: formatBytes(tree.totals[Int(node)]),
                             onTap: model.isCleaning ? nil : { model.selectForBackup([visible]) }) {
                         TickMark(false, color: Kit.blue)
@@ -212,10 +216,14 @@ struct BackupPanel: View {
                     .help("Check each moved file on its drive")
                     .padding(.leading, Kit.rowInset)
                     .padding(.bottom, 2)
+                let forms = Dictionary(zip(model.movedNotes.map(\.notePath), ListNames.forms(model.movedNotes.map(\.name))),
+                                       uniquingKeysWith: { a, _ in a })
                 ForEach(model.movedNotes, id: \.notePath) { note in
                     let connected = model.drive(of: note) != nil
-                    FileRow(title: note.name,
-                            detail: "\(note.driveName)\(connected ? "" : " · not connected") · \(DiskTree.friendly((note.originalPath as NSString).deletingLastPathComponent))",
+                    let on = "\(note.driveName)\(connected ? "" : " · not connected") · "
+                    let folders = ListNames.folderForms(DiskTree.friendly((note.originalPath as NSString).deletingLastPathComponent))
+                    FileRow(title: note.name, titles: forms[note.notePath] ?? [],
+                            detail: on + folders[0], details: folders.map { on + $0 },
                             trailing: formatBytes(note.size)) {
                         Image(systemName: "externaldrive")
                             .font(.system(size: 12))
@@ -346,13 +354,14 @@ private struct PickList: View {
             .map { (folder: $0.key, picks: $0.value.sorted { $0.bytes > $1.bytes }, bytes: $0.value.reduce(UInt64(0)) { $0 &+ $1.bytes }) }
             .sorted { $0.bytes > $1.bytes }
             .map { FolderGroup(folder: $0.folder, items: $0.picks, trailing: "\($0.picks.count) · \(formatBytes($0.bytes))") }
+        let forms = Self.forms(groups)
         FolderGroups(groups: groups, openAtFirst: picks.count <= 10, folderName: folderName, menu: { group in
             AnyView(Group {
                 Button("Show in Finder") { NSWorkspace.shared.open(URL(fileURLWithPath: group.folder)) }
                 Button("Deselect") { deselect(group.items) }.disabled(!enabled)
             })
         }) { pick in
-            FileRow(title: pick.title, warning: pick.warning, trailing: formatBytes(pick.bytes), onTap: enabled ? { pick.deselect() } : nil) {
+            FileRow(title: pick.title, titles: forms[pick.path] ?? [], warning: pick.warning, trailing: formatBytes(pick.bytes), onTap: enabled ? { pick.deselect() } : nil) {
                 TickMark(true, color: Kit.blue)
                     .help("Deselect")
             }
@@ -362,6 +371,16 @@ private struct PickList: View {
                 if let keep = pick.keep { Button("Keep on Mac", action: keep) }
             }
         }
+    }
+
+    /// Each file's name cut where the others in its folder say the same, by its path.
+    private static func forms(_ groups: [FolderGroup<Pick>]) -> [String: [String]] {
+        var forms: [String: [String]] = [:]
+        for group in groups {
+            let lists = ListNames.forms(group.items.map(\.title), around: [(group.folder as NSString).lastPathComponent])
+            for (pick, list) in zip(group.items, lists) { forms[pick.path] = list }
+        }
+        return forms
     }
 }
 
@@ -483,11 +502,17 @@ private struct JobList: View {
             return FolderGroup(folder: folder, items: lines, trailing: "\(done) of \(lines.count)",
                                trailingColour: done == lines.count ? .white.opacity(0.6) : .white.opacity(0.45), isFlagged: failed)
         }
+        // Each file's name cut where the others in its folder say the same.
+        var forms: [Int: [String]] = [:]
+        for group in groups {
+            let lists = ListNames.forms(group.items.map(\.entry.title), around: [(group.folder as NSString).lastPathComponent])
+            for (line, list) in zip(group.items, lists) { forms[line.index] = list }
+        }
         return FolderGroups(groups: groups, openAtFirst: job.entries.count <= 10, folderName: folderName) { line in
             let entry = line.entry
             // Why it didn't go, right where it says so.
             let why: String? = if case .failed(let why) = entry.step { why } else { nil }
-            FileRow(title: entry.title, warning: why, trailing: StepLook.text(entry), trailingColour: StepLook.colour(entry.step),
+            FileRow(title: entry.title, titles: forms[line.index] ?? [], warning: why, trailing: StepLook.text(entry), trailingColour: StepLook.colour(entry.step),
                     isQuiet: entry.step == .waiting) {
                 StepLook.icon(entry.step)
             }

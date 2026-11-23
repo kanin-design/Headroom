@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import SunburstKit
 
 /// Where a file is, seen from both sides of Backup: the folder you're in on the Mac and the same folder on the drive.
 enum PairPlace: Int, CaseIterable, Codable, Sendable {
@@ -365,13 +366,28 @@ struct PairPicture {
         }
         // Inside each folder: what's on both first, then what's only on one side, then what was moved, then what doesn't match.
         for (node, place) in places { tree.order[node] = place.rank }
+        // The Mac's half is the map's folder, so what's in it keeps the map's keys: switching to Backup folds the map into its
+        // half of the ring, and back, instead of the ring being replaced. A key is the folder's around it, mixed with its
+        // name's, so the half's name key is chosen to make its key the folder's. At the top of the disk the half holds what
+        // the map has in two places, its top and the folder of your files: it takes the keys of the one that holds most.
+        let realOfNode = copied.reduce(into: [UInt32: UInt32]()) { $0[$1.value] = $1.key }
+        var weight: [UInt32: UInt64] = [:]
+        var child = tree.nodes[Int(mac)].firstChild
+        while child != 0 {
+            if let r = realOfNode[child], Int(r) < real.count { weight[real.nodes[Int(r)].parent, default: 0] += tree.totals[Int(child)] }
+            child = tree.nodes[Int(child)].nextSibling
+        }
+        let standsFor = weight.max { $0.value < $1.value }?.key ?? macFolder
+        tree.standIn = (mac, 0)
+        let withoutName = RingLayout.pathKey(MapTree(tree), mac)
+        tree.standIn = (mac, RingLayout.pathKey(MapTree(real), standsFor) ^ withoutName)
         let macTotal = tree.totals[Int(mac)]
         return PairPicture(tree: tree, macSide: mac, driveSide: drive, macPath: macPath, drivePath: drivePath, driveName: driveName,
                            places: places, backedUp: backedUp, counts: counts, macBytes: macTotal &- min(ghostBytes, macTotal), driveBytes: tree.totals[Int(drive)],
                            driveRel: driveFiles.reduce(into: [:]) { $0[$1.value.node] = $1.key }, driveNodes: driveFiles.mapValues(\.node),
                            driveSizes: driveFiles.reduce(into: [:]) { $0[$1.value.node] = $1.value.size },
                            macRel: macFiles.reduce(into: [:]) { $0[$1.value.node] = $1.key }, online: online, readAt: readAt,
-                           realFolder: macFolder, realOf: copied.reduce(into: [:]) { $0[$1.value] = $1.key }, relOf: relOf, macByRel: macByRel,
+                           realFolder: macFolder, realOf: realOfNode, relOf: relOf, macByRel: macByRel,
                            driveByRel: driveFolders.merging(driveFiles.mapValues(\.node)) { a, _ in a })
     }
 
@@ -421,5 +437,27 @@ struct PairPicture {
             tree.finish()
             tree.compactStats()
         }
+    }
+}
+
+/// Which folder both disks are shown at: the folder in the map, and its path on each side.
+struct PairPlaceOnDisks: Equatable {
+    var folder: UInt32
+    var macPath: String
+    var drivePath: String
+}
+
+/// A picture of both disks and what it was made from, to tell whether it still shows what Backup would.
+struct ReadyPair {
+    let real: DiskTree
+    let place: PairPlaceOnDisks
+    let online: Bool
+    let ghosts: Bool
+    /// The moved files' notes it drew, by where each note is.
+    let notes: [String]
+    let picture: PairPicture
+
+    func fits(real other: DiskTree, place: PairPlaceOnDisks, online: Bool, ghosts: Bool, notes: [MovedNote]) -> Bool {
+        real === other && self.place == place && self.online == online && self.ghosts == ghosts && self.notes == notes.map(\.notePath)
     }
 }

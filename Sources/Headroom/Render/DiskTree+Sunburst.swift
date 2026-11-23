@@ -25,6 +25,7 @@ extension DiskTree: SunburstTree {
     }
 
     @inline(__always) func nameKey(of node: UInt32) -> UInt64 {
+        if let standIn, standIn.node == node { return standIn.key }
         let n = nodes[Int(node)]
         return n.nameLength > 0 ? RuleBook.hash(UnsafePointer(names + Int(n.nameOffset)), Int(n.nameLength)) : UInt64(node)
     }

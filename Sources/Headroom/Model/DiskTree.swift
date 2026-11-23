@@ -107,6 +107,10 @@ final class DiskTree: @unchecked Sendable {
     /// The same for every picture of one scan, whose node numbers all mean the same thing.
     var scanID = UUID()
     var displayNames: [UInt32: String] = [:]
+    /// A node drawn in place of a folder of another tree, and the key the ring knows that folder by: what's in it takes the
+    /// keys of what's in that folder, so a picture going from that tree to this one moves those pieces rather than
+    /// replacing them. Backup's Mac half stands in for the map's folder this way.
+    var standIn: (node: UInt32, key: UInt64)?
     /// Files with more than one path, by key, once the scan has finished. See `Accounting`.
     var links: [LinkRecord] = []
     /// Hard-linked files with only one of their paths on the map. A refresh reads their folders again, as it does the
@@ -209,6 +213,7 @@ final class DiskTree: @unchecked Sendable {
         copy.isPartial = true
         copy.scanID = scanID
         copy.displayNames = displayNames
+        copy.standIn = standIn
         copy.home = home
         copy.free = free
         copy.hidden = hidden
@@ -248,6 +253,7 @@ final class DiskTree: @unchecked Sendable {
         copy.isPartial = isPartial
         copy.scanID = scanID
         copy.displayNames = displayNames
+        copy.standIn = standIn
         copy.links = links
         copy.singleLinks = singleLinks
         copy.finishedAt = finishedAt

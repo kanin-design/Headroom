@@ -115,14 +115,14 @@ struct KeptLine: View {
     let title: String
     let again: () -> Void
 
+    private static let font = NSFont.systemFont(ofSize: 11.5)
+
     var body: some View {
         HStack(spacing: 8) {
-            Text(title)
-                .font(.system(size: 11.5))
+            // Often a path: cut between its folders, never inside a name.
+            FittedText(forms: ListNames.folderForms(title), font: Self.font)
                 .foregroundStyle(.white.opacity(0.65))
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Spacer(minLength: 4)
+                .padding(.trailing, 12)
             Button("Suggest again", action: again)
                 .buttonStyle(.pill(nil, size: .small))
         }

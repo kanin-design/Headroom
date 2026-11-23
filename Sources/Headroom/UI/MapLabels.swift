@@ -259,11 +259,9 @@ struct CenterReadout: View {
             let planning = model.planNumbers.total >= 1_000_000 && model.mode == .freeUp
             let preview = free &+ model.planNumbers.total
             let usedShare = 1 - Double(free) / Double(max(capacity, 1))
-            slots(size, icon: model.centreIcon(0), number: bigNumber(planning ? preview : free, size: size, color: planning ? Kit.green : .white, about: "free")) {
-                // The disk's name, as a folder's is once you're in it: every state is an icon, a name, a number and a line.
-                Text(model.volume?.shownName ?? "")
-                    .font(.system(size: CentreGrid(u: size).title, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.92))
+            // No icon and no name: the disk selector names the disk, so the middle says only what's free.
+            slots(size, number: bigNumber(planning ? preview : free, size: size, color: planning ? Kit.green : .white, about: "free")) {
+                EmptyView()
             } below: {
                 VStack(spacing: CentreGrid(u: size).lineGap) {
                     Text(planning ? "free after cleaning" : "free of \(formatBytes(capacity))")
@@ -297,9 +295,12 @@ struct CenterReadout: View {
         let blue = Kit.blue
         return slots(size, number: bigNumber(picked > 0 ? pickedBytes : pair.macBytes, size: size, color: picked > 0 ? blue : .white,
                                              about: picked > 0 ? "picked" : "on this Mac")) {
-            Text(pair.realFolder == 0 ? (model.volume?.shownName ?? "") : pair.folderName)
-                .font(.system(size: CentreGrid(u: size).title, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.9))
+            // At the top of the disk, no name: the disk selector names it, as on the Map.
+            if pair.realFolder != 0 {
+                Text(pair.folderName)
+                    .font(.system(size: CentreGrid(u: size).title, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.9))
+            }
         } below: {
             VStack(spacing: CentreGrid(u: size).lineGap) {
                 Text(picked > 0 ? "\(picked) selected" : "on this Mac")

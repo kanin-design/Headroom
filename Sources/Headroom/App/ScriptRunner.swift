@@ -262,7 +262,7 @@ enum ScriptRunner {
         "button": .plan,
         "speed": .measuring, "meter": .measuring, "pacing": .measuring, "touch": .measuring, "sweep": .measuring,
         "bench": .measuring, "memory": .measuring, "footprint": .measuring, "gpu": .measuring, "headroom": .measuring,
-        "frames": .measuring, "layers": .measuring, "names": .measuring, "palette": .measuring, "glow": .measuring, "exporttree": .measuring, "middle": .measuring, "stretches": .measuring, "state": .measuring, "pointon": .measuring, "clickon": .measuring, "clickplace": .measuring, "mapkey": .measuring, "menufor": .measuring, "leaks": .measuring, "format": .measuring,
+        "frames": .measuring, "layers": .measuring, "names": .measuring, "labels": .measuring, "memoryshort": .measuring, "palette": .measuring, "glow": .measuring, "exporttree": .measuring, "middle": .measuring, "stretches": .measuring, "state": .measuring, "pointon": .measuring, "clickon": .measuring, "clickplace": .measuring, "mapkey": .measuring, "menufor": .measuring, "leaks": .measuring, "format": .measuring,
         "panel": .window, "scrolls": .window, "voiceover": .window, "size": .window, "jiggle": .window, "collide": .window,
         "timescale": .window, "shotwindow": .window, "shot": .window, "drawn": .window, "film": .window, "mouse": .window, "click": .window,
         "activate": .window, "float": .window, "hide": .window, "unhide": .window, "minimize": .window, "restore": .window,
@@ -1401,6 +1401,7 @@ enum ScriptRunner {
                 case "smaller": found = pieces.firstIndex { $0.isSmaller && $0.ring > 0 }
                 case "free": found = model.tree.flatMap { tree in pieces.firstIndex { $0.node == tree.free } }
                 case "machalf": found = model.pair.flatMap { pair in pieces.firstIndex { $0.node == pair.macSide } }
+                case "drivehalf": found = model.pair.flatMap { pair in pieces.firstIndex { $0.node == pair.driveSide } }
                 default: found = nil
                 }
                 if let found {
@@ -1490,6 +1491,16 @@ enum ScriptRunner {
         case "glow":
             // glow off, glow on.
             model.showsGlow = argument != "off"
+        case "memoryshort":
+            // What happens when macOS says memory is short, without making it short: what was made ahead is let go.
+            model.letGoOfReadyPair()
+        case "labels":
+            // Each name on the ring, where it is, and the ways its piece's name can be written.
+            let layout = model.engine.layout
+            for label in model.chart.labels {
+                let full = label.pieceIndex < layout.pieces.count ? model.displayName(layout.pieces[label.pieceIndex].node) : "?"
+                print("label \(label.place) \(label.title) | forms \(model.chart.nameForms(ofPiece: label.pieceIndex, full: full))")
+            }
         case "names":
             // names off, names on: the names around the ring hidden or shown, to tell what they cost.
             model.chart.showsLabels = argument != "off"

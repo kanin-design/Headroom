@@ -67,4 +67,15 @@ struct ShortNamesTests {
         #expect(out[1] == ["Harbour Lights Reunion (2022)", "Harbour…Reunion (2022)", "Harb…Reunion (2022)"])
         #expect(out[2] == ["Lantern (2025)"])
     }
+
+    @Test("A list's names are cut as the ring's are, the folder they're in included")
+    func list() {
+        let names = ["Lanterns (2025) - S01E02 - 4K DV WEB-DL.mkv", "Lanterns (2025) - S01E05 - 4K DV WEB-DL.mkv"]
+        let out = ShortNames.forms(of: names, around: ["Lanterns (2025)"])
+        #expect(out.count == 2)
+        #expect(out[0].first == names[0])
+        #expect(out[0].last == "Lant…S01E02…mkv")
+        #expect(out[1].last == "Lant…S01E05…mkv")
+        #expect(ShortNames.forms(of: ["Library", "Media"]) == [["Library"], ["Media"]])
+    }
 }

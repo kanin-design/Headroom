@@ -26,14 +26,6 @@ struct RootView: View {
                     .frame(width: ring.mapWidth, height: geometry.size.height, alignment: .bottom)
 
                 AgentQuestion()
-
-                // The folder's own icon beside the title, as a Finder window has: drag it to another app, or ⌘-click the
-                // title for where it is. Not with names hidden, since that would show them.
-                if let url = proxyURL {
-                    Color.clear
-                        .frame(width: 0, height: 0)
-                        .navigationDocument(url)
-                }
             }
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
             .onChange(of: ring, initial: true) { _, new in model.setRing(new) }
@@ -41,9 +33,10 @@ struct RootView: View {
         // The map goes on under the toolbar, which has no background of its own over it.
         .ignoresSafeArea(.container, edges: .top)
         .background(Palette.window)
+        // The window is named for where you are, in the Window menu and Mission Control, but the name isn't shown: the
+        // disk selector and the path bar say it.
         .navigationTitle(title)
-        .navigationSubtitle(subtitle)
-        .toolbarTitleMenu { TitleMenu(model: model) }
+        .toolbar(removing: .title)
         .toolbar { MainToolbar(model: model) }
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         .searchable(text: $model.searchText, isPresented: $model.searchActive, placement: .toolbar, prompt: "Search")
@@ -98,30 +91,9 @@ struct RootView: View {
         }
     }
 
-    /// Where you are, as a Finder window says it: the folder you're in, or the disk itself.
+    /// Where you are, as a Finder window says it: the folder you're in, the path bar's last step, or the disk itself.
     private var title: String {
-        if model.focus == 0, let pair = model.pair, pair.tree === model.tree { return pair.realFolder == 0 ? (model.volume?.shownName ?? "Disk") : pair.folderName }
-        guard model.focus != 0, model.tree != nil else { return model.volume?.shownName ?? "Headroom" }
-        return model.displayName(model.focus)
-    }
-
-    /// Under the title: how far the scan has got, or how much is free, the same as in the middle of the ring and on the disk's
-    /// capsule. Inside a folder, which disk it's on as well. With the drive's half beside it, which drive: the title already
-    /// says which folder or disk, so this only finishes the sentence, short enough never to be cut.
-    private var subtitle: String {
-        if model.isScanning { return model.scanFiles > 0 ? "Scanning… \(formatCount(model.scanFiles)) files" : "Scanning…" }
-        if !model.hasFullAccess, model.volume?.isBoot == true { return "Needs Full Disk Access" }
-        if let pair = model.pair, pair.tree === model.tree { return "and \(pair.driveName)" }
-        guard let free = model.shownFree else { return "" }
-        if model.focus != 0 { return "\(model.volume?.shownName ?? "Disk")  ·  \(formatBytes(free)) free" }
-        return "\(formatBytes(free)) free of \(formatBytes(model.shownCapacity))"
-    }
-
-    /// The real place on the disk the title stands for. Groups Headroom makes up, such as macOS's own parts, have none.
-    private var proxyURL: URL? {
-        guard !HiddenNames.isOn, let tree = model.tree, let volume = model.volume else { return nil }
-        if model.focus == 0 { return URL(fileURLWithPath: model.pair.flatMap { $0.tree === tree ? $0.macPath : nil } ?? volume.mountPath) }
-        return tree.path(model.focus).map { URL(fileURLWithPath: $0) }
+        model.pathSteps.last?.name ?? model.volume?.shownName ?? "Headroom"
     }
 }
 
@@ -186,28 +158,6 @@ struct LensPicker: View {
     }
 }
 
-/// The title's menu: the folders the one you're in is inside, to go straight back to one. Disks are chosen at the bottom
-/// left, in the drive row.
-private struct TitleMenu: View {
-    let model: AppModel
-
-    var body: some View {
-        if let tree = model.tree, model.focus != 0 {
-            ForEach(tree.ancestors(of: model.focus).dropLast().reversed(), id: \.self) { node in
-                Button {
-                    model.go(to: node)
-                } label: {
-                    if node == 0 {
-                        Label(model.volume?.shownName ?? "Disk", systemImage: model.volume?.isBoot == false ? "externaldrive" : "internaldrive")
-                    } else {
-                        Label(model.displayName(node), systemImage: "folder")
-                    }
-                }
-            }
-        }
-    }
-}
-
 // MARK: Bottom
 
 struct BottomArea: View {
@@ -252,197 +202,6 @@ struct BottomArea: View {
         .animation(.easeOut(duration: 0.18), value: model.tip)
         .animation(.easeOut(duration: 0.18), value: Agents.shared.connected)
         .animation(.spring(response: 0.38, dampingFraction: 0.86), value: model.focus)
-    }
-}
-
-struct Breadcrumbs: View {
-    let model: AppModel
-
-    /// One way of writing the path: where you are, then the way to what's pointed at, with "…" where steps are left out.
-    private struct Shape: Hashable {
-        var chain: [UInt32]
-        var chainFolded: Bool
-        var ahead: [UInt32]
-        var aheadFolded: Bool
-    }
-
-    var body: some View {
-        if let tree = model.tree {
-            let chain = tree.ancestors(of: model.focus)
-            let ahead = ahead(tree)
-            GeometryReader { geometry in
-                // Where you are, in glass, folded to fit: it changes only when you go somewhere, so the glass never
-                // changes size as the pointer moves.
-                let here = fitChain(chain, room: geometry.size.width - 24)
-                let hereWidth = width(of: Shape(chain: here.chain, chainFolded: here.folded, ahead: [], aheadFolded: false)) + 24
-                // The way on to what's pointed at, faded, just after it: as much of it as fits, nearest what's pointed at.
-                // It may run on past the bar's right edge, which is kept clear for Backup's drive.
-                let spare: CGFloat = model.mode == .backup ? 0 : 150
-                let trail = fitTrail(ahead, room: (geometry.size.width - hereWidth) / 2 - 8 + spare)
-                CrumbChain(model: model, chain: here.chain, folded: here.folded).equatable()
-                    .fixedSize()
-                    .padding(.horizontal, 12)
-                    .glassEffect(.regular, in: Capsule())
-                    .overlay(alignment: .trailing) {
-                        trailView(trail.nodes, folded: trail.folded, last: trail.last)
-                            .fixedSize()
-                            .alignmentGuide(.trailing) { d in d[.leading] - 4 }
-                    }
-                    .frame(width: geometry.size.width, height: geometry.size.height)
-            }
-        }
-    }
-
-    private func trailView(_ nodes: [UInt32], folded: Bool, last: String) -> some View {
-        HStack(spacing: 4) {
-            if folded {
-                Self.chevron(0.2)
-                Self.ellipsis
-            }
-            // Each step marked in its colour on the ring.
-            ForEach(nodes, id: \.self) { node in
-                Self.chevron(0.2)
-                HStack(spacing: 5) {
-                    if let colour = colour(of: node) {
-                        Circle().fill(colour).frame(width: 7, height: 7)
-                    }
-                    Text(node == nodes.last ? last : model.displayName(node))
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.45))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                .padding(.horizontal, 4)
-                .frame(maxWidth: 220)
-                .frame(height: DriveRow.height)
-            }
-        }
-    }
-
-    private func fitChain(_ chain: [UInt32], room: CGFloat) -> (chain: [UInt32], folded: Bool) {
-        var ways: [(chain: [UInt32], folded: Bool)] = [(chain, false)]
-        if chain.count > 3 { ways.append(([chain[0]] + chain.suffix(2), true)) }
-        if chain.count > 2 { ways.append(([chain[0], chain[chain.count - 1]], true)) }
-        return ways.first { width(of: Shape(chain: $0.chain, chainFolded: $0.folded, ahead: [], aheadFolded: false)) <= room } ?? ways[ways.count - 1]
-    }
-
-    /// As many of the steps as fit, nearest what's pointed at, with it written as briefly as it needs to be: a folder that
-    /// says where it is is worth more than the end of its name.
-    private func fitTrail(_ ahead: [UInt32], room: CGFloat) -> (nodes: [UInt32], folded: Bool, last: String) {
-        guard let item = ahead.last else { return ([], false, "") }
-        var names = [aheadName(item)]
-        if let hover = model.hoverShown, hover.node == item, hover.titles.count > 2 { names += hover.titles.dropFirst(2) }
-        // A step is at most 220 points wide; a name that would be cut at that is no way of writing it here.
-        func width(_ name: String) -> CGFloat? {
-            let w = Self.textWidth(name, bold: false) + 12
-            return w <= 212 ? 11 + w + 8 : nil
-        }
-        for keep in stride(from: ahead.count, through: 1, by: -1) {
-            let nodes = Array(ahead.suffix(keep))
-            let folded = keep < ahead.count
-            let above = nodes.dropLast().reduce(CGFloat(folded ? 23 : 0)) { $0 + (width(model.displayName($1)) ?? 239) }
-            if let name = names.first(where: { width($0).map { above + $0 <= room } ?? false }) { return (nodes, folded, name) }
-        }
-        return ([item], ahead.count > 1, names.first { width($0) != nil } ?? names[names.count - 1])
-    }
-
-    /// How wide a way of writing the path is drawn, near enough to choose by.
-    private func width(of shape: Shape) -> CGFloat {
-        let gap: CGFloat = 4, chevron: CGFloat = 7, dots: CGFloat = 12
-        var items: [CGFloat] = shape.chain.map { node in
-            Self.textWidth(node == 0 ? (model.volume?.shownName ?? "Disk") : model.displayName(node), bold: node == model.focus) + 8
-        }
-        items += Array(repeating: chevron, count: max(shape.chain.count - 1, 0))
-        if shape.chainFolded { items += [dots, chevron] }
-        if shape.aheadFolded { items += [chevron, dots] }
-        for node in shape.ahead {
-            items += [chevron, min(Self.textWidth(aheadName(node), bold: false) + 12, 220) + 8]
-        }
-        return items.reduce(0, +) + gap * CGFloat(max(items.count - 1, 0)) + 8
-    }
-
-    private static var widths: [String: CGFloat] = [:]
-
-    private static func textWidth(_ text: String, bold: Bool) -> CGFloat {
-        let key = (bold ? "b" : "m") + text
-        if let known = widths[key] { return known }
-        if widths.count > 2000 { widths.removeAll() }
-        let font = NSFont.systemFont(ofSize: 12, weight: bold ? .semibold : .medium)
-        let w = ceil((text as NSString).size(withAttributes: [.font: font]).width)
-        widths[key] = w
-        return w
-    }
-
-    fileprivate static func chevron(_ opacity: Double) -> some View {
-        Image(systemName: "chevron.right")
-            .font(.system(size: 9, weight: .bold))
-            .foregroundStyle(.white.opacity(opacity))
-    }
-
-    fileprivate static var ellipsis: some View {
-        Text("…").font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.45))
-    }
-
-    /// The folders between where you are and what's pointed at, and it, top down.
-    private func ahead(_ tree: DiskTree) -> [UInt32] {
-        guard let node = model.hoverShown?.node, node != model.focus, Int(node) < tree.count, !tree.isGhost(node) else { return [] }
-        let all = tree.ancestors(of: node)
-        guard let here = all.firstIndex(of: model.focus) else { return [] }
-        return Array(all[(here + 1)...])
-    }
-
-    /// What's pointed at is written as its neighbours tell it apart, as the folders before it say where it is.
-    private func aheadName(_ node: UInt32) -> String {
-        if let hover = model.hoverShown, hover.node == node, hover.titles.count > 1 { return hover.titles[1] }
-        return model.displayName(node)
-    }
-
-    /// A piece's colour as it's drawn now, for its dot.
-    private func colour(of node: UInt32) -> Color? {
-        let layout = model.engine.layout
-        guard let i = layout.piece(of: node), i < layout.pieces.count else { return nil }
-        let c = layout.pieces[i].color
-        func encode(_ v: Float) -> Double {
-            let x = min(max(Double(v), 0), 1)
-            return x <= 0.0031308 ? 12.92 * x : 1.055 * pow(x, 1 / 2.4) - 0.055
-        }
-        return Color(.displayP3, red: encode(c.x), green: encode(c.y), blue: encode(c.z))
-    }
-}
-
-/// Where you are: a button for each folder from the disk down, made again only when that changes, not as the pointer moves.
-private struct CrumbChain: View, Equatable {
-    let model: AppModel
-    let chain: [UInt32]
-    let folded: Bool
-
-    static func == (a: Self, b: Self) -> Bool { a.chain == b.chain && a.folded == b.folded }
-
-    var body: some View {
-        HStack(spacing: 4) {
-            ForEach(Array(chain.enumerated()), id: \.element) { index, node in
-                if index > 0 { Breadcrumbs.chevron(0.35) }
-                if index == 1 && folded {
-                    Breadcrumbs.ellipsis
-                    Breadcrumbs.chevron(0.35)
-                }
-                Button {
-                    // You're already here, so a click on this one copies its name.
-                    if node == model.focus { model.copyName(of: NamedThing(node)) } else { model.go(to: node) }
-                } label: {
-                    Text(node == 0 ? (model.volume?.shownName ?? "Disk") : model.displayName(node))
-                        .font(.system(size: 12, weight: node == model.focus ? .semibold : .medium))
-                        .foregroundStyle(.white.opacity(node == model.focus ? 0.95 : 0.6))
-                        .lineLimit(1)
-                        .padding(.horizontal, 4)
-                        .frame(height: DriveRow.height)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .named(NamedThing(node), in: model)
-                .help(node == model.focus ? "Click to copy the name" : "⌘-click to copy the name")
-            }
-        }
     }
 }
 

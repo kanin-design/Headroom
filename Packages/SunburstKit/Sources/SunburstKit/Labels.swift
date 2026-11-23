@@ -234,6 +234,8 @@ public struct LabelArea: Sendable {
 /// The fonts names inside pieces are drawn in: a name above, its size below, and both larger on free space.
 enum LabelFont: Int {
     case title, value, largeTitle, largeValue, arcTitle, arcValue
+    /// A name at the side, as `OuterLabel` draws it.
+    case sideTitle
 
     // Fonts don't change once made, so any thread may measure with them.
     nonisolated(unsafe) private static let made: [NSFont] = [
@@ -241,6 +243,7 @@ enum LabelFont: Int {
         .systemFont(ofSize: 14, weight: .semibold), .monospacedDigitSystemFont(ofSize: 13, weight: .medium),
         // Names along an arc are a step smaller: they're further out, on thinner pieces, and there are more of them.
         .systemFont(ofSize: 11, weight: .semibold), .monospacedDigitSystemFont(ofSize: 9.5, weight: .medium),
+        .systemFont(ofSize: 12, weight: .medium),
     ]
     var font: NSFont { Self.made[rawValue] }
 }
@@ -324,14 +327,14 @@ public enum LabelPlacer {
         let measured = ceil((text as NSString).size(withAttributes: [.font: font.font]).width)
         widths.withLock { known in
             // Enough for every name a window shows at once, many times over; past that it starts again.
-            if known.reduce(0, { $0 + $1.count }) > 8192 { known = Array(repeating: [:], count: 6) }
+            if known.reduce(0, { $0 + $1.count }) > 8192 { known = Array(repeating: [:], count: 7) }
             known[font.rawValue][text] = measured
         }
         return measured
     }
 
     /// Widths measured so far, for each font.
-    private static let widths = OSAllocatedUnfairLock(initialState: [[String: CGFloat]](repeating: [:], count: 6))
+    private static let widths = OSAllocatedUnfairLock(initialState: [[String: CGFloat]](repeating: [:], count: 7))
 
     /// Where a box of this size fits inside a piece: its middle if possible, otherwise slid along the arc to where the
     /// ring runs closer to level. A name that fits nearby is better than one out at the side. `outward` moves the box out
@@ -686,7 +689,7 @@ public enum LabelPlacer {
                 // It may shrink a fifth before it's cut; a name too long even cut short is cut once, in the middle, never
                 // cut again.
                 let forms = short.forms(of: slot.c.index, full: slot.c.title)
-                let title = forms.first { width($0, .title) * 0.82 <= room } ?? slot.c.title
+                let title = forms.first { width($0, .sideTitle) * 0.82 <= room } ?? slot.c.title
                 // A name that changes sides is a new label, so it fades across instead of flying over the ring.
                 out.append(SunburstLabel(id: p.key ^ (right ? 0xABCD : 0xDCBA) ^ slot.c.salt, pieceIndex: slot.c.index, node: p.node, title: title, value: slot.c.value,
                                     position: CGPoint(x: columnX, y: slot.y), anchor: anchor, elbow: CGPoint(x: bend, y: slot.y),

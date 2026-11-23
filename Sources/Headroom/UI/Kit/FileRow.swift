@@ -1,3 +1,5 @@
+import AppKit
+import SunburstKit
 import SwiftUI
 
 /// One file in a list: a mark in a slot of its own (a tick, a step, an icon), its name, a line under it of where it is or what's
@@ -5,7 +7,11 @@ import SwiftUI
 /// with a different mark and a different word at the end.
 struct FileRow<Mark: View>: View {
     let title: String
+    /// Shorter ways to write the title, longest first, after the title itself: the longest that fits is used.
+    var titles: [String] = []
     var detail: String? = nil
+    /// Shorter ways to write the detail, as for the title.
+    var details: [String] = []
     var warning: String? = nil
     let trailing: String
     var trailingColour: Color = .white.opacity(0.7)
@@ -20,17 +26,11 @@ struct FileRow<Mark: View>: View {
             mark()
                 .frame(width: Kit.markSlot, height: 16)
             VStack(alignment: .leading, spacing: 1) {
-                Text(title)
-                    .font(.system(size: 12, weight: .medium))
+                FittedText(forms: titles.count > 1 ? titles : [title], font: FittedText.title)
                     .foregroundStyle(.white.opacity(isQuiet ? 0.5 : 0.92))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
                 if let detail {
-                    Text(detail)
-                        .font(.system(size: 11))
+                    FittedText(forms: details.count > 1 ? details : [detail], font: FittedText.detail)
                         .foregroundStyle(.white.opacity(0.5))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
                 }
                 if let warning {
                     Text(warning)
@@ -40,7 +40,9 @@ struct FileRow<Mark: View>: View {
                         .truncationMode(.middle)
                 }
             }
-            Spacer(minLength: 4)
+            // All the room up to the size, which the name and the line under it are written to fit.
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.trailing, 12)
             Text(trailing)
                 .font(.system(size: 11).monospacedDigit())
                 .foregroundStyle(trailingColour)
@@ -53,6 +55,79 @@ struct FileRow<Mark: View>: View {
         .contentShape(Rectangle())
         .onHover { isHovered = $0 }
         .onTapGesture { onTap?() }
+    }
+}
+
+/// One line written the longest way that fits the room it's given, which is all of it: each of `forms`, longest first,
+/// then the last cut once more in the middle. It's one text whichever form it is: the forms are measured with the font,
+/// not each laid out, which in a list of eighty rows held up switching to Backup for a quarter of a second at a time.
+struct FittedText: View {
+    let forms: [String]
+    /// The font it's drawn in, and measured with.
+    let font: NSFont
+    /// How wide the line is, once it's been laid out.
+    @State private var room: CGFloat?
+
+    static let title = NSFont.systemFont(ofSize: 12, weight: .medium)
+    static let detail = NSFont.systemFont(ofSize: 11)
+
+    var body: some View {
+        let line = Text(chosen)
+            .font(Font(font as CTFont))
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        if forms.count > 1 {
+            line.onGeometryChange(for: CGFloat.self) { $0.size.width } action: { room = $0 }
+        } else {
+            line
+        }
+    }
+
+    private var chosen: String {
+        guard forms.count > 1, let room else { return forms.first ?? "" }
+        return forms.first { Self.width($0, font) <= room } ?? forms[forms.count - 1]
+    }
+
+    private static var widths: [String: CGFloat] = [:]
+
+    private static func width(_ text: String, _ font: NSFont) -> CGFloat {
+        let key = "\(font.pointSize) \(font.fontName) \(text)"
+        if let known = widths[key] { return known }
+        if widths.count > 4000 { widths.removeAll() }
+        let w = ceil((text as NSString).size(withAttributes: [.font: font]).width)
+        widths[key] = w
+        return w
+    }
+}
+
+/// The names in a list written as the ring writes them: each cut with "…" where its neighbours in the list say the same, so
+/// what tells them apart is what's left (DESIGN.md, *Names*). Worked out once for each list.
+@MainActor
+enum ListNames {
+    private static var known: [[String]: [[String]]] = [:]
+
+    /// A folder's path, then shorter ways to write it, cut only between folders: the folders nearest the top go first, so
+    /// what's left says where it is. "~/Media/TV/Show (2021)/Season 01" can be "~/…/Show (2021)/Season 01", then
+    /// "~/…/Season 01".
+    static func folderForms(_ path: String) -> [String] {
+        let parts = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        guard parts.count > 2 else { return [path] }
+        var forms = [path]
+        for keep in stride(from: parts.count - 2, through: 1, by: -1) {
+            forms.append(([parts[0], "…"] + parts.suffix(keep)).joined(separator: "/"))
+        }
+        return forms
+    }
+
+    /// For each name, in order, its forms from the whole name down. `around` is the names of the folders they're in.
+    static func forms(_ names: [String], around: [String] = []) -> [[String]] {
+        let key = around + ["/"] + names
+        if let hit = known[key] { return hit }
+        if known.count > 64 { known.removeAll() }
+        let made = ShortNames.forms(of: names, around: around)
+        known[key] = made
+        return made
     }
 }
 
@@ -114,11 +189,8 @@ struct FolderGroups<Item: Identifiable, Row: View>: View {
                     .font(.system(size: 11))
                     .foregroundStyle(Kit.blue.opacity(0.8))
                     .frame(width: Kit.markSlot)
-                Text(folderName(group.folder))
-                    .font(.system(size: 12, weight: .medium))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer(minLength: 6)
+                FittedText(forms: ListNames.folderForms(folderName(group.folder)), font: FittedText.title)
+                    .padding(.trailing, 14)
                 if group.isFlagged {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 9))

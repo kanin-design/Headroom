@@ -555,15 +555,15 @@ what's said about it.
 | State | Icon | Name | Number | Under it |
 |---|---|---|---|---|
 | Pointing at something | its kind (below) | its name | its size | One line, as large as the name: its other paths (amber, semibold, up to two lines), else when it was last used, else in Changes what changed (semibold, in the view's colours). While a scan is under way: "so far" or "not scanned yet" |
-| The whole disk, at rest | the drive | the disk's name | free space (green when Free Up has something to clean: the free space after) | "free of 494 GB" or "free after cleaning"; then one of: what's pointed at in the panel, in its colour; "+X" in green; the change since yesterday with an arrow (green up, salmon down); "N% full" |
+| The whole disk, at rest | none | none: the disk selector names it | free space (green when Free Up has something to clean: the free space after) | "free of 494 GB" or "free after cleaning"; then one of: what's pointed at in the panel, in its colour; "+X" in green; the change since yesterday with an arrow (green up, salmon down); "N% full" |
 | Inside a folder | its kind | "‹" (0.050 u bold, white at 0.42) and its name | its size | its share of the disk, or "so far", or which side of both disks; then "+ X moved" if files were moved out |
-| Both disks (Backup) | none | the folder's or disk's name | on this Mac, or what's selected in blue | "on this Mac" or "N selected"; then what's on the drive |
+| Both disks (Backup) | none | the folder's name; none at the top of the disk | on this Mac, or what's selected in blue | "on this Mac" or "N selected"; then what's on the drive |
 | Changes | none | none | how much changed, with its sign and colour | "free space since …" or "modified in …"; "by date modified" |
 | Copies (Free Up) | none | none | what duplicates take, or a set's in its colour | "in duplicates", or the set's name; then "reclaimable" or how many are elsewhere |
 
 **The name, when it doesn't fit.** The name is always the real name. In order, the first that fits is used: the whole
 name on one line; the whole name on two lines at 0.062 u within 0.78 u, if it's 48 characters or fewer; then the name
-cut with "…" where its neighbours say the same (see *Names on the ring*), each on one line and then on two; last, the
+cut with "…" where its neighbours say the same (see *Names*), each on one line and then on two; last, the
 shortest cut form, cut once more in the middle. Nothing is ever written that isn't in the name, in its order.
 
 **Icons.** The drive for the disk; a house for your home folder; symbols for Desktop, Documents, Downloads, Movies,
@@ -590,32 +590,80 @@ times the symbol's size, read off the main thread with a plain app symbol until 
 | 2026-11-23 | An icon above the name, fixed in place | Asked for after the blind build; "the icon should be fixed in place" |
 | 2026-11-23 | A share line was added, then removed again | "Way too much info": it broke the 2026-11-06 decision |
 | 2026-11-23 | The line under the number briefly made smaller than the name, then put back | It broke the 2026-11-06 decision |
-| 2026-11-23 | The grid above: the name sits on the number, three text sizes, the disk's name at rest | The parts had no fixed grid: seven sizes, a floating name, an icon pushed up by two-line names. The disk's name at rest was proposed by Claude so every state has the same parts; the owner hasn't ruled on it |
+| 2026-11-23 | The grid above: the name sits on the number, three text sizes | The parts had no fixed grid: seven sizes, a floating name, an icon pushed up by two-line names |
+| 2026-11-23 | At rest, no icon and no disk name: the free space alone, as decided before | The disk's name was in four places at once; the disk selector is its home (the owner's review of every element) |
+| 2026-11-23 | Both disks at the top of the disk: no disk name either | The same rule as the line above, found in the recheck: the name was in the title, the selector and the middle |
 
 ### The path bar
 
-The row along the bottom of the map: the disk at the left, where you are in the middle, and in Backup where its files
-go at the right. It's 34 points high (`DriveRow.height`), and everything in it is that height.
+The row along the bottom of the map, 34 points high (`DriveRow.height`): the disk selector at the left, the path right
+after it, and in Backup the drive's selector at the right. The selectors are controls, in glass; the path is
+information you can click, in plain text, and looks the same at rest and while pointing.
 
-- **Where you are**: in a glass capsule, centred in the map with 180 points kept clear at each side. A button for each
-  folder from the disk down, 12 points; the folder you're in semibold, white at 0.95; the others medium, white at 0.6;
-  chevrons 9 points bold, white at 0.35. Too long, it folds: the disk, "…", the last two; then the disk, "…", the last.
-  Shown once you're inside a folder; on the whole disk, only while something is pointed at. It stays in place and
-  fades in and out over 0.15 s.
-- **The way to what's pointed at**: just after the capsule, outside the glass, so the glass never changes size as the
-  pointer moves. Each step a chevron (white at 0.2), a 7-point dot in the piece's colour as drawn, and its name (12
-  points, medium, white at 0.45). What's pointed at is written with its cut forms (see *Names on the ring*), as short as
-  it needs to be before a folder is left out; folders nearest it stay, those nearest the top fold into "…". It may
-  run 150 points past the bar's right edge, except in Backup, where the drive's capsule is.
-- **Never** in the window's own view tree (it's `PathIsland`): a path bar there cost 15% more of the main thread while
-  pointing, and a resizing glass capsule caused dropped frames.
+- **Where it starts**: right after the disk selector, left-aligned, centred on the row as the selectors' labels are.
+  The selector is the path's first step, so the path never repeats the disk it names. It reads as one line:
+  `[ Macintosh HD ▾ ] › Your files › Media › TV › Show › Season 01`.
+- **Its steps**: a chevron, 9 points bold, white at 0.25, before each; folders 12 points medium, white at 0.55, a
+  click goes there, and under the pointer one brightens to 0.85; the folder you're in 12 points semibold, white at 0.92,
+  and a click copies its name. On the whole disk with nothing pointed at, there's no path: the selector alone.
+- **While pointing**: the way on to what's pointed at continues the same line, in the same type: each step a chevron
+  (white at 0.2), a 7-point dot in the piece's colour as drawn, and its name, white at 0.45. What's pointed at is
+  written with its cut forms (see *Names*), as short as it needs to be before a folder is left out. The folders nearest
+  it stay; when the line is too long, the steps nearest the top fold into "…". Where you are is folded to leave 160
+  points for the way on, so it doesn't refold as the pointer moves.
+- **Backup**: the path names its disk only when it isn't the disk in the selector right before it. On the Mac's half,
+  no disk step. On the drive's half alone, the first step is the drive, with a drive symbol: `Spare › Your files ›
+  …`. Inside a folder shown on both disks, the path is that folder's, the same on both, with no step of its own
+  for "both": the selectors at either end of the row name the two disks. While pointing from both disks, the way into
+  the drive's half starts with the drive; into the Mac's half it starts right after the selector, which names that disk.
+  The drive's step is never folded into "…".
+- **Never** glass; never a disk step that repeats the selector; never a "This Mac" step; never in the window's own view
+  tree (it's `PathIsland`: there, it cost 15% more of the main thread while pointing).
 
 | Date | Decision | Why |
 |---|---|---|
 | 2026-11-23 | The live path, with colour dots | From the blind build: "live path is also good idea, with the color" |
-| 2026-11-23 | Height 34, as the drive's capsule | 28 beside 34 in one row read as unaligned |
+| 2026-11-23 | Height 34, as the drive's selector | 28 beside 34 in one row read as unaligned |
+| 2026-11-23 | Plain text, the same look at rest and pointing, continuing from the disk selector with no disk step | "The file path can obviously just share the disk from the disk selector"; "I dont want this to be glass … it should have the hover look at all times" |
+| 2026-11-23 | "Both disks" and the drive's step never fold; no step for the Mac's disk when pointing from both disks; 160 points kept for the way on | Found in the recheck: "Both disks" folded away, "Macintosh HD" came right after its own selector, and paths folded with room to spare |
+| 2026-11-23 | No "Both disks" step | "[Macintosh HD ▾] › Both disks" read as both disks inside Macintosh HD; the owner: "drop for now" |
 
-### Names on the ring
+### The window's title
+
+Not shown. The window is still named for where you are (the folder you're in, or at the top of a disk the disk's name),
+so the Window menu and Mission Control can tell windows apart, but the toolbar starts with back and forward. The disk
+selector names the disk and the path bar names the folder. While the disk is read, the selector's second line says how
+far it's got ("Scanning… 1,204,331 files") instead of what's free.
+
+| Date | Decision | Why |
+|---|---|---|
+| 2026-11-23 | The subtitle only for status | Free space was in four places and the disk's name in four; inside a folder the subtitle was cut short |
+| 2026-11-23 | The title not shown; the scan's progress on the disk selector | "Hide on screen it is already down left, no point." The progress had nowhere else to go; putting it on the selector was Claude's proposal |
+
+### Switching between Free Up and Backup
+
+The switch is macOS's own segmented control in the toolbar. Everything it changes moves together, starting at the click:
+
+- **The ring**: the map folds into the left half of the ring, which is the Mac's half of both disks, and the drive's half
+  grows out of its band on the right. Going back, it unfolds. The pieces move rather than being replaced: the Mac's half
+  takes the map's keys (`DiskTree.standIn`), so each folder slides from its place on the map to its place in the half. A
+  critically damped spring (the ring's recolor spring, stiffness 70) settles it in about a third of a second.
+- **The middle and the inspector** change in the same frame as the ring starts, with the same spring.
+- **Both disks are ready before the click**: in Free Up they're made in the background a second after the map or the
+  folder stops changing, and kept when Backup goes off screen. That holds about 70 MB while in Free Up, let go as soon as
+  macOS says memory is short. Only with the drive unplugged, when its half is what was read there last; with it plugged
+  in, the drive is read when Backup is chosen, as before, and the ring folds when that's done.
+- **Never**: a pause before the ring moves; the number in the middle changing before the ring; the ring breaking up and
+  being drawn again.
+
+| Date | Decision | Why |
+|---|---|---|
+| 2026-11-23 | The map folds into its half; both disks made ahead | "When switching from free up to backup there is a huge lag/delay"; "It should be a smooth toggle animation". The ring waited 0.4 s, the middle changed first, and the ring broke apart and was drawn again |
+
+### Names
+
+On the ring and in lists, a name that doesn't fit is handled the same way.
+
 
 - **On pieces**: only on the first four rings; the outer rings are for the shape. The first ring is set straight,
   12.5 points semibold with the size under it at 11 points, digits of equal width; free space 14 and 13. From the second
@@ -630,12 +678,19 @@ go at the right. It's 34 points high (`DriveRow.height`), and everything in it i
   (`IMG_4821.HEIC`, and `Harbour Lights (2020)` beside `Harbour Lights Reunion (2022)`, stay whole). Neighbours are written alike: as far cut as the one with
   least room needs. A name at the side uses the longest form that fits its column; if none does, the whole name is cut
   once, in the middle. **Never** cut twice, never rewritten, never reordered.
+- **In lists** (the inspector's rows of files): the same forms, worked out among the list's own rows, so ten episodes of
+  one show listed together read `Lantern…S01E02…mkv`, `Lantern…S01E05…mkv`, not ten copies of the same cut. A folder's
+  path in a list is cut only between folders, the ones nearest the top first: `~/…/Lanterns (2025)/Season 01`, never
+  `~/Media/TV/Lanterns (2…Season 01`.
 
 | Date | Decision | Why |
 |---|---|---|
 | 2026-11-22 | First ring straight; further out along the arc, clockwise; bottom third turned; a smaller font | "Curved are okay for level 2 and deeper … always clockwise" |
 | 2026-11-23 | Names cut with "…" around what tells them apart, not rewritten | "You cant just replace the filename … show sho…s01e01…mkv" |
 | 2026-11-23 | Names back to the first four rings; no percentages at the sides | "Way too much info and garbage" |
+| 2026-11-23 | Lists use the same cut forms | Backup's Large Files showed ten rows cut to the same text, the episode number cut out |
+| 2026-11-23 | Folder paths in lists cut between folders | Found in the recheck: the same flaw in the line under each name, cut inside a bracket and a word |
+| 2026-11-23 | A fix, not a change: names at the side are measured in the font they're drawn in (12 points, medium) | They were measured in the inside names' font, so a cut form that fit was turned down and the whole name was cut in the middle, losing the episode number |
 
 ### Pointing at a piece
 

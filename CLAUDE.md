@@ -3,7 +3,8 @@
 ## The design spec is decided: read it, keep it
 
 `DESIGN.md`, section *Specs*, records every decided value for the parts of the window that have been redone before:
-the middle of the ring, the path bar, names on the ring, pointing at a piece, and colours. Each part has a decision log
+the middle of the ring, the path bar, the window's title, switching between Free Up and Backup, names (on the ring and
+in lists), pointing at a piece, and colours. Each part has a decision log
 of what the owner decided, when and why. The values live in code in one place each (the middle's in `CentreGrid`,
 `Sources/Headroom/UI/MapLabels.swift`).
 

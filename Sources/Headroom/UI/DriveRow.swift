@@ -1,8 +1,8 @@
 import AppKit
 import SwiftUI
 
-/// The bottom row: the disk the map is of at the left, the folder you're in in the middle, and in Backup, where its files go
-/// at the right. Its height is kept free in every view, so nothing moves when the right capsule appears.
+/// The bottom row: the disk the map is of at the left, the folder you're in right after it, and in Backup, where its files
+/// go at the right. Its height is kept free in every view, so nothing moves when the right capsule appears.
 struct DriveRow: View {
     let model: AppModel
 
@@ -10,18 +10,17 @@ struct DriveRow: View {
     static let height: CGFloat = 34
 
     var body: some View {
-        ZStack {
-            // Where you are once you're inside a folder, and the way to what's pointed at while something is: in a view tree
-            // of its own, as it changes with the pointer. Never under the capsules at either side.
+        HStack(spacing: 0) {
+            SourceCapsule(model: model)
+            // Where you are, right after the disk it's on, and the way to what's pointed at: in a view tree of its own, as
+            // it changes with the pointer.
             PathIsland(model: model)
-                .padding(.horizontal, 180)
-            HStack(spacing: 0) {
-                SourceCapsule(model: model)
-                Spacer(minLength: 12)
-                if model.mode == .backup {
-                    DestinationCapsule(model: model)
-                        .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .trailing)))
-                }
+                .frame(maxWidth: .infinity)
+                .padding(.leading, 6)
+                .padding(.trailing, 12)
+            if model.mode == .backup {
+                DestinationCapsule(model: model)
+                    .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .trailing)))
             }
         }
         .frame(height: Self.height)
@@ -99,11 +98,14 @@ private struct SourceCapsule: View {
                 .disabled(model.isCleaning)
             }
         } label: {
-            // What's free as the map counts it, so the capsule, the title and the middle of the ring say the same.
+            // What's free as the map counts it, so the capsule and the middle of the ring say the same. While the disk is
+            // being read, how far that's got.
             let free = model.shownFree ?? drive?.free ?? current?.free ?? 0
+            let scanning = model.scanFiles > 0 ? "Scanning… \(formatCount(model.scanFiles)) files" : "Scanning…"
             DriveCapsuleLabel(icon: current?.isBoot == false ? "externaldrive" : "internaldrive",
                          title: current?.shownName ?? "Disk",
-                         detail: drive.map { "\(formatBytes(free)) free · \($0.fileSystemTitle)" } ?? (current == nil ? "" : "\(formatBytes(free)) free"))
+                         detail: model.isScanning ? scanning
+                             : drive.map { "\(formatBytes(free)) free · \($0.fileSystemTitle)" } ?? (current == nil ? "" : "\(formatBytes(free)) free"))
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
@@ -164,33 +166,5 @@ private struct DestinationCapsule: View {
             }
         }
         .disabled(why != nil || model.isCleaning)
-    }
-}
-
-/// The path bar in a view tree of its own, like the middle of the ring: it follows the pointer, and a change in the
-/// window's own tree has SwiftUI go over the whole window.
-private struct PathIsland: NSViewRepresentable {
-    let model: AppModel
-
-    func makeNSView(context: Context) -> NSView { Island(PathBar(model: model), passesThrough: false) }
-
-    func updateNSView(_ view: NSView, context: Context) {}
-
-    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSView, context: Context) -> CGSize? {
-        proposal.replacingUnspecifiedDimensions()
-    }
-}
-
-/// Shown once you're inside a folder, and on the whole disk while something is pointed at. It stays in place and fades,
-/// rather than being made again each time the pointer crosses a gap.
-private struct PathBar: View {
-    let model: AppModel
-
-    var body: some View {
-        let shown = model.focus != 0 || model.hoverShown != nil
-        Breadcrumbs(model: model)
-            .opacity(shown ? 1 : 0)
-            .allowsHitTesting(shown)
-            .animation(.easeOut(duration: 0.15), value: shown)
     }
 }

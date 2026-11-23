@@ -396,6 +396,17 @@ final class AppModel {
     /// Whether Backup shows both sides when its drive is connected.
     var showDriveSide = true
     @ObservationIgnored var pairTask: Task<Void, Never>?
+    /// Both disks for the folder you're in, made ahead in Free Up or kept from when Backup was last on screen, so switching
+    /// to Backup shows them at once. Only with the drive unplugged, when its half is what was read there last: one plugged
+    /// in is read when Backup asks, not again and again as you go through folders in Free Up.
+    @ObservationIgnored var readyPair: ReadyPair?
+    @ObservationIgnored var readyPairTask: Task<Void, Never>?
+    /// The picture of both disks on screen, and what it was made from.
+    @ObservationIgnored var pairShown: ReadyPair?
+    /// Lets both disks made ahead go when macOS is short of memory: they're made again when Backup is chosen.
+    @ObservationIgnored private var memoryWatch: DispatchSourceMemoryPressure?
+    /// Once memory has been short, nothing more is made ahead or kept, until Headroom is opened again.
+    @ObservationIgnored private var memoryWasShort = false
     /// Where you were on the real map before both sides were shown, to go back to.
     @ObservationIgnored var focusBeforePair: UInt32?
     @ObservationIgnored var backupCandidatesMemo: (version: Int, focus: UInt32, age: Int, rows: [UInt32])?
@@ -1058,6 +1069,8 @@ final class AppModel {
             if ringsDrawn != layout.rings { ringsDrawn = layout.rings }
             if ringReach != layout.reach { ringReach = layout.reach }
         }
+        // Both disks for where you are, ready for when Backup is chosen.
+        if mode == .freeUp { prepareBothDisks() }
     }
 
     /// Which view's names go around the ring: both of Backup's sides, and its Copies, are named as the map is.
@@ -1820,6 +1833,7 @@ extension AppModel {
         }
         pairTask?.cancel()
         let wasPair = pair != nil
+        if wasPair { keepPairShown() }
         pair = nil
         // Whatever was on screen, the real map or a picture made from it, what follows reads the one that's there now.
         var changed = false
@@ -1849,51 +1863,123 @@ extension AppModel {
     }
 
     /// The folder you're in and the same folder on Backup's drive, as two halves. The drive is read in the background; the
-    /// picture goes on screen when it's ready, if it's still wanted.
+    /// picture goes on screen when it's ready, if it's still wanted. One made ahead goes on screen at once.
     private func showPair(of real: DiskTree, on destination: BackupDestination, online: Bool) {
+        guard let place = pairPlace(of: real, on: destination) else { return }
+        if let pair, pair.macPath == place.macPath, pair.drivePath == place.drivePath, pair.online == online, tree === pair.tree { return }
+        pairTask?.cancel()
+        let notes = movedNotes, ghosts = showGhosts
+        if let ready = readyPair, ready.fits(real: real, place: place, online: online, ghosts: ghosts, notes: notes) {
+            readyPairTask?.cancel()
+            installPair(ready)
+            if ScriptRunner.path != nil { print("both disks on screen at once") }
+            return
+        }
+        let name = destination.drive.name, listing = destination.drive.id, mount = destination.drive.mountPath
+        let stop = LockedFlag()
+        let asked = CACurrentMediaTime()
+        pairTask = Task { [weak self] in
+            await withTaskCancellationHandler {
+                let built = await Task.detached(priority: .userInitiated) {
+                    let began = CACurrentMediaTime()
+                    let made = PairPicture.build(real: real, macFolder: place.folder, macPath: place.macPath, drivePath: place.drivePath, driveName: name,
+                                                 notes: notes, ghosts: ghosts, online: online, listingID: listing, mount: mount, stop: stop)
+                    if ScriptRunner.path != nil { print(String(format: "both disks built in %.0f ms", (CACurrentMediaTime() - began) * 1000)) }
+                    return made
+                }.value
+                guard let self, let built, !Task.isCancelled, self.workTree === real, self.mode == .backup, self.view == .map || self.view == .copies, self.showDriveSide, !self.isCleaning else { return }
+                self.installPair(ReadyPair(real: real, place: place, online: online, ghosts: ghosts, notes: notes.map(\.notePath), picture: built))
+                // For a check: how long both disks took to be on screen after they were asked for.
+                if ScriptRunner.path != nil { print(String(format: "both disks on screen after %.0f ms", (CACurrentMediaTime() - asked) * 1000)) }
+            } onCancel: { stop.value = true }
+        }
+    }
+
+    /// Which folder both disks are shown at, and where that is on each side: the folder you're in, or the top of the disk.
+    private func pairPlace(of real: DiskTree, on destination: BackupDestination) -> PairPlaceOnDisks? {
         let realFocus = focusBeforePair ?? focus
         var folder = realFocus == 0 ? 0 : RingLayout.chainTail(tree: real, realFocus)
         // A group of macOS's own parts isn't a folder on the disk: its top stands for it.
         if folder != 0, real.nodes[Int(folder)].has(NodeFlag.synthetic), !real.nodes[Int(folder)].has(NodeFlag.anchor) { folder = 0 }
         // At the top, the whole disk beside the whole of this Mac's backup folder.
-        guard let raw = folder == 0 ? (real.rootPath.isEmpty ? "/" : real.rootPath) : real.path(folder) else { return }
+        guard let raw = folder == 0 ? (real.rootPath.isEmpty ? "/" : real.rootPath) : real.path(folder) else { return nil }
         let visible = PathMath.visible(raw)
         var drivePath = BackupPaths.onDrive(visible, under: destination.root)
         while drivePath.count > 1, drivePath.hasSuffix("/") { drivePath.removeLast() }
-        if let pair, pair.macPath == raw, pair.drivePath == drivePath, pair.online == online, tree === pair.tree { return }
-        pairTask?.cancel()
-        let notes = movedNotes, ghosts = showGhosts, name = destination.drive.name, listing = destination.drive.id, mount = destination.drive.mountPath
+        return PairPlaceOnDisks(folder: folder, macPath: raw, drivePath: drivePath)
+    }
+
+    /// Both disks on screen, in place of the map.
+    private func installPair(_ ready: ReadyPair) {
+        let built = ready.picture
+        if focusBeforePair == nil { focusBeforePair = focus }
+        // What's picked on the drive stays picked: in this folder as it is now, or dropped if it's gone; elsewhere as it was.
+        driveSelection = driveSelection.compactMap { file in
+            guard file.path.hasPrefix(built.drivePath + "/") else { return file }
+            return built.driveNodes[String(file.path.dropFirst(built.drivePath.count + 1))].flatMap { built.driveFile($0) }
+        }
+        tree = built.tree
+        bareTree = ready.real
+        pair = built
+        pairShown = ready
+        focus = 0
+        selected = nil
+        trail = []
+        nameCache = [:]
+        treeVersion += 1
+        resolvePlanSynchronously(in: built.tree)
+        relayout(.recolor)
+    }
+
+    /// Both disks made a moment after the map or the folder you're in stops changing in Free Up, in the background, so
+    /// they're ready when Backup is chosen.
+    func prepareBothDisks() {
+        guard mode == .freeUp, view == .map || view == .copies, showDriveSide, !isCleaning, let real = workTree, !real.isPartial,
+              let destination = backup.destination, connected(destination.drive) == nil, !memoryWasShort else { return }
+        if memoryWatch == nil {
+            let watch = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
+            watch.setEventHandler { [weak self] in MainActor.assumeIsolated { self?.letGoOfReadyPair() } }
+            watch.resume()
+            memoryWatch = watch
+        }
+        if let ready = readyPair, ready.real !== real { readyPair = nil }
+        guard let place = pairPlace(of: real, on: destination) else { return }
+        let notes = movedNotes, ghosts = showGhosts
+        if readyPair?.fits(real: real, place: place, online: false, ghosts: ghosts, notes: notes) == true { return }
+        readyPairTask?.cancel()
+        let name = destination.drive.name, listing = destination.drive.id, mount = destination.drive.mountPath
         let stop = LockedFlag()
-        pairTask = Task { [weak self] in
+        readyPairTask = Task { [weak self] in
             await withTaskCancellationHandler {
-                let built = await Task.detached(priority: .userInitiated) {
-                    PairPicture.build(real: real, macFolder: folder, macPath: raw, drivePath: drivePath, driveName: name, notes: notes, ghosts: ghosts,
-                                      online: online, listingID: listing, mount: mount, stop: stop)
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled else { return }
+                let built = await Task.detached(priority: .utility) {
+                    PairPicture.build(real: real, macFolder: place.folder, macPath: place.macPath, drivePath: place.drivePath, driveName: name,
+                                      notes: notes, ghosts: ghosts, online: false, listingID: listing, mount: mount, stop: stop)
                 }.value
-                guard let self, let built, !Task.isCancelled, self.workTree === real, self.mode == .backup, self.view == .map || self.view == .copies, self.showDriveSide, !self.isCleaning else { return }
-                if self.focusBeforePair == nil { self.focusBeforePair = self.focus }
-                // What's picked on the drive stays picked: in this folder as it is now, or dropped if it's gone; elsewhere as it was.
-                self.driveSelection = self.driveSelection.compactMap { file in
-                    guard file.path.hasPrefix(built.drivePath + "/") else { return file }
-                    return built.driveNodes[String(file.path.dropFirst(built.drivePath.count + 1))].flatMap { built.driveFile($0) }
-                }
-                self.tree = built.tree
-                self.bareTree = real
-                self.pair = built
-                self.focus = 0
-                self.selected = nil
-                self.trail = []
-                self.nameCache = [:]
-                self.treeVersion += 1
-                self.resolvePlanSynchronously(in: built.tree)
-                self.relayout(.recolor)
+                guard let self, let built, !Task.isCancelled, self.workTree === real else { return }
+                self.readyPair = ReadyPair(real: real, place: place, online: false, ghosts: ghosts, notes: notes.map(\.notePath), picture: built)
             } onCancel: { stop.value = true }
         }
+    }
+
+    /// Both disks made ahead, let go: memory is short.
+    func letGoOfReadyPair() {
+        memoryWasShort = true
+        readyPairTask?.cancel()
+        readyPair = nil
+    }
+
+    /// Backup's picture going off screen is kept, made from what was read on the drive last, for when Backup comes back.
+    private func keepPairShown() {
+        if let shown = pairShown, !shown.online, !memoryWasShort { readyPair = shown }
+        pairShown = nil
     }
 
     /// The real map back on screen, before anything that changes it.
     func dropGhosts() {
         pairTask?.cancel()
+        if pair != nil { keepPairShown() }
         pair = nil
         guard let real = bareTree else { return }
         let wasPair = focusBeforePair != nil

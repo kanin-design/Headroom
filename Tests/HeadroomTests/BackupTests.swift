@@ -265,6 +265,81 @@ final class BackupTests: XCTestCase {
         XCTAssertFalse(pair.backedUp.contains(pair.macSide))
     }
 
+    @MainActor
+    func testListsCutFolderPathsBetweenFolders() {
+        let forms = ListNames.folderForms("~/Media/TV/Lanterns (2025)/Season 01")
+        XCTAssertEqual(forms, ["~/Media/TV/Lanterns (2025)/Season 01", "~/…/TV/Lanterns (2025)/Season 01",
+                               "~/…/Lanterns (2025)/Season 01", "~/…/Season 01"])
+        XCTAssertEqual(ListNames.folderForms("/Volumes/Spare/Films").last, "/…/Films")
+        XCTAssertEqual(ListNames.folderForms("~/Films"), ["~/Films"])
+        // Episodes listed together keep what tells them apart.
+        let names = ListNames.forms(["Lanterns (2025) - S01E02 - 1080p.mkv", "Lanterns (2025) - S01E05 - 1080p.mkv"])
+        XCTAssertNotEqual(names[0].last, names[1].last)
+        XCTAssertTrue(names[0].last?.contains("S01E02") == true)
+    }
+
+    func testTheMacHalfKeepsTheMapsKeys() throws {
+        let drive = folder + "/Drive4", top = folder + "/Mac4", mac = top + "/Media"
+        for base in [drive, mac] { try FileManager.default.createDirectory(atPath: base + "/Kept", withIntermediateDirectories: true) }
+        _ = try file(drive + "/Kept/a.mkv", bytes: 3_000_000)
+        _ = try file(mac + "/Kept/a.mkv", bytes: 3_000_000)
+        _ = try file(mac + "/b.mkv", bytes: 2_000_000)
+        let disk = FakeDisk(root: top)
+        disk.file(mac + "/Kept/a.mkv", 3_000_000, kind: .video)
+        disk.file(mac + "/b.mkv", 2_000_000, kind: .video)
+        disk.finish()
+        func key(_ tree: DiskTree, _ node: UInt32) -> UInt64 { RingLayout.pathKey(MapTree(tree), node) }
+        for (folderNode, macPath, drivePath) in [(disk.node(mac), mac, drive), (UInt32(0), disk.tree.rootPath, drive)] {
+            let pair = try XCTUnwrap(PairPicture.build(real: disk.tree, macFolder: folderNode, macPath: macPath, drivePath: drivePath,
+                                                       driveName: "Spare", notes: [], ghosts: false))
+            // What's on the Mac's half moves as the map's own pieces do when Backup comes and goes.
+            for path in [mac + "/Kept", mac + "/Kept/a.mkv", mac + "/b.mkv"] {
+                let onHalf = try XCTUnwrap(pair.tree.find(path: path), path)
+                XCTAssertEqual(key(pair.tree, onHalf), key(disk.tree, disk.node(path)), path)
+            }
+            // And no two things that are drawn share a key, the drive's copies included.
+            let keys = (0..<UInt32(pair.tree.count)).filter { pair.tree.totals[Int($0)] > 0 }.map { key(pair.tree, $0) }
+            XCTAssertEqual(Set(keys).count, keys.count, "at \(macPath)")
+        }
+    }
+
+    func testThePathNamesADiskOnlyWhenTheSelectorDoesnt() throws {
+        let drive = folder + "/Drive3", mac = folder + "/Mac3/Media"
+        for top in [drive, mac] { try FileManager.default.createDirectory(atPath: top + "/Kept", withIntermediateDirectories: true) }
+        _ = try file(drive + "/Kept/a.mkv", bytes: 3_000_000)
+        _ = try file(mac + "/Kept/a.mkv", bytes: 3_000_000)
+        let disk = FakeDisk(root: folder + "/Mac3")
+        disk.file(mac + "/Kept/a.mkv", 3_000_000, kind: .video)
+        disk.finish()
+        let pair = try XCTUnwrap(PairPicture.build(real: disk.tree, macFolder: disk.node(mac), macPath: mac, drivePath: drive, driveName: "Spare",
+                                                   notes: [], ghosts: false))
+        func steps(_ focus: UInt32) -> [PathStep] {
+            PathStep.steps(tree: pair.tree, focus: focus, pair: pair, bare: disk.tree, name: pair.tree.name)
+        }
+        // Free Up: the folders after the disk, which the selector names.
+        let real = PathStep.steps(tree: disk.tree, focus: disk.node(mac + "/Kept"), pair: nil, bare: nil, name: disk.tree.name)
+        // The fake disk keeps its files in a folder named by its path, under the disk.
+        XCTAssertEqual(real.map(\.name).suffix(2), ["Media", "Kept"])
+        XCTAssertFalse(real.contains { $0.name == "Fake" })
+        // Both disks at a folder: the folder's path, the same on both, with no step of its own for "both".
+        let both = steps(0)
+        XCTAssertEqual(both.last?.name, "Media")
+        XCTAssertFalse(both.contains { $0.stays || $0.name == "Both disks" })
+        // The Mac's half: no disk step, and its folder goes to that half.
+        let onMac = steps(try XCTUnwrap(pair.tree.find(path: mac + "/Kept")))
+        XCTAssertEqual(onMac.map(\.name).suffix(2), ["Media", "Kept"])
+        XCTAssertEqual(onMac[onMac.count - 2].go, .node(pair.macSide))
+        XCTAssertFalse(onMac.contains { $0.stays })
+        XCTAssertFalse(onMac.contains { $0.name == "This Mac" })
+        // The drive's half: the drive first, with its symbol, never folded away.
+        let onDrive = steps(try XCTUnwrap(pair.tree.find(path: drive + "/Kept")))
+        XCTAssertEqual(onDrive.first?.name, "Spare")
+        XCTAssertEqual(onDrive.map(\.name).suffix(2), ["Media", "Kept"])
+        XCTAssertEqual(onDrive[0].symbol, "externaldrive")
+        XCTAssertTrue(onDrive[0].stays)
+        XCTAssertEqual(onDrive[onDrive.count - 2].go, .node(pair.driveSide))
+    }
+
     func testBothSidesSayWhereEachFileIs() throws {
         // The drive's folder, on the disk: one file the same as the Mac's, one of a different size, one only there, one moved.
         let drive = folder + "/Drive"
