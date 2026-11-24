@@ -52,8 +52,8 @@ final class Updater {
     /// Which look the window is waiting for, so an older answer can't overwrite a newer one.
     @ObservationIgnored private var checkToken = 0
 
-    static let currentNumber = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
-    static let current = parse(currentNumber)
+    nonisolated static let currentNumber = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
+    nonisolated static let current = parse(currentNumber)
     /// This copy's build number. It goes up with every build, so it tells two copies of one version apart.
     static let currentBuild = Int(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "") ?? 0
     /// This copy's version as it reads: the number, and "beta" when it is one. macOS wants the number to be only a number,
@@ -61,15 +61,14 @@ final class Updater {
     static let currentShown = currentNumber + ((Bundle.main.object(forInfoDictionaryKey: "HeadroomStage") as? String).map { " " + $0 } ?? "")
 
     private static let skippedKey = "skippedUpdate"
+    // Fixed addresses, so they can't fail.
+    // swift-format-ignore: NeverForceUnwrap
     private static let releases = URL(string: "https://api.github.com/repos/kanin-design/Headroom/releases?per_page=20")!
+    // swift-format-ignore: NeverForceUnwrap
     /// What Headroom is and how it works, for Help.
     static let readme = URL(string: "https://github.com/kanin-design/Headroom#readme")!
     /// A scripted check reads its releases from a file instead.
-    private static var feedFile: URL? {
-        let args = CommandLine.arguments
-        guard let at = args.firstIndex(of: "--update-feed"), at + 1 < args.count else { return nil }
-        return URL(fileURLWithPath: args[at + 1])
-    }
+    private static var feedFile: URL? { CommandLine.arguments.value(after: "--update-feed").map { URL(fileURLWithPath: $0) } }
 
     // MARK: Looking
 
@@ -79,9 +78,11 @@ final class Updater {
         Task {
             try? await Task.sleep(for: .seconds(4))
             guard let release = try? await Self.newest(),
-                  Self.shouldOffer(release.version, build: release.build, current: Self.current, currentBuild: Self.currentBuild,
-                                   skipped: UserDefaults.standard.string(forKey: Self.skippedKey)),
-                  state == .idle else { return }
+                Self.shouldOffer(
+                    release.version, build: release.build, current: Self.current, currentBuild: Self.currentBuild,
+                    skipped: UserDefaults.standard.string(forKey: Self.skippedKey)),
+                state == .idle
+            else { return }
             state = .available(release)
             if AppModel.shared.accessGuideShowing { offerWaiting = true } else { windowRequests += 1 }
         }
@@ -121,7 +122,8 @@ final class Updater {
     static func answer(_ found: Result<Release?, Error>, had: Release?, current: [Int], currentBuild: Int = 0) -> State {
         switch found {
         case .success(let release):
-            return release.map { isNewer($0.version, build: $0.build, than: current, currentBuild: currentBuild) ? .available($0) : .upToDate } ?? .upToDate
+            return release.map { isNewer($0.version, build: $0.build, than: current, currentBuild: currentBuild) ? .available($0) : .upToDate }
+                ?? .upToDate
         case .failure(let error):
             return had.map { .available($0) } ?? .couldNotCheck(say(error))
         }
@@ -169,7 +171,7 @@ final class Updater {
         return false
     }
 
-    nonisolated static func isSame(_ a: [Int], _ b: [Int]) -> Bool { !isNewer(a, than: b) && !isNewer(b, than: a) }
+    nonisolated private static func isSame(_ a: [Int], _ b: [Int]) -> Bool { !isNewer(a, than: b) && !isNewer(b, than: a) }
 
     /// Whether a release is newer than this copy. As in Sparkle, the updater most Mac apps use, the build number decides
     /// between two copies of one version: it goes up with every build, so a release put out again under the same version
@@ -195,23 +197,35 @@ final class Updater {
     }
 
     private struct GitHubRelease: Decodable {
-        var tag_name: String
+        var tagName: String
         var body: String?
         var draft: Bool
-        var html_url: URL
+        var htmlURL: URL
         var assets: [Asset]
+
+        enum CodingKeys: String, CodingKey {
+            case tagName = "tag_name"
+            case htmlURL = "html_url"
+            case body, draft, assets
+        }
 
         struct Asset: Decodable {
             var name: String
-            var browser_download_url: URL
+            var browserDownloadURL: URL
             var size: Int64
+
+            enum CodingKeys: String, CodingKey {
+                case browserDownloadURL = "browser_download_url"
+                case name, size
+            }
         }
     }
 
     /// The build in a release's small file, `{"version": "0.0.6", "build": 124}`, when it's about that version.
     nonisolated static func build(in data: Data, version: [Int]) -> Int? {
         guard let facts = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let said = facts["version"] as? String, isSame(parse(said), version) else { return nil }
+            let said = facts["version"] as? String, isSame(parse(said), version)
+        else { return nil }
         if let build = facts["build"] as? Int { return build }
         return (facts["build"] as? String).flatMap { Int($0) }
     }
@@ -221,11 +235,12 @@ final class Updater {
         guard let list = try? JSONDecoder().decode([GitHubRelease].self, from: data) else { return nil }
         let releases = list.compactMap { release -> Release? in
             guard !release.draft, let disk = release.assets.first(where: { $0.name.lowercased().hasSuffix(".dmg") }) else { return nil }
-            let tag = release.tag_name.hasPrefix("v") ? release.tag_name.dropFirst() : Substring(release.tag_name)
+            let tag = release.tagName.hasPrefix("v") ? release.tagName.dropFirst() : Substring(release.tagName)
             let stage = tag.split(separator: "-", maxSplits: 1).dropFirst().first.map(String.init)
-            let facts = release.assets.first { $0.name.lowercased().hasSuffix(".json") }?.browser_download_url
-            return Release(version: parse(release.tag_name), stage: stage, notes: release.body ?? "", download: disk.browser_download_url,
-                           size: disk.size, page: release.html_url, facts: facts)
+            let facts = release.assets.first { $0.name.lowercased().hasSuffix(".json") }?.browserDownloadURL
+            return Release(
+                version: parse(release.tagName), stage: stage, notes: release.body ?? "", download: disk.browserDownloadURL,
+                size: disk.size, page: release.htmlURL, facts: facts)
         }
         return releases.max { isNewer($1.version, than: $0.version) }
     }
@@ -248,7 +263,8 @@ final class Updater {
     private static func build(from facts: URL, version: [Int]) async -> Int? {
         if facts.isFileURL { return (try? Data(contentsOf: facts)).flatMap { build(in: $0, version: version) } }
         guard let (data, response) = try? await URLSession.shared.data(for: request(facts, accept: "application/json")),
-              (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+            (response as? HTTPURLResponse)?.statusCode == 200
+        else { return nil }
         return build(in: data, version: version)
     }
 
@@ -276,7 +292,9 @@ final class Updater {
                 let disk = try await fetch(release)
                 state = .installing(release)
                 isInstalling = true
-                let app = try await Task.detached(priority: .userInitiated) { try Updater.putInPlace(from: disk, version: release.number, build: release.build) }.value
+                let app = try await Task.detached(priority: .userInitiated) {
+                    try Updater.putInPlace(from: disk, version: release.number, build: release.build)
+                }.value
                 isInstalling = false
                 if quitWhenInPlace { return AppModel.shared.quitWhenNothingIsLeft() }
                 Self.reopen(app)
@@ -294,7 +312,7 @@ final class Updater {
 
     private func fetch(_ release: Release) async throws -> URL {
         if release.download.isFileURL {
-            let copy = FileManager.default.temporaryDirectory.appendingPathComponent("Headroom-\(UUID().uuidString).dmg")
+            let copy = Self.freshDiskImage()
             try FileManager.default.copyItem(at: release.download, to: copy)
             return copy
         }
@@ -334,15 +352,17 @@ final class Updater {
             waiting?.resume(with: result)
         }
 
-        func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData _: Int64, totalBytesWritten: Int64,
-                        totalBytesExpectedToWrite _: Int64) {
+        func urlSession(
+            _ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData _: Int64, totalBytesWritten: Int64,
+            totalBytesExpectedToWrite _: Int64
+        ) {
             if pace.isDue() { progress(totalBytesWritten) }
         }
 
         func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
             guard (downloadTask.response as? HTTPURLResponse)?.statusCode == 200 else { return finish(.failure(Problem.noAnswer)) }
             // The file goes the moment this returns, so it's moved first.
-            let kept = FileManager.default.temporaryDirectory.appendingPathComponent("Headroom-\(UUID().uuidString).dmg")
+            let kept = Updater.freshDiskImage()
             do {
                 try FileManager.default.moveItem(at: location, to: kept)
                 finish(.success(kept))
@@ -359,9 +379,14 @@ final class Updater {
         }
     }
 
+    /// A new place for a downloaded disk image.
+    nonisolated private static func freshDiskImage() -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("Headroom-\(UUID().uuidString).dmg")
+    }
+
     /// Opens the disk image, checks it holds this app at that version and build, unharmed, and swaps it in. The old version
     /// goes to the Trash, so it can come back, and it's put back if the swap fails.
-    nonisolated static func putInPlace(from disk: URL, version: String, build: Int? = nil) throws -> URL {
+    nonisolated private static func putInPlace(from disk: URL, version: String, build: Int?) throws -> URL {
         let fm = FileManager.default
         let work = fm.temporaryDirectory.appendingPathComponent("Headroom-update-\(UUID().uuidString)")
         let mount = work.appendingPathComponent("disk")
@@ -377,9 +402,10 @@ final class Updater {
         }
         let found = mount.appendingPathComponent("Headroom.app")
         guard let info = NSDictionary(contentsOf: found.appendingPathComponent("Contents/Info.plist")),
-              info["CFBundleIdentifier"] as? String == Bundle.main.bundleIdentifier,
-              info["CFBundleShortVersionString"] as? String == version,
-              build.map({ info["CFBundleVersion"] as? String == String($0) }) ?? true else { throw Problem.notThisApp }
+            info["CFBundleIdentifier"] as? String == Bundle.main.bundleIdentifier,
+            info["CFBundleShortVersionString"] as? String == version,
+            build.map({ info["CFBundleVersion"] as? String == String($0) }) ?? true
+        else { throw Problem.notThisApp }
         guard isSignedLikeThis(found) else { throw Problem.damaged }
 
         let target = installTarget()
@@ -418,7 +444,7 @@ final class Updater {
 
     /// What this app's signature asks of another version: its certificate. Nil when it's signed ad hoc, as a build without
     /// the certificate is, because then the rule names this build's own code and no other version could meet it.
-    nonisolated static func ownRequirement() -> SecRequirement? {
+    nonisolated private static func ownRequirement() -> SecRequirement? {
         var me: SecCode?
         guard SecCodeCopySelf([], &me) == errSecSuccess, let me else { return nil }
         var onDisk: SecStaticCode?
@@ -426,13 +452,15 @@ final class Updater {
         var requirement: SecRequirement?
         guard SecCodeCopyDesignatedRequirement(onDisk, [], &requirement) == errSecSuccess, let requirement else { return nil }
         var text: CFString?
-        guard SecRequirementCopyString(requirement, [], &text) == errSecSuccess, let text, (text as String).contains("certificate") else { return nil }
+        guard SecRequirementCopyString(requirement, [], &text) == errSecSuccess, let text, (text as String).contains("certificate") else {
+            return nil
+        }
         return requirement
     }
 
     /// Where this app is, unless macOS is running it from somewhere it can't be replaced: a hidden copy it makes of an app
     /// opened straight from Downloads, or the disk image itself. Then the new one goes to Applications.
-    nonisolated static func installTarget() -> URL {
+    nonisolated private static func installTarget() -> URL {
         let here = Bundle.main.bundleURL
         let folder = here.deletingLastPathComponent().path
         if !here.path.contains("/AppTranslocation/"), !here.path.hasPrefix("/Volumes/"), FileManager.default.isWritableFile(atPath: folder) {
@@ -471,7 +499,8 @@ final class Updater {
         let open = "/usr/bin/open " + behind + (passed.isEmpty ? "\"$0\"" : "\"$0\" --args \"$@\"")
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/bin/sh")
-        task.arguments = ["-c", "while /bin/kill -0 \(ProcessInfo.processInfo.processIdentifier) 2>/dev/null; do /bin/sleep 0.2; done; " + open, app.path] + passed
+        task.arguments =
+            ["-c", "while /bin/kill -0 \(ProcessInfo.processInfo.processIdentifier) 2>/dev/null; do /bin/sleep 0.2; done; " + open, app.path] + passed
         try? task.run()
         NSApp.terminateSoon()
     }
@@ -487,7 +516,7 @@ final class Updater {
         return task.terminationStatus
     }
 
-    enum Problem: LocalizedError {
+    private enum Problem: LocalizedError {
         case noAnswer, notADisk, notThisApp, damaged, cantWrite
 
         var errorDescription: String? {

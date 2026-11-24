@@ -1,5 +1,4 @@
 import AppKit
-import SwiftUI
 
 /// A chart in a view: where the ring is, and what the pointer, clicks and keys there do.
 @MainActor
@@ -13,7 +12,7 @@ extension SunburstChart {
     /// Where the ring is on screen now, in the chart view's coordinates: as it's drawn, so while the view glides to a new
     /// size the pointer still finds the piece it's over. Before anything is drawn, where the chart was told the ring goes.
     /// A radius of 0 before the chart has been placed.
-    var ringNow: (center: CGPoint, radius: CGFloat) {
+    private var ringNow: (center: CGPoint, radius: CGFloat) {
         let drawn = engine.place
         return drawn.radius > 0 ? drawn : (place.center, place.radius)
     }
@@ -23,10 +22,7 @@ extension SunburstChart {
     public func polar(of point: CGPoint) -> Polar? {
         let ring = ringNow
         guard ring.radius > 0 else { return nil }
-        let dx = Float(point.x - ring.center.x), dy = Float(point.y - ring.center.y)
-        var angle = atan2(dx, -dy)
-        if angle < 0 { angle += 2 * .pi }
-        return (angle, (dx * dx + dy * dy).squareRoot() / Float(ring.radius))
+        return polarPoint(dx: Float(point.x - ring.center.x), dy: Float(point.y - ring.center.y), radius: Float(ring.radius))
     }
 
     /// Where a node's piece is on screen, in the chart view's coordinates: its middle. For something too small to have a
@@ -80,15 +76,15 @@ extension SunburstChart {
         view.onPress = { [weak self] index in self?.click(piece: index, count: 1) }
     }
 
-    /// Where the ring is to rest in its view, in the view's coordinates, and the view's size: on every change, so the names
-    /// follow. While it moves, as when the window is resized, the names move with it, and once it rests they're placed again
-    /// for where it is. The ring itself is drawn where
-    /// its engine is told on each frame (`SunburstEngine.setPlace(center:radius:)`, as `RingPlace` does), and that's where
-    /// the pointer finds its pieces.
+    /// Where the ring is to rest in its view, in the view's coordinates, and the view's size: on every change, so the
+    /// names follow. While it moves, as when the window is resized, the names move with it, and once it rests they're
+    /// placed again for where it is. The ring itself is drawn where its engine is told on each frame
+    /// (`SunburstEngine.setPlace(center:radius:)`, as `RingPlace` does), and that's where the pointer finds its pieces.
     public func place(center: CGPoint, radius: CGFloat, size: CGSize) {
         func far(_ a: CGFloat, _ b: CGFloat) -> Bool { abs(a - b) > 0.5 }
         let first = place.radius == 0
-        let moved = far(place.center.x, center.x) || far(place.center.y, center.y) || far(place.radius, radius)
+        let moved =
+            far(place.center.x, center.x) || far(place.center.y, center.y) || far(place.radius, radius)
             || far(place.size.width, size.width) || far(place.size.height, size.height)
         place = (center, radius, size)
         if first { placeLabels() } else if moved { relabelWhenRested() }
@@ -98,7 +94,7 @@ extension SunburstChart {
     @_spi(Diagnostics) public func labelClicked(piece index: Int, count: Int) {
         guard index < engine.layout.pieces.count else { return }
         let p = engine.layout.pieces[index]
-        click(SunburstClick(target: .label(SunburstPointed(node: p.node, piece: index, isGathered: p.isSmaller)), count: count))
+        click(SunburstClick(target: .label(SunburstPointed(p, at: index)), count: count))
     }
 
     /// A click, as the pointer or VoiceOver makes one: the app's `onClick` first, then the chart's own.
@@ -134,7 +130,7 @@ extension SunburstChart {
     func click(piece index: Int, count: Int) {
         guard index < engine.layout.pieces.count else { return }
         let p = engine.layout.pieces[index]
-        click(SunburstClick(target: .piece(SunburstPointed(node: p.node, piece: index, isGathered: p.isSmaller)), count: count))
+        click(SunburstClick(target: .piece(SunburstPointed(p, at: index)), count: count))
     }
 
     /// Spreading two fingers over a piece is a click on it that never opens anything. Over the middle or away from the ring
@@ -146,20 +142,20 @@ extension SunburstChart {
             return
         }
         let p = engine.layout.pieces[index]
-        let pointed = SunburstPointed(node: p.node, piece: index, isGathered: p.isSmaller)
+        let pointed = SunburstPointed(p, at: index)
         if onClick?(SunburstClick(target: .piece(pointed), count: 1, byPinch: true)) == true { return }
         guard !p.isSmaller, tree.firstChild(of: RingLayout.chainTail(tree: tree, p.tail)) != 0 else { return }
         zoom(into: p.tail)
     }
 
     /// Back out, the app's way if it has one.
-    func goBack() {
+    private func goBack() {
         if onBack?() == true { return }
         zoomOut()
     }
 
     /// The node at a point, unless it's "smaller items": in the middle, the node in the middle.
-    func ownNode(at point: Polar) -> UInt32? {
+    private func ownNode(at point: Polar) -> UInt32? {
         if point.radius < RingLayout.hole { return focus }
         guard let index = engine.layout.hit(angle: point.angle, radius: point.radius), !engine.layout.pieces[index].isSmaller else {
             return nil
@@ -170,7 +166,7 @@ extension SunburstChart {
     func key(_ event: NSEvent) -> Bool {
         if onKey?(event) == true { return true }
         switch event.keyCode {
-        case 53, 51:                     // escape, delete: back out
+        case 53, 51:  // escape, delete: back out
             guard focus != 0 || onBack != nil else { return false }
             goBack()
             return true

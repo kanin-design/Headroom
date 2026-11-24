@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 
 /// One place for the next thing to do: plan, review, clean, empty. It stays in the same spot, so a safe cleanup is the same
@@ -25,7 +24,7 @@ struct NextStepBar: View {
     }
 
     private func bar<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 8, content: content)
+        VStack(alignment: .leading, spacing: Kit.Space.regular, content: content)
             .modifier(BarChrome())
     }
 
@@ -49,11 +48,16 @@ struct NextStepBar: View {
         let ready = model.readyItems
         let partial = model.tree?.isPartial == true
         let onlyTrash = model.plan.items.allSatisfy(\.isEmptyTrash)
-        let label = partial ? "Waiting for the scan"
-            : ready.isEmpty ? "Needs attention"
-            : onlyTrash ? "Empty Trash: \(formatBytes(cleanBytes(ready)))"
-            : ready.count == count ? "Clean \(formatBytes(model.planNumbers.total))"
-            : "Clean \(ready.count) of \(count): \(formatBytes(cleanBytes(ready)))"
+        let label =
+            partial
+            ? "Waiting for the scan"
+            : ready.isEmpty
+                ? "Needs attention"
+                : onlyTrash
+                    ? "Empty Trash: \(formatBytes(cleanBytes(ready)))"
+                    : ready.count == count
+                        ? "Clean \(formatBytes(model.planNumbers.total))"
+                        : "Clean \(ready.count) of \(count): \(formatBytes(cleanBytes(ready)))"
         return bar {
             Button {
                 model.cleanNow()
@@ -65,7 +69,7 @@ struct NextStepBar: View {
             .buttonStyle(GoButton())
             .help(onlyTrash ? "" : "Moves everything to the Trash. Undo puts it back.")
             .animation(.snappy(duration: 0.25), value: model.planNumbers.total)
-            HStack(spacing: 6) {
+            HStack(spacing: Kit.Space.medium) {
                 Spacer(minLength: 0)
                 Button("Deselect all") { Motion.animate(.snappy(duration: 0.2)) { model.clearPlan() } }
                     .buttonStyle(.textLink)
@@ -93,7 +97,7 @@ struct NextStepBar: View {
         switch after.state {
         case .waiting:
             bar {
-                HStack(spacing: 8) {
+                HStack(spacing: Kit.Space.regular) {
                     Button {
                         model.emptyNow()
                     } label: {
@@ -104,11 +108,11 @@ struct NextStepBar: View {
                         .buttonStyle(SoftButton())
                         .fixedSize()
                 }
-                HStack(spacing: 6) {
+                HStack(spacing: Kit.Space.medium) {
                     if !model.plan.isEmpty {
                         Text("\(model.plan.count) still selected")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.white.opacity(0.55))
+                            .font(Kit.Font.detail)
+                            .foregroundStyle(Kit.Text.tertiary)
                     }
                     Spacer(minLength: 0)
                     Button("Not now") { Motion.animate(.snappy(duration: 0.2)) { model.leaveInTrash() } }

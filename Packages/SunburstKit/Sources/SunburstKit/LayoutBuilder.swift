@@ -1,6 +1,3 @@
-import Foundation
-import simd
-
 /// What each level of a picture is, worked out once from the parts and the node in the middle: the split and the bands
 /// that are drawn at this focus, in order from the middle, and which of them are thin. Every level after them is a ring.
 @usableFromInline
@@ -204,7 +201,8 @@ final class ChildLists {
                     guard best >= 0 else { break }
                     let top = buffer[best]
                     guard tree.isFolder(top), tree.firstChild(of: top) != 0,
-                          Double(bestSize) >= Double(total(tail)) * RingLayout.chainShare else { break }
+                        Double(bestSize) >= Double(total(tail)) * RingLayout.chainShare
+                    else { break }
                     buffer.remove(at: best)
                     _ = appendChildren(tree, of: top)
                     own &+= tree.ownSize(of: top)
@@ -253,8 +251,10 @@ struct RingBuilder<Tree: SunburstTree> {
     @usableFromInline var around: [Float] = []
 
     @inlinable
-    init(tree: Tree, focus: UInt32, parts: SunburstParts, plan: LevelPlan, lists: ChildLists, colorer: @escaping RingLayout.Colorer,
-         marker: RingLayout.Marker?, measuring: Bool, marksDeeper: Bool) {
+    init(
+        tree: Tree, focus: UInt32, parts: SunburstParts, plan: LevelPlan, lists: ChildLists, colorer: @escaping RingLayout.Colorer,
+        marker: RingLayout.Marker?, measuring: Bool, marksDeeper: Bool
+    ) {
         self.tree = tree
         self.focus = focus
         rings = parts.rings
@@ -290,11 +290,12 @@ struct RingBuilder<Tree: SunburstTree> {
             }
             let r0 = edges[edges.count - 1]
             edges.append(r0 + width)
-            let part: RingLayout.Level.Part = switch plan.kind(level) {
-            case .split: .split
-            case .band: .band
-            case .ring: .ring
-            }
+            let part: RingLayout.Level.Part =
+                switch plan.kind(level) {
+                case .split: .split
+                case .band: .band
+                case .ring: .ring
+                }
             levels.append(RingLayout.Level(part: part, isThin: thin, r0: r0, r1: r0 + width))
         }
         layout._levels = levels
@@ -308,8 +309,10 @@ struct RingBuilder<Tree: SunburstTree> {
     /// Places what's inside `parentNode` in `level`, between `a0` and `a1`, and everything inside that further out.
     /// `parentKey` is the key of `parentNode`. `only`, with `rest`, places part of a folder: one of its stretches.
     @inlinable
-    mutating func place(parent parentNode: UInt32, piece parentPiece: Int32, key parentKey: UInt64, a0: Float, a1: Float, level ring: Int,
-                        only: Range<Int>? = nil, rest: UInt64 = 0, restCount: Int32 = 0) {
+    mutating func place(
+        parent parentNode: UInt32, piece parentPiece: Int32, key parentKey: UInt64, a0: Float, a1: Float, level ring: Int,
+        only: Range<Int>? = nil, rest: UInt64 = 0, restCount: Int32 = 0
+    ) {
         guard ring + 1 < edges.count else { return }
         @inline(__always) func total(_ id: UInt32) -> UInt64 { tree.size(of: id) }
         let kind = plan.kind(ring)
@@ -409,10 +412,12 @@ struct RingBuilder<Tree: SunburstTree> {
                 // sitting on the first. `extent(of:)` gives all of it.
                 for (n, stretch) in cuts.enumerated() {
                     let to = n == cuts.count - 1 ? angle + sweep : at + sweep * Float(stretch.size) / whole
-                    layout._pieces.append(Piece(node: id, tail: id, key: key ^ ((UInt64(stretch.key) &+ 1) << 48), a0: at, a1: to, r0: r0, r1: r1,
-                                                ring: Int32(ring), parent: parentPiece, end: Int32(layout._pieces.count + 1), isSmaller: false,
-                                                smallerCount: 0, color: stretch.color ?? color, role: role, isShared: shared, seed: seed,
-                                                size: stretch.size, marked: stretch.isMarked ? 1 : 0, isStretch: true))
+                    layout._pieces.append(
+                        Piece(
+                            node: id, tail: id, key: key ^ ((UInt64(stretch.key) &+ 1) << 48), a0: at, a1: to, r0: r0, r1: r1,
+                            ring: Int32(ring), parent: parentPiece, end: Int32(layout._pieces.count + 1), isSmaller: false,
+                            smallerCount: 0, color: stretch.color ?? color, role: role, isShared: shared, seed: seed,
+                            size: stretch.size, marked: stretch.isMarked ? 1 : 0, isStretch: true))
                     at = to
                 }
                 if hasChildren {
@@ -431,27 +436,33 @@ struct RingBuilder<Tree: SunburstTree> {
             // reads as that thing, which it isn't, and a click on it opens the folder. In a picture coloured by group, the
             // colour of what's in it is the group's, and that's what it shows.
             if rings.order == .byGroup, parentNode != 0, hasChildren, ring + 2 < edges.count, case .ring = kind,
-               case .ring = plan.kind(ring + 1), let runs = runs(of: id, a0: angle, a1: angle + sweep, childLevel: ring + 1) {
+                case .ring = plan.kind(ring + 1), let runs = runs(of: id, a0: angle, a1: angle + sweep, childLevel: ring + 1)
+            {
                 let marked: Float = marker?(id) == true ? 1 : 0
                 for (r, run) in runs.enumerated() {
                     let at = Int32(layout._pieces.count)
-                    layout._pieces.append(Piece(node: id, tail: id, key: key ^ (UInt64(r + 1) << 56), a0: run.a0, a1: run.a1, r0: r0, r1: r1,
-                                                ring: Int32(ring), parent: parentPiece, end: at + 1, isSmaller: false, smallerCount: 0,
-                                                color: rings.stretchColours == .contents ? run.color : color, role: role, isShared: shared,
-                                                seed: seed, size: run.bytes, marked: marked,
-                                                isStretch: true))
+                    layout._pieces.append(
+                        Piece(
+                            node: id, tail: id, key: key ^ (UInt64(r + 1) << 56), a0: run.a0, a1: run.a1, r0: r0, r1: r1,
+                            ring: Int32(ring), parent: parentPiece, end: at + 1, isSmaller: false, smallerCount: 0,
+                            color: rings.stretchColours == .contents ? run.color : color, role: role, isShared: shared,
+                            seed: seed, size: run.bytes, marked: marked,
+                            isStretch: true))
                     let start = lists.buffer.count
                     lists.buffer.append(contentsOf: run.kids)
-                    place(parent: id, piece: at, key: key, a0: run.a0, a1: run.a1, level: ring + 1, only: start..<lists.buffer.count,
-                          rest: run.rest, restCount: run.restCount)
+                    place(
+                        parent: id, piece: at, key: key, a0: run.a0, a1: run.a1, level: ring + 1, only: start..<lists.buffer.count,
+                        rest: run.rest, restCount: run.restCount)
                     layout._pieces[Int(at)].end = Int32(layout._pieces.count)
                 }
                 angle += sweep
                 continue
             }
-            layout._pieces.append(Piece(node: id, tail: id, key: key, a0: angle, a1: angle + sweep, r0: r0, r1: r1, ring: Int32(ring),
-                                        parent: parentPiece, end: index + 1, isSmaller: false, smallerCount: 0, color: color, role: role,
-                                        isShared: shared, seed: seed, size: bytes, marked: marker?(id) == true ? 1 : 0))
+            layout._pieces.append(
+                Piece(
+                    node: id, tail: id, key: key, a0: angle, a1: angle + sweep, r0: r0, r1: r1, ring: Int32(ring),
+                    parent: parentPiece, end: index + 1, isSmaller: false, smallerCount: 0, color: color, role: role,
+                    isShared: shared, seed: seed, size: bytes, marked: marker?(id) == true ? 1 : 0))
             if hasChildren {
                 if ring + 2 < edges.count {
                     place(parent: id, piece: index, key: key, a0: angle, a1: angle + sweep, level: ring + 1)
@@ -473,10 +484,12 @@ struct RingBuilder<Tree: SunburstTree> {
                 let color = colorer(parentNode)
                 let index = Int32(layout._pieces.count)
                 let key = parentKey ^ 0x5555_5555_5555 ^ (only == nil ? 0 : 0x77 << 48)
-                layout._pieces.append(Piece(node: parentNode, tail: parentNode, key: key, a0: angle, a1: a1, r0: r0, r1: r1, ring: Int32(ring),
-                                            parent: parentPiece, end: index + 1, isSmaller: true, smallerCount: smallerCount, color: color,
-                                            role: .container, isShared: false, seed: RingLayout.seed(key), size: leftover,
-                                            marked: marker?(parentNode) == true ? 1 : 0))
+                layout._pieces.append(
+                    Piece(
+                        node: parentNode, tail: parentNode, key: key, a0: angle, a1: a1, r0: r0, r1: r1, ring: Int32(ring),
+                        parent: parentPiece, end: index + 1, isSmaller: true, smallerCount: smallerCount, color: color,
+                        role: .container, isShared: false, seed: RingLayout.seed(key), size: leftover,
+                        marked: marker?(parentNode) == true ? 1 : 0))
             }
         }
     }

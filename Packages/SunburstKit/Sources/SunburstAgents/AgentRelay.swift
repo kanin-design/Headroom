@@ -55,8 +55,10 @@ final class AgentRelay: @unchecked Sendable {
     /// What the app hasn't answered yet, by id, so each still gets an answer if the app goes away.
     private var owed: [String: Any] = [:]
 
-    init(host: AgentHost, path: String, open: (@Sendable () -> Void)?, patience: Double = AgentRelay.patience,
-         write: @escaping @Sendable (Data) -> Void) {
+    init(
+        host: AgentHost, path: String, open: (@Sendable () -> Void)?, patience: Double = AgentRelay.patience,
+        write: @escaping @Sendable (Data) -> Void
+    ) {
         self.host = host
         self.path = path
         self.open = open
@@ -135,7 +137,9 @@ final class AgentRelay: @unchecked Sendable {
                 return Array(owed.values)
             }
             for id in unanswered {
-                if let reply = AgentSession.said(id: id, "\(host.name) quit before it answered. Call again: it will be opened.", isError: true) { write(reply) }
+                if let reply = AgentSession.said(id: id, "\(host.name) quit before it answered. Call again: it will be opened.", isError: true) {
+                    write(reply)
+                }
             }
         }
         return made

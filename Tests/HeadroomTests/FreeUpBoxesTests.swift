@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Headroom
 
 /// What Free Up finds and how it's boxed: junk, old installers, old screenshots, the largest files, and what one click takes.
@@ -7,10 +8,14 @@ final class FreeUpBoxesTests: XCTestCase {
     private let day: TimeInterval = 86_400
     private let now = Date(timeIntervalSince1970: 86_400 * 20_000)
 
-    private func row(_ id: String, _ d: FakeDisk, _ path: String, box: BoxKind, quick: Bool = false, inUse: String? = nil, askFirst: Bool = false) -> WinRow {
+    private func row(
+        _ id: String, _ d: FakeDisk, _ path: String, box: BoxKind, quick: Bool = false, inUse: String? = nil, askFirst: Bool = false
+    ) -> WinRow {
         let node = d.node(path)
-        var r = WinRow(id: id, title: id, subtitle: "", detail: "", tier: .rebuilds, nodes: [node], bytes: d.tree.totals[Int(node)], paperBytes: d.tree.totals[Int(node)],
-                       action: .trash, command: nil, bundleID: nil)
+        var r = WinRow(
+            id: id, title: id, subtitle: "", detail: "", tier: .rebuilds, nodes: [node], bytes: d.tree.totals[Int(node)],
+            paperBytes: d.tree.totals[Int(node)],
+            action: .trash, command: nil, bundleID: nil)
         r.isQuick = quick
         r.inUse = inUse
         r.askFirst = askFirst
@@ -75,9 +80,11 @@ final class FreeUpBoxesTests: XCTestCase {
     // MARK: Screenshots
 
     func testScreenshotNamesInAnyLanguage() {
-        for name in ["Screenshot 2026-11-09 at 12.00.00.png", "Screenshot 2026-11-09 at 9.05.11 PM.png", "Skjermbilde 2026-11-09 kl. 12.00.00.png",
-                     "Screen Recording 2026-03-01 at 08.15.42.mov", "Bildschirmfoto 2026-01-02 um 10.11.12.png", "Screenshot 2026-11-09 at 12.00.00 (2).png",
-                     "Capture d’écran 2026-05-05 à 14.00.01.jpg"] {
+        for name in [
+            "Screenshot 2026-11-09 at 12.00.00.png", "Screenshot 2026-11-09 at 9.05.11 PM.png", "Skjermbilde 2026-11-09 kl. 12.00.00.png",
+            "Screen Recording 2026-03-01 at 08.15.42.mov", "Bildschirmfoto 2026-01-02 um 10.11.12.png", "Screenshot 2026-11-09 at 12.00.00 (2).png",
+            "Capture d’écran 2026-05-05 à 14.00.01.jpg",
+        ] {
             XCTAssertTrue(Facts.isScreenshotName(name), name)
         }
         for name in ["Report 2026-11-09.pdf", "IMG_2026.png", "Screenshot.png", "notes 2026-11-09 at 12.00.00.txt", "2026-11-09.png"] {
@@ -93,7 +100,9 @@ final class FreeUpBoxesTests: XCTestCase {
             try Data(count: 2000).write(to: URL(fileURLWithPath: folder + "/" + name))
         }
         let found = Facts.readScreenshots(home: folder, folders: [folder])
-        XCTAssertEqual(Set(found.map { ($0.path as NSString).lastPathComponent }), ["Screenshot 2026-11-09 at 12.00.00.png", "Screen Recording 2026-03-01 at 08.15.42.mov"])
+        XCTAssertEqual(
+            Set(found.map { ($0.path as NSString).lastPathComponent }),
+            ["Screenshot 2026-11-09 at 12.00.00.png", "Screen Recording 2026-03-01 at 08.15.42.mov"])
         XCTAssertTrue(Facts.readScreenshots(home: folder, folders: [folder + "/missing"]).isEmpty, "A folder that isn't there adds nothing")
     }
 

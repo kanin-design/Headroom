@@ -30,7 +30,8 @@ enum LookMedia {
     private static func film(_ url: URL) async -> Found? {
         let asset = AVURLAsset(url: url)
         guard let track = try? await asset.loadTracks(withMediaType: .video).first,
-              let loaded = try? await track.load(.naturalSize, .preferredTransform, .nominalFrameRate) else { return nil }
+            let loaded = try? await track.load(.naturalSize, .preferredTransform, .nominalFrameRate)
+        else { return nil }
         let (size, transform, rate) = loaded
         let shown = size.applying(transform)
         let width = abs(shown.width), height = abs(shown.height)
@@ -47,9 +48,10 @@ enum LookMedia {
 
     private static func picture(_ url: URL) -> Found? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
-              let w = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.doubleValue,
-              let h = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.doubleValue, w >= 1, h >= 1 else { return nil }
+            let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+            let w = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.doubleValue,
+            let h = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.doubleValue, w >= 1, h >= 1
+        else { return nil }
         // Orientations 5 to 8 are turned a quarter, so the picture is shown the other way round.
         let turned = ((properties[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 1) >= 5
         let (width, height) = turned ? (h, w) : (w, h)

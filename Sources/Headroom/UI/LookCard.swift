@@ -37,19 +37,15 @@ struct LookCard: View {
         let name = node == 0 ? model.realName(of: 0) : model.displayName(node) + (tail == node ? "" : " › " + tree.name(tail))
         let path = node == 0 || HiddenNames.isOn ? nil : tree.path(node).map(DiskTree.friendly)
         let bytes = tree.totals[Int(node)]
-        return HStack(alignment: .top, spacing: 10) {
+        return HStack(alignment: .top, spacing: Kit.rowInset) {
             if !look.back.isEmpty {
                 Button {
                     model.lookBack()
                 } label: {
                     Image(systemName: "chevron.left")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.88))
-                        .frame(width: 26, height: 26)
-                        .background(Circle().fill(.white.opacity(0.1)))
-                        .contentShape(Circle())
+                        .font(Kit.Font.strong)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.symbol(circle: 26))
                 .help("Back")
             }
             if !HiddenNames.isOn, let real = model.realPath(of: node) {
@@ -61,56 +57,48 @@ struct LookCard: View {
                 PanelTitle(title: name, subtitle: path, copyTitle: { model.copyName(of: thing) }, copySubtitle: { model.copyPath(of: thing) })
                 let details = model.lookDetails.node == node ? model.lookDetails : LookDetails()
                 if let facts = [model.facts(of: node), details.media].compactMap({ $0 }).joined(separator: " · ").nilIfEmpty {
-                    Text(facts)
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(.white.opacity(0.62))
-                        .fixedSize(horizontal: false, vertical: true)
+                    Self.line(facts)
                 }
-                if let decide = [details.lastUse, details.frees.map(Self.frees)].compactMap({ $0 }).joined(separator: " · ").nilIfEmpty {
-                    Text(decide)
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(.white.opacity(0.62))
-                        .fixedSize(horizontal: false, vertical: true)
+                if let decide = [details.lastUse, details.frees.map { freesText($0) }].compactMap({ $0 }).joined(separator: " · ").nilIfEmpty {
+                    Self.line(decide)
                 }
                 if node != 0, let links = Accounting.hoverLine(node, bytes: bytes, in: tree) {
                     Text(links)
-                        .font(.system(size: 11.5, weight: .semibold))
+                        .font(Kit.Font.label)
                         .foregroundStyle(Kit.amber)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            Spacer(minLength: 4)
-            VStack(alignment: .trailing, spacing: 8) {
+            Spacer(minLength: Kit.Space.small)
+            VStack(alignment: .trailing, spacing: Kit.Space.regular) {
                 Button {
                     model.closeLook()
                 } label: {
                     Image(systemName: "xmark")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.7))
-                        .frame(width: 22, height: 22)
-                        .background(Circle().fill(.white.opacity(0.09)))
-                        .contentShape(Circle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.symbol(circle: 22))
                 .help("Close (Esc)")
                 Text(tree.sizeText(node))
-                    .font(.system(size: 20, weight: .semibold, design: .rounded).monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.95))
+                    .font(Kit.Font.figure)
+                    .foregroundStyle(Kit.Text.primary)
                     .fixedSize()
             }
         }
         .padding(.horizontal, 16)
-        .padding(.top, 14)
-        .padding(.bottom, 10)
+        .padding(.top, Kit.Space.section)
+        .padding(.bottom, Kit.rowInset)
         .named(thing, in: model)
         // Anywhere on it but a button moves the window.
         .contentShape(Rectangle())
         .gesture(WindowDragGesture())
     }
 
-    /// What sending it to the Trash and emptying it would give back, with other copies counted.
-    private static func frees(_ bytes: UInt64) -> String {
-        bytes == 0 ? "Frees nothing" : "Frees \(formatBytes(bytes))"
+    /// A line of what's known about it, under its name.
+    private static func line(_ text: String) -> some View {
+        Text(text)
+            .font(Kit.Font.detail)
+            .foregroundStyle(Kit.Text.secondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     @ViewBuilder
@@ -135,8 +123,8 @@ struct LookCard: View {
             footerRow(node, goesIn: goesIn, named: false)
         }
         .controlSize(.regular)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        .padding(.horizontal, Kit.Space.section)
+        .padding(.vertical, Kit.Space.large)
         .contentShape(Rectangle())
         .gesture(WindowDragGesture())
     }
@@ -151,7 +139,7 @@ struct LookCard: View {
     }
 
     private func footerRow(_ node: UInt32, goesIn: Bool, named: Bool) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: Kit.Space.regular) {
             Button {
                 model.openLooked()
             } label: {
@@ -166,7 +154,7 @@ struct LookCard: View {
                 }
                 .buttonStyle(.glass)
             }
-            Spacer(minLength: 4)
+            Spacer(minLength: Kit.Space.small)
             // The tick is the mode's: in Backup it selects a file to move, in Free Up something to clean.
             if model.mode == .backup {
                 if model.backupTakes(node) { BackupTick(model: model, node: node) }
@@ -185,7 +173,6 @@ private struct LookFolder: View {
     let model: AppModel
     let node: UInt32
 
-    private let rowHeight: CGFloat = 33.5
     private let pictureHeight: CGFloat = 78
 
     var body: some View {
@@ -197,28 +184,36 @@ private struct LookFolder: View {
             let pictures = model.lookMedia(of: node)
             ScrollViewReader { proxy in
                 ScrollView {
-                    VStack(spacing: 8) {
+                    VStack(spacing: Kit.Space.regular) {
                         if !pictures.isEmpty {
                             LookPictures(model: model, files: pictures, height: pictureHeight)
                         }
                         LazyVStack(spacing: 0) {
                             ForEach(Array(top.enumerated()), id: \.element) { index, row in
-                                NodeRow(title: model.displayName(row), subtitle: nil, value: tree.sizeText(row),
-                                        share: Double(tree.totals[Int(row)]) / biggest, color: model.listColor(row, in: tree),
-                                        isLit: model.lookCursor == index,
-                                        onHover: { inside in model.highlight(node: inside ? row : nil) },
-                                        onTap: { model.showInLook(row) })
-                                    .named(NamedThing(row), in: model)
-                                    .id(row)
+                                let colour = model.listColor(row, in: tree)
+                                ListRow(
+                                    title: model.displayName(row), trailing: tree.sizeText(row), isLit: model.lookCursor == index,
+                                    markWidth: ListDot.size, share: (Double(tree.totals[Int(row)]) / biggest, colour),
+                                    onHover: { inside in model.highlight(node: inside ? row : nil) },
+                                    onTap: { model.showInLook(row) }
+                                ) {
+                                    ListDot(colour: colour)
+                                }
+                                .named(NamedThing(row), in: model)
+                                .id(row)
                             }
                             if own > 0 {
-                                NodeRow(title: "Smaller items here", subtitle: nil, value: formatBytes(own),
-                                        share: Double(own) / biggest, color: .white.opacity(0.3), onHover: { _ in }, onTap: {})
+                                ListRow(
+                                    title: "Smaller items here", trailing: formatBytes(own), markWidth: ListDot.size,
+                                    share: (Double(own) / biggest, Kit.Text.quaternary)
+                                ) {
+                                    ListDot(colour: Kit.Text.quaternary)
+                                }
                             }
                         }
                     }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 6)
+                    .padding(.horizontal, Kit.Space.regular)
+                    .padding(.vertical, Kit.Space.medium)
                 }
                 .scrollIndicators(.never)
                 .frame(maxHeight: .infinity, alignment: .top)
@@ -240,10 +235,10 @@ private struct LookPictures: View {
     @State private var pictures: [UInt32: NSImage] = [:]
 
     var body: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3), spacing: 6) {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: Kit.Space.medium), count: 3), spacing: Kit.Space.medium) {
             ForEach(files, id: \.self) { file in
                 ZStack {
-                    Rectangle().fill(.white.opacity(0.06))
+                    Rectangle().fill(Kit.Fill.card)
                     if let picture = pictures[file] {
                         Image(nsImage: picture)
                             .resizable()
@@ -253,7 +248,7 @@ private struct LookPictures: View {
                 }
                 .frame(height: height)
                 .frame(maxWidth: .infinity)
-                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: Kit.Radius.row, style: .continuous))
                 .contentShape(Rectangle())
                 .onHover { inside in model.highlight(node: inside ? file : nil) }
                 .onTapGesture { model.showInLook(file) }
@@ -268,7 +263,8 @@ private struct LookPictures: View {
             await withTaskGroup(of: (UInt32, NSImage?).self) { group in
                 for (file, path) in paths {
                     group.addTask {
-                        let request = QLThumbnailGenerator.Request(fileAt: URL(fileURLWithPath: path), size: CGSize(width: 240, height: 160), scale: 2, representationTypes: .thumbnail)
+                        let request = QLThumbnailGenerator.Request(
+                            fileAt: URL(fileURLWithPath: path), size: CGSize(width: 240, height: 160), scale: 2, representationTypes: .thumbnail)
                         return (file, try? await QLThumbnailGenerator.shared.generateBestRepresentation(for: request).nsImage)
                     }
                 }
@@ -291,7 +287,7 @@ private struct FreeUpTick: View {
             model.toggleSelection(of: NamedThing(node))
         } label: {
             HStack(spacing: 7) {
-                TickMark(state: planned ? .all : .none, color: model.planColour(of: node), size: 15)
+                TickMark(planned, color: model.planColour(of: node), size: 15)
                 Text("Free Up")
             }
         }
@@ -322,14 +318,14 @@ private struct BackupTick: View {
 
 extension AppModel {
     /// Whether the card offers Backup's tick for this: a file, on either half, that isn't a moved file's ghost.
-    func backupTakes(_ node: UInt32) -> Bool {
+    fileprivate func backupTakes(_ node: UInt32) -> Bool {
         guard let tree, Int(node) < tree.count, !tree.isGhost(node) else { return false }
         let n = tree.nodes[Int(node)]
         return node != 0 && !n.has(NodeFlag.directory) && !n.has(NodeFlag.synthetic)
     }
 
     /// Whether a file on the map is on Backup's list, or picked on the drive's half.
-    func isSelectedForBackup(_ node: UInt32) -> Bool {
+    fileprivate func isSelectedForBackup(_ node: UInt32) -> Bool {
         guard let tree, Int(node) < tree.count, let raw = tree.path(node) else { return false }
         if let pair, pair.tree === tree, tree.isInside(node, pair.driveSide) {
             guard let file = pair.driveFile(node) else { return false }
@@ -354,9 +350,10 @@ private struct LookFilm: View {
                 .padding(.bottom, 64)
                 .onTapGesture { film?.toggle() }
             if film?.isPlaying != true {
+                // A symbol drawn as big as the play button it is, not words.
                 Image(systemName: "play.fill")
                     .font(.system(size: 26, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.92))
+                    .foregroundStyle(Kit.Text.primary)
                     .frame(width: 64, height: 64)
                     .glassEffect(.regular, in: Circle())
                     .allowsHitTesting(false)
@@ -443,6 +440,8 @@ private struct LookPreview: NSViewRepresentable {
     let url: URL
 
     func makeNSView(context: Context) -> QLPreviewView {
+        // Optional only because its Objective-C init returns `id`: it makes a view for any frame.
+        // swift-format-ignore: NeverForceUnwrap
         let view = QLPreviewView(frame: .zero, style: .normal)!
         view.autostarts = false
         view.shouldCloseWithWindow = false
@@ -459,8 +458,8 @@ private struct LookPreview: NSViewRepresentable {
     }
 }
 
-private extension String {
-    var nilIfEmpty: String? { isEmpty ? nil : self }
+extension String {
+    fileprivate var nilIfEmpty: String? { isEmpty ? nil : self }
 }
 
 /// Where something ended up in the window.

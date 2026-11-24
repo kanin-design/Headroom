@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Headroom
 
 final class PlanListTests: XCTestCase {
@@ -91,7 +92,9 @@ final class PlanListTests: XCTestCase {
 
     func testAFolderWithNothingTakenBackGoesWhole() {
         let thing = item("b", ["/m"])
-        let paths = PlanList.effectivePaths(of: thing) { _ in XCTFail("shouldn't look inside"); return [] }
+        let paths = PlanList.effectivePaths(of: thing) { _ in
+            XCTFail("shouldn't look inside"); return []
+        }
         XCTAssertEqual(paths, ["/m"])
     }
 
@@ -171,7 +174,8 @@ final class PlanListTests: XCTestCase {
         thing.step = .move(folder: "/Volumes/Spare/Media")
         list.add(thing)
         list.keep("k", title: "K")
-        let file = PlanFile(list: list, cleaned: [CleanedThing(itemID: "m", title: "M", original: "/m", inTrash: "/.Trash/m", bytes: 5)], lastItems: [thing])
+        let file = PlanFile(
+            list: list, cleaned: [CleanedThing(itemID: "m", title: "M", original: "/m", inTrash: "/.Trash/m", bytes: 5)], lastItems: [thing])
         let back = try JSONDecoder().decode(PlanFile.self, from: JSONEncoder().encode(file))
         XCTAssertEqual(back.list, list)
         XCTAssertEqual(back.cleaned.first?.bytes, 5)
@@ -182,7 +186,9 @@ final class PlanListTests: XCTestCase {
 
     func testAnItemIsFoundByItsIDAfterEveryKindOfChange() {
         var list = PlanList()
-        for n in 0..<50 { list.add(PlanItem(id: "row:\(n)", title: "Row \(n)", note: "", tierRaw: Tier.noLoss.rawValue, paths: ["/Volumes/Fake/\(n)"])) }
+        for n in 0..<50 {
+            list.add(PlanItem(id: "row:\(n)", title: "Row \(n)", note: "", tierRaw: Tier.noLoss.rawValue, paths: ["/Volumes/Fake/\(n)"]))
+        }
         XCTAssertEqual(list.item("row:7")?.title, "Row 7")
         XCTAssertNil(list.item("row:50"))
         let before = list
@@ -209,9 +215,12 @@ final class PlanListTests: XCTestCase {
         disk.finish()
         var places = PlanPlaces()
         let items = [
-            PlanItem(id: "films", title: "Films", note: "", tierRaw: Tier.yourCall.rawValue, paths: ["/Volumes/Fake/films"], excluded: ["/Volumes/Fake/films/b.mkv"]),
-            PlanItem(id: "shots", title: "Shots", note: "", tierRaw: Tier.noLoss.rawValue,
-                     paths: ["/Volumes/Fake/shots/big.png", "/Volumes/Fake/shots/small.png", "/Volumes/Fake/nowhere/x.png"]),
+            PlanItem(
+                id: "films", title: "Films", note: "", tierRaw: Tier.yourCall.rawValue, paths: ["/Volumes/Fake/films"],
+                excluded: ["/Volumes/Fake/films/b.mkv"]),
+            PlanItem(
+                id: "shots", title: "Shots", note: "", tierRaw: Tier.noLoss.rawValue,
+                paths: ["/Volumes/Fake/shots/big.png", "/Volumes/Fake/shots/small.png", "/Volumes/Fake/nowhere/x.png"]),
         ]
         places.resolve(items, in: disk.tree)
         XCTAssertEqual(places.nodes["films"], [disk.node("/Volumes/Fake/films")])
@@ -257,12 +266,16 @@ final class PlanListTests: XCTestCase {
 
         // Taking a suggestion out takes its other copy and its data with it, and nothing else.
         var list = PlanList()
-        for id in ["series:Show", PlanItem.otherCopyID(of: "series:Show"), PlanItem.dataID(of: "series:Show"), "series:Show 2", PlanItem.id(pickedByHand: "/y")] { list.add(item(id)) }
+        for id in [
+            "series:Show", PlanItem.otherCopyID(of: "series:Show"), PlanItem.dataID(of: "series:Show"), "series:Show 2",
+            PlanItem.id(pickedByHand: "/y"),
+        ] { list.add(item(id)) }
         list.remove("series:Show")
         XCTAssertEqual(list.items.map(\.id), ["series:Show 2", "path:/y"])
 
         // A plan saved before today reads back, with every id as it was.
-        let saved = #"{"list":{"items":[{"id":"series:Show:other-copy","title":"Other copy of Show","note":"","tierRaw":3,"paths":["/Volumes/Fake/t"],"excluded":[],"step":{"trash":{}},"addedAt":0,"byHand":false,"lastKnownBytes":5}],"kept":[]},"cleaned":[],"lastItems":[],"oldTrashBytes":0}"#
+        let saved =
+            #"{"list":{"items":[{"id":"series:Show:other-copy","title":"Other copy of Show","note":"","tierRaw":3,"paths":["/Volumes/Fake/t"],"excluded":[],"step":{"trash":{}},"addedAt":0,"byHand":false,"lastKnownBytes":5}],"kept":[]},"cleaned":[],"lastItems":[],"oldTrashBytes":0}"#
         if let file = try? JSONDecoder().decode(PlanFile.self, from: Data(saved.utf8)) {
             XCTAssertEqual(file.list.items.first?.isOtherCopy, true)
         } else {

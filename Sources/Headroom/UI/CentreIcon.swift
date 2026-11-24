@@ -39,7 +39,7 @@ extension AppModel {
     ]
 
     /// A file's kind, from its name: worked out once for each extension.
-    static func fileSymbol(_ name: String) -> String {
+    private static func fileSymbol(_ name: String) -> String {
         let ext = (name as NSString).pathExtension.lowercased()
         if let known = symbolByExtension[ext] { return known }
         let symbol = symbol(forExtension: ext)
@@ -98,7 +98,7 @@ struct CentreIconView: View {
 /// Apps' icons, each read once, off the main thread: reading one can take long enough to hold up the pointer.
 @MainActor
 @Observable
-final class AppIcons {
+private final class AppIcons {
     static let shared = AppIcons()
 
     private var known: [String: NSImage] = [:]

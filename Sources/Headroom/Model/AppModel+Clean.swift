@@ -1,5 +1,4 @@
 import AppKit
-import SwiftUI
 
 /// Everything that takes things off the disk or brings them back: a clean, a Send to Trash, taking out copies, Undo,
 /// and emptying the Trash. The map is only ever changed through `draftTree` and `showDraft`.
@@ -20,7 +19,9 @@ extension AppModel {
         let stop = beginRemoval(CleanProgress(done: 0, total: 0, title: "Checking…"))
 
         Task.detached(priority: .userInitiated) {
-            let result = Self.adding(failedBefore, to: PlanChecks.run(items: items, trueBytes: bytes, otherCopy: others, runningApps: apps, fullAccess: fullAccess, thorough: true))
+            let result = Self.adding(
+                failedBefore,
+                to: PlanChecks.run(items: items, trueBytes: bytes, otherCopy: others, runningApps: apps, fullAccess: fullAccess, thorough: true))
             let effect = Accounting.effect(of: tops, except: excluded, in: tree)
             let fm = FileManager.default
             var work: [(item: PlanItem, paths: [String])] = []
@@ -66,9 +67,12 @@ extension AppModel {
                             let soFar = done
                             // Every few megabytes copied says so. The window hears of it ten times a second.
                             let pace = Pace()
-                            try Cleaner.copyAndVerify(path, into: PlanList.moveDestination(of: path, item: item, folder: folder), stop: stop) { progress in
+                            try Cleaner.copyAndVerify(path, into: PlanList.moveDestination(of: path, item: item, folder: folder), stop: stop) {
+                                progress in
                                 guard pace.isDue() else { return }
-                                let update = CleanProgress(done: soFar, total: total, title: "Copying \(name)…", bytesDone: progress.bytesDone, bytesTotal: progress.bytesTotal)
+                                let update = CleanProgress(
+                                    done: soFar, total: total, title: "Copying \(name)…", bytesDone: progress.bytesDone,
+                                    bytesTotal: progress.bytesTotal)
                                 Task { @MainActor in if self.cleanProgress != nil { self.cleanProgress = update } }
                             }
                         }
@@ -95,12 +99,22 @@ extension AppModel {
             let workDone = work
             await MainActor.run {
                 self.cleanFailures.merge(reasonsNow) { $1 }
-                self.finishClean(work: workDone, goneIDs: gone, failed: failures, oldTrashItems: oldItems, oldTrashBytes: oldBytes, stoppedEarly: stoppedHere, tree: tree)
+                self.finishClean(
+                    work: workDone, goneIDs: gone, failed: failures, oldTrashItems: oldItems, oldTrashBytes: oldBytes, stoppedEarly: stoppedHere,
+                    tree: tree)
             }
         }
     }
 
     func stopCleaning() { cleanStop.value = true }
+
+    /// A quit that was waiting for what has just stopped goes on now. True when there was one.
+    func quitIfWaiting() -> Bool {
+        guard quitAfterClean else { return false }
+        cleanStoppedForQuit = true
+        quitWhenNothingIsLeft()
+        return true
+    }
 
     /// A quit that had to wait goes on once nothing is left to wait for: a clean stopped at a safe point, and a new version in
     /// place. Either can end first. What the plan got to is written down last thing.
@@ -125,13 +139,15 @@ extension AppModel {
             showTip("\(title) is protected.")
             return
         }
-        let item = PlanItem(id: PlanItem.id(sent: path), title: title, note: tree.friendlyPath(node), tierRaw: Tier.noLoss.rawValue, paths: [path],
-                            lastKnownBytes: tree.totals[Int(node)], acceptedInUseAt: anyway ? Date() : nil, diskID: Cleaner.diskID(of: path))
+        let item = PlanItem(
+            id: PlanItem.id(sent: path), title: title, note: tree.friendlyPath(node), tierRaw: Tier.noLoss.rawValue, paths: [path],
+            lastKnownBytes: tree.totals[Int(node)], acceptedInUseAt: anyway ? Date() : nil, diskID: Cleaner.diskID(of: path))
         let apps = runningApps()
         let fullAccess = hasFullAccess
         let stop = beginRemoval(CleanProgress(done: 0, total: 1, title: title))
         Task.detached(priority: .userInitiated) {
-            let check = PlanChecks.run(items: [item], trueBytes: [:], otherCopy: [:], runningApps: apps, fullAccess: fullAccess)[item.id] ?? ItemCheck()
+            let check =
+                PlanChecks.run(items: [item], trueBytes: [:], otherCopy: [:], runningApps: apps, fullAccess: fullAccess)[item.id] ?? ItemCheck()
             let share = Accounting.effect(of: [node], except: [], in: tree).perTop
             var reason = check.canGo ? nil : check.problems.first { $0.holdsBack || $0 == .gone }
             var moved: (place: String, identity: String?)?
@@ -183,11 +199,18 @@ extension AppModel {
         var pairs: [(node: UInt32, path: String, kept: String, item: PlanItem)] = []
         // Each copy to the kept copy of its own file.
         for (keeper, extra) in group.sets.flatMap({ set in set.extras.map { (set.keeper, $0) } }) {
-            guard let path = planPath(extra, in: tree), let raw = tree.path(extra), Safety.canTrash(raw), let kept = tree.path(keeper) else { continue }
+            guard let path = planPath(extra, in: tree), let raw = tree.path(extra), Safety.canTrash(raw), let kept = tree.path(keeper) else {
+                continue
+            }
             let note = action == .delete ? "Duplicate of \(tree.friendlyPath(keeper))" : "\(action.title) to \(tree.friendlyPath(keeper))"
-            pairs.append((extra, path, kept, PlanItem(id: action.rawValue + ":" + path, title: tree.name(extra), note: note,
-                                                      tierRaw: (action == .delete ? Tier.yourCall : Tier.noLoss).rawValue, paths: [path],
-                                                      lastKnownBytes: tree.totals[Int(extra)], diskID: Cleaner.diskID(of: path))))
+            pairs.append(
+                (
+                    extra, path, kept,
+                    PlanItem(
+                        id: action.rawValue + ":" + path, title: tree.name(extra), note: note,
+                        tierRaw: (action == .delete ? Tier.yourCall : Tier.noLoss).rawValue, paths: [path],
+                        lastKnownBytes: tree.totals[Int(extra)], diskID: Cleaner.diskID(of: path))
+                ))
         }
         guard !pairs.isEmpty else {
             showTip("These files are protected.")
@@ -202,18 +225,23 @@ extension AppModel {
             var why: CheckProblem?
             for (at, pair) in pairs.enumerated() {
                 if stop.value { break }
-                let check = PlanChecks.run(items: [pair.item], trueBytes: [:], otherCopy: [:], runningApps: apps, fullAccess: fullAccess)[pair.item.id] ?? ItemCheck()
+                let check =
+                    PlanChecks.run(items: [pair.item], trueBytes: [:], otherCopy: [:], runningApps: apps, fullAccess: fullAccess)[pair.item.id]
+                    ?? ItemCheck()
                 if !check.canGo, let problem = check.problems.first(where: { $0.holdsBack || $0 == .gone }) {
                     why = problem
                     continue
                 }
                 do {
                     let moved = try Cleaner.replaceCopy(pair.path, of: pair.kept, with: action.replacement, stop: stop)
-                    linked.append(TakenCopy(node: pair.node, path: pair.path, item: pair.item, place: moved.place, identity: moved.identity,
-                                            linkedTo: action == .delete ? nil : pair.kept))
+                    linked.append(
+                        TakenCopy(
+                            node: pair.node, path: pair.path, item: pair.item, place: moved.place, identity: moved.identity,
+                            linkedTo: action == .delete ? nil : pair.kept))
                 } catch Cleaner.Failure.linkFailed(let left?) {
                     // In the Trash with nothing in its place: on record as that, so Undo brings it back.
-                    linked.append(TakenCopy(node: pair.node, path: pair.path, item: pair.item, place: left.place, identity: left.identity, linkedTo: nil))
+                    linked.append(
+                        TakenCopy(node: pair.node, path: pair.path, item: pair.item, place: left.place, identity: left.identity, linkedTo: nil))
                     why = Cleaner.whyItFailed(Cleaner.Failure.linkFailed(leftInTrash: left))
                 } catch {
                     why = Cleaner.whyItFailed(error)
@@ -228,7 +256,7 @@ extension AppModel {
     }
 
     /// A copy that went to the Trash, and the path a link to took its place, if one did.
-    struct TakenCopy: Sendable {
+    private struct TakenCopy: Sendable {
         var node: UInt32
         var path: String
         var item: PlanItem
@@ -237,7 +265,8 @@ extension AppModel {
         var linkedTo: String?
     }
 
-    private func finishTaking(_ linked: [TakenCopy], _ action: CopyAction, why: CheckProblem?, share: [UInt32: UInt64], tree: DiskTree, title: String) {
+    private func finishTaking(_ linked: [TakenCopy], _ action: CopyAction, why: CheckProblem?, share: [UInt32: UInt64], tree: DiskTree, title: String)
+    {
         cleanProgress = nil
         if linked.isEmpty {
             showTip("Nothing changed. \(why?.text ?? "")", for: 6)
@@ -252,11 +281,12 @@ extension AppModel {
             showWhatLeft(of: tree)
             let copies = linked.count == 1 ? "1 copy" : "\(linked.count) copies"
             let left = why.map { " Skipped some: \($0.text)" } ?? ""
-            let done = switch action {
-            case .delete: "Moved \(copies) of \(title) to the Trash."
-            case .hardlink: "Hardlinked \(copies) of \(title)."
-            case .symlink: "Symlinked \(copies) of \(title)."
-            }
+            let done =
+                switch action {
+                case .delete: "Moved \(copies) of \(title) to the Trash."
+                case .hardlink: "Hardlinked \(copies) of \(title)."
+                case .symlink: "Symlinked \(copies) of \(title)."
+                }
             showTip(done + left, for: 8, offeringUndo: true)
         }
         endRemoval()
@@ -271,7 +301,10 @@ extension AppModel {
         sendToTrash(NamedThing(node), anyway: true)
     }
 
-    private func finishSending(_ node: UInt32, _ item: PlanItem, path: String, moved: (place: String, identity: String?)?, why: CheckProblem?, share: [UInt32: UInt64], tree: DiskTree) {
+    private func finishSending(
+        _ node: UInt32, _ item: PlanItem, path: String, moved: (place: String, identity: String?)?, why: CheckProblem?, share: [UInt32: UInt64],
+        tree: DiskTree
+    ) {
         cleanProgress = nil
         if let moved {
             // The card moves on to what's next, so that you can go through a whole row of things.
@@ -284,7 +317,9 @@ extension AppModel {
             refreshShownRows()
             showWhatLeft(of: tree)
             let there = (moved.place as NSString).lastPathComponent
-            showTip("Moved to Trash: \(item.title)" + (there == (path as NSString).lastPathComponent ? "" : " (shown as \(there))"), for: 8, offeringUndo: true)
+            showTip(
+                "Moved to Trash: \(item.title)" + (there == (path as NSString).lastPathComponent ? "" : " (shown as \(there))"), for: 8,
+                offeringUndo: true)
             if let looking {
                 if let next {
                     if look == nil { openLook(next, onLeft: looking.onLeft) } else { showInLook(next, steppingIn: false) }
@@ -361,7 +396,9 @@ extension AppModel {
             oldBytes &+= waiting.oldTrashBytes
             bytes &+= waiting.bytes
         }
-        afterClean = AfterClean(things: all, bytes: bytes, includesOldTrash: !old.isEmpty, oldTrashBytes: oldBytes, oldTrashItems: old, failed: failed, heldBack: heldBack)
+        afterClean = AfterClean(
+            things: all, bytes: bytes, includesOldTrash: !old.isEmpty, oldTrashBytes: oldBytes, oldTrashItems: old, failed: failed, heldBack: heldBack
+        )
     }
 
     /// They've gone, or didn't. What's still planned is looked at again, the plan is written down, and a quit or a scan that
@@ -369,11 +406,7 @@ extension AppModel {
     private func endRemoval() {
         if !plan.isEmpty { runChecks() }
         savePlan()
-        if quitAfterClean {
-            cleanStoppedForQuit = true
-            quitWhenNothingIsLeft()
-            return
-        }
+        if quitIfWaiting() { return }
         runScanAfterClean()
     }
 
@@ -396,8 +429,10 @@ extension AppModel {
         refreshRing(.live)
     }
 
-    private func didMove(_ path: String, to inTrash: String, identity: String?, item: PlanItem, trueBytes: [UInt32: UInt64], tree cleaned: DiskTree,
-                         linkedTo: String? = nil, note: String? = nil) {
+    private func didMove(
+        _ path: String, to inTrash: String, identity: String?, item: PlanItem, trueBytes: [UInt32: UInt64], tree cleaned: DiskTree,
+        linkedTo: String? = nil, note: String? = nil
+    ) {
         // On record first, whatever else is going on: this is what makes it possible to bring it back.
         var thing = CleanedThing(itemID: item.id, title: item.title, original: path, inTrash: inTrash, bytes: 0, identity: identity)
         thing.linkedTo = linkedTo
@@ -417,7 +452,10 @@ extension AppModel {
         showProgress(of: cleaned)
     }
 
-    private func finishClean(work: [(item: PlanItem, paths: [String])], goneIDs: [String], failed: [String: [String]], oldTrashItems: [String], oldTrashBytes: UInt64, stoppedEarly: Bool, tree: DiskTree) {
+    private func finishClean(
+        work: [(item: PlanItem, paths: [String])], goneIDs: [String], failed: [String: [String]], oldTrashItems: [String], oldTrashBytes: UInt64,
+        stoppedEarly: Bool, tree: DiskTree
+    ) {
         cleanProgress = nil
         let things = takePending()
         let moved = Set(things.map(\.original))
@@ -455,7 +493,10 @@ extension AppModel {
         if !things.isEmpty || oldTrash {
             putOnRecord(things, oldTrashItems: oldTrashItems, oldTrashBytes: oldTrashBytes, failed: failures, heldBack: heldBack)
         } else if failures > 0 {
-            message = failures == 1 ? "1 item couldn't be moved to the Trash. Details in Free Up." : "\(failures) items couldn't be moved to the Trash. Details in Free Up."
+            message =
+                failures == 1
+                ? "1 item couldn't be moved to the Trash. Details in Free Up."
+                : "\(failures) items couldn't be moved to the Trash. Details in Free Up."
         }
         rescanWhenBack = true
         refreshShownRows()
@@ -506,13 +547,12 @@ extension AppModel {
                     self.saveBackup()
                 }
                 self.isPuttingBack = false
-                if self.quitAfterClean {
-                    self.cleanStoppedForQuit = true
-                    self.quitWhenNothingIsLeft()
-                    return
-                }
+                if self.quitIfWaiting() { return }
                 if failures > 0 {
-                    self.message = failures == 1 ? "1 item couldn't be put back. It's still in the Trash." : "\(failures) items couldn't be put back. They're still in the Trash."
+                    self.message =
+                        failures == 1
+                        ? "1 item couldn't be put back. It's still in the Trash."
+                        : "\(failures) items couldn't be put back. They're still in the Trash."
                 } else if hadMoves {
                     self.message = "Everything is back. The copies on the other disk remain."
                 }
@@ -604,7 +644,9 @@ extension AppModel {
             let measured = got
             let failures = failed
             let couldMeasure = !measuredBefore.isEmpty
-            await MainActor.run { self.finishEmpty(got: couldMeasure ? measured : expected, oldTrash: oldItems.isEmpty ? 0 : oldBytes, failed: failures, tree: tree) }
+            await MainActor.run {
+                self.finishEmpty(got: couldMeasure ? measured : expected, oldTrash: oldItems.isEmpty ? 0 : oldBytes, failed: failures, tree: tree)
+            }
         }
     }
 
@@ -628,11 +670,7 @@ extension AppModel {
             afterClean = after.things.isEmpty && after.oldTrashItems.isEmpty ? nil : after
         }
         savePlan()
-        if quitAfterClean {
-            cleanStoppedForQuit = true
-            quitWhenNothingIsLeft()
-            return
-        }
+        if quitIfWaiting() { return }
         runScanAfterClean()
     }
 
@@ -652,11 +690,7 @@ extension AppModel {
         lastPlanItems = []
         savePlan()
         rescanWhenBack = false
-        if quitAfterClean {
-            cleanStoppedForQuit = true
-            quitWhenNothingIsLeft()
-            return
-        }
+        if quitIfWaiting() { return }
         // A short look at what you got, then the disk is read again so the numbers are exact: quietly, unless you asked for
         // a scan meanwhile.
         scanOnceCleaned()
@@ -687,8 +721,9 @@ extension AppModel {
         }
         let items = ready.items
         let root = BackupDestination(drive: drive, folder: destination.folder).root
-        let job = DriveJob(kind: copyOnly ? .copy : .move, title: (copyOnly ? "Copying to " : "Moving to ") + drive.name, driveName: drive.name,
-                           entries: items.map { DriveJob.Entry(id: $0.path, title: $0.title, bytes: $0.bytes) })
+        let job = DriveJob(
+            kind: copyOnly ? .copy : .move, title: (copyOnly ? "Copying to " : "Moving to ") + drive.name, driveName: drive.name,
+            entries: items.map { DriveJob.Entry(id: $0.path, title: $0.title, bytes: $0.bytes) })
         // The card it's shown on carries on from the one that was selected: the drive's room, what frees nothing, who picked it.
         job.room = DriveJob.Room(place: "\(destination.title) › \(BackupPaths.macFolder)", capacity: drive.capacity, free: drive.free)
         job.freesNothing = backupSummary().freesNothing
@@ -748,9 +783,11 @@ extension AppModel {
                 do {
                     let moved = try Cleaner.trash(item.path)
                     await MainActor.run {
-                        let plan = PlanItem(id: "backup:" + item.path, title: item.title, note: drive.name, tierRaw: Tier.yourCall.rawValue, paths: [item.path],
-                                            lastKnownBytes: item.bytes)
-                        self.didMove(item.path, to: moved.place, identity: moved.identity, item: plan, trueBytes: share, tree: tree, note: note.notePath)
+                        let plan = PlanItem(
+                            id: "backup:" + item.path, title: item.title, note: drive.name, tierRaw: Tier.yourCall.rawValue, paths: [item.path],
+                            lastKnownBytes: item.bytes)
+                        self.didMove(
+                            item.path, to: moved.place, identity: moved.identity, item: plan, trueBytes: share, tree: tree, note: note.notePath)
                         self.backup.items.removeAll { $0.path == item.path }
                         self.movedNotes.removeAll { $0.notePath == note.notePath }
                         self.movedNotes.append(note)
@@ -781,11 +818,7 @@ extension AppModel {
                 } else {
                     self.showTip(job.summary, for: 8)
                     // A quit was waiting for the copy to stop at a safe point.
-                    if self.quitAfterClean {
-                        self.cleanStoppedForQuit = true
-                        self.quitWhenNothingIsLeft()
-                        return
-                    }
+                    if self.quitIfWaiting() { return }
                 }
                 self.refreshDrives()
                 self.applyGhosts()

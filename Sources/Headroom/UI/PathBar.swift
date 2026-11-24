@@ -90,7 +90,7 @@ private struct PathBar: View {
     }
 }
 
-struct Breadcrumbs: View {
+private struct Breadcrumbs: View {
     let model: AppModel
     let steps: [PathStep]
 
@@ -134,7 +134,7 @@ struct Breadcrumbs: View {
                         Circle().fill(colour).frame(width: 7, height: 7)
                     }
                     Text(node == nodes.last ? last : aheadName(node))
-                        .font(.system(size: 12, weight: .medium))
+                        .font(Kit.Font.name)
                         .foregroundStyle(.white.opacity(0.45))
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -194,7 +194,7 @@ struct Breadcrumbs: View {
         let key = (bold ? "b" : "m") + text
         if let known = widths[key] { return known }
         if widths.count > 2000 { widths.removeAll() }
-        let font = NSFont.systemFont(ofSize: 12, weight: bold ? .semibold : .medium)
+        let font = NSFont.systemFont(ofSize: Kit.Font.Size.body, weight: bold ? .semibold : .medium)
         let w = ceil((text as NSString).size(withAttributes: [.font: font]).width)
         widths[key] = w
         return w
@@ -207,7 +207,7 @@ struct Breadcrumbs: View {
     }
 
     fileprivate static func ellipsis(_ opacity: Double) -> some View {
-        Text("…").font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(opacity))
+        Text("…").font(Kit.Font.name).foregroundStyle(.white.opacity(opacity))
     }
 
     /// The folders between where you are and what's pointed at, and it, top down.
@@ -270,10 +270,10 @@ private struct CrumbChain: View, Equatable {
         let here = index == steps.count - 1
         let label = HStack(spacing: 5) {
             if let symbol = step.symbol {
-                Image(systemName: symbol).font(.system(size: 11, weight: .medium))
+                Image(systemName: symbol).font(Kit.Font.detail.weight(.medium))
             }
             Text(step.name)
-                .font(.system(size: 12, weight: here ? .semibold : .medium))
+                .font(here ? Kit.Font.strong : Kit.Font.name)
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
@@ -285,12 +285,14 @@ private struct CrumbChain: View, Equatable {
         let button = Button {
             // You're already here, so a click on this one copies its name.
             if here { model.copyName(of: thing(step)) } else { go(step.go) }
-        } label: { label }
-            .buttonStyle(.plain)
-            .disabled(!here && step.go == .nowhere)
-            .onHover { inside in
-                if inside { pointed = index } else if pointed == index { pointed = nil }
-            }
+        } label: {
+            label
+        }
+        .buttonStyle(.plain)
+        .disabled(!here && step.go == .nowhere)
+        .onHover { inside in
+            if inside { pointed = index } else if pointed == index { pointed = nil }
+        }
         if case .node(let node) = step.go {
             button
                 .named(NamedThing(node), in: model)

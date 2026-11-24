@@ -57,12 +57,12 @@ struct Suggestions {
 
 enum Sections {
     /// A leftover has to be at least this big to be worth a line.
-    static let smallestLeftover: UInt64 = 5_000_000
+    private static let smallestLeftover: UInt64 = 5_000_000
 
     /// An installer is old once it has sat for this long: a fresh download may not be installed yet.
-    static let installerOldDays: UInt32 = 14
+    private static let installerOldDays: UInt32 = 14
     /// The largest files are the ones this big and up, and no more of them than this.
-    static let largeFile: UInt64 = 1_000_000_000
+    private static let largeFile: UInt64 = 1_000_000_000
     static let mostLargeFiles = 20
 
     /// Every box of Free Up, from what was found. A row says which box it's in, so this only names the boxes and says what's
@@ -100,7 +100,10 @@ enum Sections {
         var kids: [Section] = []
         for role in Leftovers.Role.inOrder {
             guard let rows = kinds[role], !rows.isEmpty else { continue }
-            kids.append(Section(id: "leftovers." + role.key, title: role.title, detail: rows.count == 1 ? "1 folder" : "\(rows.count) folders", color: role.color, rows: biggestFirst(rows)))
+            kids.append(
+                Section(
+                    id: "leftovers." + role.key, title: role.title, detail: rows.count == 1 ? "1 folder" : "\(rows.count) folders", color: role.color,
+                    rows: biggestFirst(rows)))
         }
 
         var out: [Section] = []
@@ -133,27 +136,33 @@ enum Sections {
         add(.screenshots, "Screenshots", Palette.Box.screenshots, detail: files)
         add(.other, "Other", Palette.Box.other, detail: names)
         if !kids.isEmpty {
-            out.append(Section(id: BoxKind.leftovers.rawValue, title: "Project leftovers", detail: "Old versions, renders, review stills", color: Palette.Box.leftovers, kids: kids))
+            out.append(
+                Section(
+                    id: BoxKind.leftovers.rawValue, title: "Project leftovers", detail: "Old versions, renders, review stills",
+                    color: Palette.Box.leftovers, kids: kids))
         }
 
         // Last, the largest files that aren't in a box already: where the one huge thing you forgot turns up.
         let large = largestFiles(tree: tree, besides: out.flatMap(\.allRows) + others, facts: facts, now: now)
         if !large.isEmpty {
             let detail = large.count == 1 ? "1 file" : "\(large.count) files"
-            out.append(Section(id: BoxKind.largest.rawValue, title: "Largest files", detail: detail, color: Palette.Box.other, rows: large, isShortlist: true))
+            out.append(
+                Section(
+                    id: BoxKind.largest.rawValue, title: "Largest files", detail: detail, color: Palette.Box.other, rows: large, isShortlist: true))
         }
         return Suggestions(sections: out, others: others)
     }
 
     /// The biggest single files in your own folders that nothing else lists. Apps, libraries and anything with a rule of its
     /// own are left out: these are files you'd know by name.
-    static func largestFiles(tree: DiskTree, besides listed: [WinRow], facts: Facts, now: Date) -> [WinRow] {
+    private static func largestFiles(tree: DiskTree, besides listed: [WinRow], facts: Facts, now: Date) -> [WinRow] {
         let nodes = tree.nodes
         let taken = NodeSet(listed.flatMap(\.nodes), in: tree)
         var big: [UInt32] = []
         for i in 1..<max(tree.count, 1) {
             let n = nodes[i]
-            guard n.flags & (NodeFlag.directory | NodeFlag.synthetic | NodeFlag.alias | NodeFlag.gone) == 0, n.rule == 0, tree.totals[i] >= largeFile else { continue }
+            guard n.flags & (NodeFlag.directory | NodeFlag.synthetic | NodeFlag.alias | NodeFlag.gone) == 0, n.rule == 0, tree.totals[i] >= largeFile
+            else { continue }
             // On the startup disk, only your own folders. On any other disk, anything that isn't inside a package.
             if tree.isBoot ? !nodes[Int(n.parent)].has(NodeFlag.projects) : tree.isInsidePackage(UInt32(i), byName: true) { continue }
             if taken.contains(UInt32(i)) { continue }
@@ -165,9 +174,13 @@ enum Sections {
             guard let path = tree.path(node), Safety.canTrash(path) else { return nil }
             let total = tree.totals[Int(node)]
             let folder = DiskTree.friendly((tree.friendlyPath(node) as NSString).deletingLastPathComponent)
-            let when = nodes[Int(node)].modTime == 0 ? "" : " · " + Titles.dayText(Date(timeIntervalSince1970: TimeInterval(nodes[Int(node)].modTime)), now: now)
-            var row = WinRow(id: "largest:" + tree.friendlyPath(node), title: tree.name(node), subtitle: folder + when, detail: tree.friendlyPath(node), tier: .yourCall,
-                             nodes: [node], bytes: Accounting.reclaimable([node], in: tree), paperBytes: total, action: .trash, command: nil, bundleID: nil)
+            let when =
+                nodes[Int(node)].modTime == 0
+                ? "" : " · " + Titles.dayText(Date(timeIntervalSince1970: TimeInterval(nodes[Int(node)].modTime)), now: now)
+            var row = WinRow(
+                id: "largest:" + tree.friendlyPath(node), title: tree.name(node), subtitle: folder + when, detail: tree.friendlyPath(node),
+                tier: .yourCall,
+                nodes: [node], bytes: Accounting.reclaimable([node], in: tree), paperBytes: total, action: .trash, command: nil, bundleID: nil)
             row.box = .largest
             row.previewPath = path
             // A film that's also a torrent's copy frees nothing until that goes too, and the row says so.
@@ -186,7 +199,8 @@ enum Sections {
     /// `dropping` is the heading's own word, which a name under it needn't repeat.
     private static func names(_ rows: [WinRow], dropping ending: String) -> String {
         let sorted = biggestFirst(rows)
-        let first = sorted.prefix(3).map { !ending.isEmpty && $0.title.hasSuffix(ending) ? String($0.title.dropLast(ending.count)) : $0.title }.joined(separator: ", ")
+        let first = sorted.prefix(3).map { !ending.isEmpty && $0.title.hasSuffix(ending) ? String($0.title.dropLast(ending.count)) : $0.title }
+            .joined(separator: ", ")
         return sorted.count > 3 ? "\(first) +\(sorted.count - 3)" : first
     }
 
@@ -217,8 +231,10 @@ enum Sections {
         }
         let reached = at == found.project && found.project != 0
         let title = found.role == .installers ? tree.name(node) : (reached ? parts : Array(parts.suffix(3))).joined(separator: " › ")
-        return WinRow(id: "leftover:" + path, title: title, subtitle: DiskTree.friendly((path as NSString).deletingLastPathComponent), detail: found.role.detail, tier: .yourCall,
-                      nodes: [node], bytes: total, paperBytes: total, action: .trash, command: nil, bundleID: nil)
+        return WinRow(
+            id: "leftover:" + path, title: title, subtitle: DiskTree.friendly((path as NSString).deletingLastPathComponent),
+            detail: found.role.detail, tier: .yourCall,
+            nodes: [node], bytes: total, paperBytes: total, action: .trash, command: nil, bundleID: nil)
     }
 
     // MARK: The picture on screen
@@ -246,27 +262,34 @@ enum Sections {
         func rows(_ list: [WinRow]) -> [WinRow] {
             list.compactMap { kept.contains($0.id) ? nil : scoped($0, tree: tree, focus: focus) }
         }
-        func ranked(_ list: [WinRow]) -> [WinRow] { list.sorted { $0.gain > $1.gain } }
         var out: [Box] = []
         for section in sections {
             if section.kids.isEmpty {
-                let inside = ranked(rows(section.rows))
+                let inside = biggestFirst(rows(section.rows))
                 if section.id == BoxKind.trash.rawValue, let row = inside.first {
                     // Nothing to open: the Trash is one thing, with its own tick.
                     out.append(Box(id: section.id, title: row.title, detail: row.subtitle, color: section.color, rows: [row], isOneThing: true))
                 } else if !inside.isEmpty {
-                    out.append(Box(id: section.id, title: section.title, detail: section.detail, note: section.note, color: section.color, rows: inside, isShortlist: section.isShortlist))
+                    out.append(
+                        Box(
+                            id: section.id, title: section.title, detail: section.detail, note: section.note, color: section.color, rows: inside,
+                            isShortlist: section.isShortlist))
                 }
                 continue
             }
             let kids = section.kids.compactMap { kid -> Box? in
-                let inside = ranked(rows(kid.rows))
+                let inside = biggestFirst(rows(kid.rows))
                 guard !inside.isEmpty else { return nil }
-                return Box(id: kid.id, title: kid.title, detail: inside.count == 1 ? "1 folder" : "\(inside.count) folders", color: focus == 0 ? section.color : kid.color, rows: inside)
+                return Box(
+                    id: kid.id, title: kid.title, detail: inside.count == 1 ? "1 folder" : "\(inside.count) folders",
+                    color: focus == 0 ? section.color : kid.color, rows: inside)
             }
             guard !kids.isEmpty else { continue }
             if focus == 0 {
-                out.append(Box(id: section.id, title: section.title, detail: section.detail, note: section.note, color: section.color, rows: ranked(kids.flatMap(\.rows)), kids: kids))
+                out.append(
+                    Box(
+                        id: section.id, title: section.title, detail: section.detail, note: section.note, color: section.color,
+                        rows: biggestFirst(kids.flatMap(\.rows)), kids: kids))
             } else {
                 out += kids
             }
@@ -277,7 +300,9 @@ enum Sections {
         out.sort { a, b in place(a) != place(b) ? place(a) < place(b) : a.bytes > b.bytes }
         if focus != 0, out.count == 1, out[0].kids.isEmpty, !out[0].isShortlist, out[0].rows.count > 1, out[0].rows.count <= 16 {
             return out[0].rows.enumerated().map { at, row in
-                Box(id: "thing:" + row.id, title: row.title, detail: row.subtitle, note: row.inUse, color: Palette.Box.spread[at % Palette.Box.spread.count], rows: [row], isOneThing: true)
+                Box(
+                    id: "thing:" + row.id, title: row.title, detail: row.subtitle, note: row.inUse,
+                    color: Palette.Box.spread[at % Palette.Box.spread.count], rows: [row], isOneThing: true)
             }
         }
         return out
@@ -380,7 +405,8 @@ enum Leftovers {
     }
 
     private static let folderRoles: [String: Role] = [
-        "code": .leave, "src": .leave, "source": .leave, "sources": .leave, "audio": .leave, "reference": .leave, "references": .leave, "raw": .leave, "stems": .leave,
+        "code": .leave, "src": .leave, "source": .leave, "sources": .leave, "audio": .leave, "reference": .leave, "references": .leave, "raw": .leave,
+        "stems": .leave,
         "sound": .leave, "assets": .leave, "materials": .leave, "fonts": .leave, "editor": .leave,
         "_backup": .backups, "backup": .backups, "backups": .backups,
         "versions": .oldFolders, "old": .oldFolders, "archive": .oldFolders, "previous": .oldFolders,
@@ -396,6 +422,7 @@ enum Leftovers {
 
     private static let keepWords: [[UInt8]] = ["saved", "keep", "master", "gold", "best", "favorite", "favourite"].map { Array($0.utf8) }
     private static let installerEnds: [[UInt8]] = [".dmg", ".pkg", ".iso", ".xip", ".zip", ".tgz", ".tar.gz", ".rar", ".7z"].map { Array($0.utf8) }
+    private static let testEnds: [[UInt8]] = ["-tests", "_tests"].map { Array($0.utf8) }
 
     private static func hash(_ bytes: UnsafeBufferPointer<UInt8>) -> UInt64 {
         var h: UInt64 = 0xcbf2_9ce4_8422_2325
@@ -425,43 +452,29 @@ enum Leftovers {
         if b.count <= 16, let known = roleByHash[hash(b)] { return known }
         if starts(b, "scenes") || starts(b, "2160p") || starts(b, "1080p") || starts(b, "720p") { return .scenes }
         if starts(b, "_v"), b.count > 2, b[2...].allSatisfy({ $0 >= 48 && $0 <= 57 }) { return .oldFolders }
-        if ends(b, ["-tests", "_tests"].map { Array($0.utf8) }) { return .tests }
+        if ends(b, testEnds) { return .tests }
         return .none
+    }
+
+    /// Whether `word`, written in lower case, is in the name at `at`, in any case.
+    @inline(__always) private static func matches(_ b: UnsafeBufferPointer<UInt8>, at: Int, _ word: [UInt8]) -> Bool {
+        for k in 0..<word.count {
+            var c = b[at + k]
+            if c >= 65 && c <= 90 { c += 32 }
+            if c != word[k] { return false }
+        }
+        return true
     }
 
     private static func contains(_ b: UnsafeBufferPointer<UInt8>, _ words: [[UInt8]]) -> Bool {
         for word in words where b.count >= word.count {
-            var at = 0
-            while at + word.count <= b.count {
-                var same = true
-                for k in 0..<word.count {
-                    var c = b[at + k]
-                    if c >= 65 && c <= 90 { c += 32 }
-                    if c != word[k] {
-                        same = false
-                        break
-                    }
-                }
-                if same { return true }
-                at += 1
-            }
+            for at in 0...(b.count - word.count) where matches(b, at: at, word) { return true }
         }
         return false
     }
 
     private static func ends(_ b: UnsafeBufferPointer<UInt8>, _ endings: [[UInt8]]) -> Bool {
-        for end in endings where b.count >= end.count {
-            var same = true
-            for k in 0..<end.count {
-                var c = b[b.count - end.count + k]
-                if c >= 65 && c <= 90 { c += 32 }
-                if c != end[k] {
-                    same = false
-                    break
-                }
-            }
-            if same { return true }
-        }
+        for end in endings where b.count >= end.count && matches(b, at: b.count - end.count, end) { return true }
         return false
     }
 
@@ -554,7 +567,9 @@ enum Leftovers {
                     numbered.append((UInt32(i), node.parent, value))
                 }
             } else {
-                guard inherited != .never, nodes[parent].flags & NodeFlag.projects != 0, node.rule == 0, node.flags & NodeFlag.alias == 0 else { continue }
+                guard inherited != .never, nodes[parent].flags & NodeFlag.projects != 0, node.rule == 0, node.flags & NodeFlag.alias == 0 else {
+                    continue
+                }
                 roles[i] = inherited
                 if inherited == .none, ends(b, installerEnds) { roles[i] = .installers }
                 if inherited != .leave, let found = version(of: b) {

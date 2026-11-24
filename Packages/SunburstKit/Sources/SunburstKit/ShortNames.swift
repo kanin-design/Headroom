@@ -63,6 +63,8 @@ public struct ShortNames: Sendable {
     }
 
     private static let separators = Set(" -_.,()[]{}·–—+")
+    /// The separators left out where a name is cut, and trimmed from its ends.
+    private static let cuttable = CharacterSet(charactersIn: " -_.,·–—+")
 
     /// A name's tokens, split once: names are placed again on every change of picture, and are mostly the same names.
     static func tokens(_ name: String) -> [Token] {
@@ -165,14 +167,13 @@ public struct ShortNames: Sendable {
     /// The kept stretches of a name, in order, with "…" where what lies between them is left out, and no separator left
     /// hanging at a cut.
     private static func elide(_ t: [Token], keeping ranges: [Range<Int>]) -> String {
-        let cut = CharacterSet(charactersIn: " -_.,·–—+")
         var out = ""
         let kept = ranges.filter { !$0.isEmpty }
         for (k, range) in kept.enumerated() {
             var piece = t[range].map(\.text).joined()
-            if k > 0 { piece = String(piece.drop { $0.unicodeScalars.allSatisfy(cut.contains) }) }
+            if k > 0 { piece = String(piece.drop { $0.unicodeScalars.allSatisfy(cuttable.contains) }) }
             if k < kept.count - 1 {
-                while let last = piece.last, last.unicodeScalars.allSatisfy(cut.contains) { piece.removeLast() }
+                while let last = piece.last, last.unicodeScalars.allSatisfy(cuttable.contains) { piece.removeLast() }
             }
             out += (k > 0 ? "…" : "") + piece
         }
@@ -232,6 +233,6 @@ public struct ShortNames: Sendable {
 
     /// Tokens back into text, without separators hanging at either end.
     private static func join(_ t: [Token]) -> String {
-        t.map(\.text).joined().trimmingCharacters(in: CharacterSet(charactersIn: " -_.,·–—+"))
+        t.map(\.text).joined().trimmingCharacters(in: cuttable)
     }
 }

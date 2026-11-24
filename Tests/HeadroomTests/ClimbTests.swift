@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Headroom
 
 /// Working out a copy's top folder used to start over after every step. It has to come to the same answer without doing that.
@@ -10,7 +11,7 @@ final class ClimbTests: XCTestCase {
             state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
             var x = state
             x ^= x >> 33
-            x = x &* 0xff51afd7ed558ccd
+            x = x &* 0xff51_afd7_ed55_8ccd
             x ^= x >> 33
             return x
         }
@@ -18,7 +19,9 @@ final class ClimbTests: XCTestCase {
 
     /// The way it used to be done, starting over after every step, except that it takes the deepest first: the old one took them
     /// in whatever order they came. Being inside another answer wasn't looked at then either, so that's taken out here.
-    private func theLongWay(_ start: Set<UInt32>, _ startCovered: [UInt32: UInt64], parent: (UInt32) -> UInt32, mayName: (UInt32) -> Bool, holds: (UInt32) -> UInt64) -> Set<UInt32> {
+    private func theLongWay(
+        _ start: Set<UInt32>, _ startCovered: [UInt32: UInt64], parent: (UInt32) -> UInt32, mayName: (UInt32) -> Bool, holds: (UInt32) -> UInt64
+    ) -> Set<UInt32> {
         func depth(_ node: UInt32) -> Int {
             var steps = 0, at = node
             while at != 0 {

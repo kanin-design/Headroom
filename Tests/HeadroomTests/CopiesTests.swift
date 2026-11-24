@@ -1,5 +1,6 @@
 import Darwin
 import XCTest
+
 @testable import Headroom
 
 /// Copies on a real little folder: real duplicates, files that only nearly are, a hard link, an APFS clone and aliases, read by
@@ -113,12 +114,15 @@ final class CopiesTests: XCTestCase {
         try write("many/nearly.bin", nearly)
         let (tree, rules) = scanned()
         let found = duplicates(tree, rules).filter { $0.size == UInt64(size) }
-        XCTAssertEqual(Set(found.map { Set($0.nodes) }), [
-            Set(["many/twice-a.bin", "many/z/twice-b.bin"].map { node(tree, $0) }),
-            Set(["many/thrice-a.bin", "many/y/thrice-b.bin", "many/x/thrice-c.bin"].map { node(tree, $0) }),
-        ])
+        XCTAssertEqual(
+            Set(found.map { Set($0.nodes) }),
+            [
+                Set(["many/twice-a.bin", "many/z/twice-b.bin"].map { node(tree, $0) }),
+                Set(["many/thrice-a.bin", "many/y/thrice-b.bin", "many/x/thrice-c.bin"].map { node(tree, $0) }),
+            ])
         let a = [UInt8](repeating: 7, count: 21), b = a.dropLast() + [8]
-        XCTAssertNotEqual(a.withUnsafeBytes { Duplicates.quickHash($0.baseAddress!, 21) }, Array(b).withUnsafeBytes { Duplicates.quickHash($0.baseAddress!, 21) })
+        XCTAssertNotEqual(
+            a.withUnsafeBytes { Duplicates.quickHash($0.baseAddress!, 21) }, Array(b).withUnsafeBytes { Duplicates.quickHash($0.baseAddress!, 21) })
     }
 
     func testCountsAliasesAndReadsWhereTheyPoint() {
@@ -136,8 +140,9 @@ final class CopiesTests: XCTestCase {
 
     func testTheMapHasEachRelation() {
         let (tree, rules) = scanned()
-        let map = CopiesMap.build(tree: tree, duplicates: duplicates(tree, rules), aliases: Aliases.find(in: tree, rules: rules, stop: LockedFlag()),
-                                  duplicatesDone: true)
+        let map = CopiesMap.build(
+            tree: tree, duplicates: duplicates(tree, rules), aliases: Aliases.find(in: tree, rules: rules, stop: LockedFlag()),
+            duplicatesDone: true)
         let kinds = Dictionary(grouping: map.groups, by: \.kind)
         XCTAssertEqual(kinds[.duplicate]?.count, 1)
         XCTAssertEqual(kinds[.sameFile]?.count, 1, "the hard link")
@@ -178,8 +183,10 @@ final class CopiesTests: XCTestCase {
 
     func testRemembersOnlyWhatHasNotChanged() {
         let memory = DuplicateMemory(file: nil)
-        let files = [Duplicates.File(node: 5, path: "/a", modTime: 10), Duplicates.File(node: 6, path: "/b", modTime: 10),
-                     Duplicates.File(node: 7, path: "/c", modTime: 12)]
+        let files = [
+            Duplicates.File(node: 5, path: "/a", modTime: 10), Duplicates.File(node: 6, path: "/b", modTime: 10),
+            Duplicates.File(node: 7, path: "/c", modTime: 12),
+        ]
         let work = Duplicates.Work(bytes: 1 << 20, files: files)
         XCTAssertNil(memory.recall(work), "nothing known yet")
         memory.note(work, found: [Duplicates.Found(size: 1 << 20, nodes: [5, 6])])
@@ -205,8 +212,9 @@ final class CopiesTests: XCTestCase {
         let inFilms = disk.file("/Volumes/Fake/Films/film.mov", 2_000_000_000, kind: .video, modTime: 200)
         disk.finish()
         XCTAssertEqual(CopiesMap.keeper(of: [inDownloads, inFilms], in: disk.tree), inFilms, "Downloads loses, however old")
-        let map = CopiesMap.build(tree: disk.tree, duplicates: [Duplicates.Found(size: 2_000_000_000, nodes: [inDownloads, inFilms])],
-                                  aliases: [], duplicatesDone: true)
+        let map = CopiesMap.build(
+            tree: disk.tree, duplicates: [Duplicates.Found(size: 2_000_000_000, nodes: [inDownloads, inFilms])],
+            aliases: [], duplicatesDone: true)
         XCTAssertEqual(map.groups.first?.others, [inDownloads])
         XCTAssertEqual(map.back, 2_000_000_000)
     }
@@ -223,7 +231,9 @@ final class CopiesRingTests: XCTestCase {
             let extra = disk.file("/Volumes/Fake/Pictures/Export/IMG_\(i).jpg", 4_000_000 + UInt64(i) * 4096, kind: .image, modTime: 86_400 * 200)
             sets.append(Duplicates.Found(size: 4_000_000, nodes: [kept, extra]))
         }
-        for i in 40..<120 { disk.file("/Volumes/Fake/Pictures/Holiday/IMG_\(i).jpg", 4_000_000 + UInt64(i) * 4096, kind: .image, modTime: 86_400 * 10) }
+        for i in 40..<120 {
+            disk.file("/Volumes/Fake/Pictures/Holiday/IMG_\(i).jpg", 4_000_000 + UInt64(i) * 4096, kind: .image, modTime: 86_400 * 10)
+        }
         disk.finish()
         let tree = disk.tree
         let map = CopiesMap.build(tree: tree, duplicates: sets, aliases: [], duplicatesDone: true)
@@ -265,7 +275,8 @@ final class CopyNamesTests: XCTestCase {
         let first = disk.file("/Volumes/Fake/Downloads/Installer.dmg", 262_000_000, kind: .archive, modTime: 86_400 * 20)
         disk.finish()
         XCTAssertEqual(CopiesMap.keeper(of: [copy, first], in: disk.tree), first)
-        let map = CopiesMap.build(tree: disk.tree, duplicates: [Duplicates.Found(size: 262_000_000, nodes: [copy, first])], aliases: [], duplicatesDone: true)
+        let map = CopiesMap.build(
+            tree: disk.tree, duplicates: [Duplicates.Found(size: 262_000_000, nodes: [copy, first])], aliases: [], duplicatesDone: true)
         XCTAssertEqual(map.groups.first?.keepers, [first])
         XCTAssertEqual(map.groups.first?.extras, [copy])
     }
@@ -291,8 +302,9 @@ final class CopyNamesTests: XCTestCase {
             disk.file("/Volumes/Fake/Archive/other \(i).mov", 2_000_000 + UInt64(i), kind: .video, modTime: 500)
         }
         disk.finish()
-        let map = CopiesMap.build(tree: disk.tree, duplicates: [Duplicates.Found(size: 900_000_000, nodes: [a, b]), Duplicates.Found(size: 700_000_000, nodes: [c, d])],
-                                  aliases: [], duplicatesDone: true)
+        let map = CopiesMap.build(
+            tree: disk.tree, duplicates: [Duplicates.Found(size: 900_000_000, nodes: [a, b]), Duplicates.Found(size: 700_000_000, nodes: [c, d])],
+            aliases: [], duplicatesDone: true)
         XCTAssertTrue(map.groups.contains { $0.keepers == [a] && $0.extras == [b] }, "Films stays, not Films copy")
         XCTAssertTrue(map.groups.contains { $0.keepers == [c] && $0.extras == [d] }, "cut.mov stays, not cut copy.mov in the fuller folder")
     }
@@ -343,7 +355,9 @@ final class DuplicatesBench: XCTestCase {
     }
 
     func testSpeed() throws {
-        guard let base = ProcessInfo.processInfo.environment["HEADROOM_BENCH"] else { throw XCTSkip("set HEADROOM_BENCH to a folder on the disk to measure") }
+        guard let base = ProcessInfo.processInfo.environment["HEADROOM_BENCH"] else {
+            throw XCTSkip("set HEADROOM_BENCH to a folder on the disk to measure")
+        }
         let root = URL(fileURLWithPath: base).resolvingSymlinksInPath().path + "/headroom-bench-" + UUID().uuidString
         defer { try? FileManager.default.removeItem(atPath: root) }
         func random(_ bytes: Int) -> UnsafeMutableRawBufferPointer {
@@ -400,9 +414,11 @@ final class DuplicatesBench: XCTestCase {
         let seconds = Date().timeIntervalSince(started)
         let read = progress.bytesRead.load(ordering: .relaxed)
         let back = found.reduce(UInt64(0)) { $0 + $1.size * UInt64($1.nodes.count - 1) }
-        print(String(format: "bench: %d sets, %.2f GB back; read %.2f GB of %d candidate files in %.2f s, %.2f GB/s, %d threads",
-                     found.count, Double(back) / 1e9, Double(read) / 1e9, work.reduce(0) { $0 + $1.files.count }, seconds,
-                     Double(read) / 1e9 / seconds, AppModel.copyThreadCount))
+        print(
+            String(
+                format: "bench: %d sets, %.2f GB back; read %.2f GB of %d candidate files in %.2f s, %.2f GB/s, %d threads",
+                found.count, Double(back) / 1e9, Double(read) / 1e9, work.reduce(0) { $0 + $1.files.count }, seconds,
+                Double(read) / 1e9 / seconds, AppModel.copyThreadCount))
         XCTAssertEqual(found.count, 152, "the film, the installer and 150 photos")
 
         let again = Date()
@@ -470,7 +486,8 @@ final class LinkingTests: XCTestCase {
         XCTAssertTrue(Cleaner.isSameFile(copy, kept), "the copy's path is now the same file as the one that stays")
         XCTAssertTrue(try Cleaner.sameBytes(moved.place, kept), "the copy itself waits in the Trash, whole")
 
-        var thing = CleanedThing(itemID: "linked:" + copy, title: "trip.mov", original: copy, inTrash: moved.place, bytes: 0, identity: moved.identity)
+        var thing = CleanedThing(
+            itemID: "linked:" + copy, title: "trip.mov", original: copy, inTrash: moved.place, bytes: 0, identity: moved.identity)
         thing.linkedTo = kept
         try Cleaner.putBack(thing)
         XCTAssertFalse(Cleaner.isSameFile(copy, kept), "its own file again")
@@ -494,7 +511,8 @@ final class LinkingTests: XCTestCase {
         let moved = try Cleaner.replaceCopy(copy, of: kept, with: .symlink, trashing: pretendTrash)
         XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: copy), kept, "the copy's path points to the one kept")
         XCTAssertTrue(Cleaner.isLink(copy, to: kept))
-        var thing = CleanedThing(itemID: "symlink:" + copy, title: "trip.mov", original: copy, inTrash: moved.place, bytes: 0, identity: moved.identity)
+        var thing = CleanedThing(
+            itemID: "symlink:" + copy, title: "trip.mov", original: copy, inTrash: moved.place, bytes: 0, identity: moved.identity)
         thing.linkedTo = kept
         try Cleaner.putBack(thing)
         XCTAssertNil(try? FileManager.default.destinationOfSymbolicLink(atPath: copy), "a file again, not a symlink")
@@ -512,7 +530,8 @@ final class LinkingTests: XCTestCase {
         XCTAssertTrue(try Cleaner.sameBytes(moved.place, kept))
         XCTAssertThrowsError(try Cleaner.replaceCopy(edited, of: kept, with: .nothing, trashing: pretendTrash), "changed since it was compared")
         XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: edited)), changed, "left as it was")
-        try Cleaner.putBack(CleanedThing(itemID: "delete:" + copy, title: "b.bin", original: copy, inTrash: moved.place, bytes: 0, identity: moved.identity))
+        try Cleaner.putBack(
+            CleanedThing(itemID: "delete:" + copy, title: "b.bin", original: copy, inTrash: moved.place, bytes: 0, identity: moved.identity))
         XCTAssertTrue(try Cleaner.sameBytes(copy, kept), "Undo puts it back")
     }
 
@@ -555,7 +574,8 @@ final class LinkingTests: XCTestCase {
         let kept = try write("a.bin", data)
         let trashed = try write("Trash/b.bin", data)
         let somethingNew = try write("b.bin", Data("something new".utf8))
-        var thing = CleanedThing(itemID: "x", title: "b.bin", original: somethingNew, inTrash: trashed, bytes: 0, identity: Cleaner.identity(of: trashed))
+        var thing = CleanedThing(
+            itemID: "x", title: "b.bin", original: somethingNew, inTrash: trashed, bytes: 0, identity: Cleaner.identity(of: trashed))
         thing.linkedTo = kept
         XCTAssertThrowsError(try Cleaner.putBack(thing), "it isn't the link any more, so it stays")
         XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: somethingNew)), Data("something new".utf8))
@@ -567,7 +587,9 @@ final class LinkingTests: XCTestCase {
         let exports = disk.file("/Volumes/Fake/Exports/trip.mov", 2_000_000_000, kind: .video, modTime: 86_400 * 200)
         disk.finish()
         let set = [Duplicates.Found(size: 2_000_000_000, nodes: [films, exports])]
-        XCTAssertEqual(CopiesMap.build(tree: disk.tree, duplicates: set, aliases: [], duplicatesDone: true).groups.first?.home, films, "the older one, by the rules")
+        XCTAssertEqual(
+            CopiesMap.build(tree: disk.tree, duplicates: set, aliases: [], duplicatesDone: true).groups.first?.home, films,
+            "the older one, by the rules")
         let picked = CopiesMap.build(tree: disk.tree, duplicates: set, aliases: [], duplicatesDone: true, kept: ["/Volumes/Fake/Exports/trip.mov"])
         XCTAssertEqual(picked.groups.first?.home, exports, "the one you picked")
         XCTAssertEqual(picked.groups.first?.extras, [films])
@@ -577,8 +599,10 @@ final class LinkingTests: XCTestCase {
 final class CopyColourTests: XCTestCase {
     func testASetKeepsItsColourWhenAnotherGoes() {
         let disk = FakeDisk()
-        let a1 = disk.file("/Volumes/Fake/Films/a.mov", 3_000_000_000, kind: .video), a2 = disk.file("/Volumes/Fake/Downloads/a.mov", 3_000_000_000, kind: .video)
-        let b1 = disk.file("/Volumes/Fake/Films/b.mov", 2_000_000_000, kind: .video), b2 = disk.file("/Volumes/Fake/Downloads/b.mov", 2_000_000_000, kind: .video)
+        let a1 = disk.file("/Volumes/Fake/Films/a.mov", 3_000_000_000, kind: .video),
+            a2 = disk.file("/Volumes/Fake/Downloads/a.mov", 3_000_000_000, kind: .video)
+        let b1 = disk.file("/Volumes/Fake/Films/b.mov", 2_000_000_000, kind: .video),
+            b2 = disk.file("/Volumes/Fake/Downloads/b.mov", 2_000_000_000, kind: .video)
         disk.finish()
         let both = [Duplicates.Found(size: 3_000_000_000, nodes: [a1, a2]), Duplicates.Found(size: 2_000_000_000, nodes: [b1, b2])]
         let first = CopiesMap.build(tree: disk.tree, duplicates: both, aliases: [], duplicatesDone: true)
@@ -597,7 +621,8 @@ final class KeeperTieTests: XCTestCase {
             let disk = FakeDisk()
             let nodes = order.map { disk.file("/Volumes/Fake/Projects/\($0)/bin/esbuild", 10_000_000, kind: .app, modTime: 500) }
             disk.finish()
-            let map = CopiesMap.build(tree: disk.tree, duplicates: [Duplicates.Found(size: 10_000_000, nodes: nodes.sorted())], aliases: [], duplicatesDone: true)
+            let map = CopiesMap.build(
+                tree: disk.tree, duplicates: [Duplicates.Found(size: 10_000_000, nodes: nodes.sorted())], aliases: [], duplicatesDone: true)
             XCTAssertEqual(disk.tree.path(map.groups[0].home), "/Volumes/Fake/Projects/a/bin/esbuild", "the same copy stays, found in any order")
         }
     }
@@ -613,8 +638,10 @@ final class CopyRowTests: XCTestCase {
         let v25 = disk.file("/Volumes/Fake/Projects/eye/renders/eye-v25.mp4", size, kind: .video, modTime: 86_400 * 20)
         let v25gold = disk.file("/Volumes/Fake/Desktop/GOLD versions/eye-v25.mp4", size, kind: .video, modTime: 86_400 * 40)
         disk.finish()
-        let map = CopiesMap.build(tree: disk.tree, duplicates: [Duplicates.Found(size: size, nodes: [v23, v23gold]), Duplicates.Found(size: size, nodes: [v25, v25gold])],
-                                  aliases: [], duplicatesDone: true)
+        let map = CopiesMap.build(
+            tree: disk.tree,
+            duplicates: [Duplicates.Found(size: size, nodes: [v23, v23gold]), Duplicates.Found(size: size, nodes: [v25, v25gold])],
+            aliases: [], duplicatesDone: true)
         XCTAssertEqual(map.groups.count, 1, "one row")
         let row = map.groups[0]
         XCTAssertEqual(row.title, "2 duplicates in GOLD versions")
@@ -622,8 +649,10 @@ final class CopyRowTests: XCTestCase {
         XCTAssertEqual(Set(row.keepers), [v23, v25])
         XCTAssertEqual(Set(row.homes), [disk.node("/Volumes/Fake/Projects/eye/final"), disk.node("/Volumes/Fake/Projects/eye/renders")])
         // Keeping one of the GOLD copies instead decides for that film only.
-        let kept = CopiesMap.build(tree: disk.tree, duplicates: [Duplicates.Found(size: size, nodes: [v23, v23gold]), Duplicates.Found(size: size, nodes: [v25, v25gold])],
-                                   aliases: [], duplicatesDone: true, kept: ["/Volumes/Fake/Desktop/GOLD versions/eye-v23.mp4"])
+        let kept = CopiesMap.build(
+            tree: disk.tree,
+            duplicates: [Duplicates.Found(size: size, nodes: [v23, v23gold]), Duplicates.Found(size: size, nodes: [v25, v25gold])],
+            aliases: [], duplicatesDone: true, kept: ["/Volumes/Fake/Desktop/GOLD versions/eye-v23.mp4"])
         let v23row = kept.groups.first { $0.keepers.contains(v23gold) }
         XCTAssertEqual(v23row?.extras, [v23], "v23 now keeps its GOLD copy")
         XCTAssertTrue(kept.groups.contains { $0.keepers == [v25] && $0.extras == [v25gold] }, "v25 still keeps the one in renders")
@@ -639,8 +668,10 @@ final class CopyRowTests: XCTestCase {
         let b = disk.file("/Volumes/Fake/Pictures/Holiday/b.jpg", 4_000_000, kind: .image, modTime: 86_400 * 10)
         let b1 = disk.file("/Volumes/Fake/Pictures/Export/b.jpg", 4_000_000, kind: .image, modTime: 86_400 * 50)
         disk.finish()
-        let map = CopiesMap.build(tree: disk.tree, duplicates: [Duplicates.Found(size: 4_000_000, nodes: [b, b1]), Duplicates.Found(size: 5_000_000, nodes: [a, a1, a2])],
-                                  aliases: [], duplicatesDone: true)
+        let map = CopiesMap.build(
+            tree: disk.tree,
+            duplicates: [Duplicates.Found(size: 4_000_000, nodes: [b, b1]), Duplicates.Found(size: 5_000_000, nodes: [a, a1, a2])],
+            aliases: [], duplicatesDone: true)
         XCTAssertEqual(map.groups.count, 1, "one row for Export")
         let row = map.groups[0]
         XCTAssertEqual(row.sets.map(\.keeper), [a, b], "the bigger first")
@@ -658,7 +689,9 @@ final class CopyPlaceTests: XCTestCase {
         disk.file("/Volumes/Fake/dev/storyboard/boards/demo/media/audio/x.wav", 5_000_000, kind: .audio)
         disk.file("/Volumes/Fake/dev/storyboard/boards/eye/media/audio/x.wav", 5_000_000, kind: .audio)
         disk.finish()
-        let folders = [disk.node("/Volumes/Fake/dev/storyboard/boards/demo/media/audio"), disk.node("/Volumes/Fake/dev/storyboard/boards/eye/media/audio")]
+        let folders = [
+            disk.node("/Volumes/Fake/dev/storyboard/boards/demo/media/audio"), disk.node("/Volumes/Fake/dev/storyboard/boards/eye/media/audio"),
+        ]
         XCTAssertEqual(CopiesMap.places(folders, in: disk.tree, short: true), ["…/demo/media/audio", "…/eye/media/audio"])
         XCTAssertEqual(CopiesMap.places(folders, in: disk.tree), ["dev/storyboard/…/demo/media/audio", "dev/storyboard/…/eye/media/audio"])
         XCTAssertEqual(CopiesMap.place(folders[0], in: disk.tree, short: true), "…/media/audio", "alone, its last two folders say it")
@@ -672,8 +705,10 @@ final class CopyPlaceTests: XCTestCase {
         let first = disk.file("/Volumes/Fake/Downloads/Installer.dmg", 262_000_000, kind: .archive, modTime: 500)
         let second = disk.file("/Volumes/Fake/Downloads/Installer (1).dmg", 262_000_000, kind: .archive, modTime: 500)
         disk.finish()
-        let map = CopiesMap.build(tree: disk.tree, duplicates: [Duplicates.Found(size: 164_000_000, nodes: [kept, other]), Duplicates.Found(size: 262_000_000, nodes: [first, second])],
-                                  aliases: [], duplicatesDone: true)
+        let map = CopiesMap.build(
+            tree: disk.tree,
+            duplicates: [Duplicates.Found(size: 164_000_000, nodes: [kept, other]), Duplicates.Found(size: 262_000_000, nodes: [first, second])],
+            aliases: [], duplicatesDone: true)
         let apk = try XCTUnwrap(map.groups.first { $0.keepers == [kept] })
         XCTAssertEqual(CopiesMap.summary(of: apk, in: disk.tree), "2 copies · …/outputs/flutter-apk, …/apk/debug")
         let dmg = try XCTUnwrap(map.groups.first { $0.keepers == [first] })

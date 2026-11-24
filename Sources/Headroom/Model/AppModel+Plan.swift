@@ -64,8 +64,9 @@ extension AppModel {
         if !waiting.isEmpty || !oldTrash.isEmpty {
             // What was already in the Trash counts only while some of it is still there.
             let oldBytes = oldTrash.isEmpty ? 0 : file.oldTrashBytes
-            afterClean = AfterClean(things: waiting, bytes: waiting.reduce(0) { $0 &+ $1.bytes } &+ oldBytes, includesOldTrash: !oldTrash.isEmpty,
-                                    oldTrashBytes: oldBytes, oldTrashItems: oldTrash)
+            afterClean = AfterClean(
+                things: waiting, bytes: waiting.reduce(0) { $0 &+ $1.bytes } &+ oldBytes, includesOldTrash: !oldTrash.isEmpty,
+                oldTrashBytes: oldBytes, oldTrashItems: oldTrash)
         }
     }
 
@@ -116,7 +117,7 @@ extension AppModel {
 
     private func isCurrent(_ tree: DiskTree) -> Bool { winsScanID == tree.scanID }
 
-    func resolvePlanNodes(in tree: DiskTree) {
+    private func resolvePlanNodes(in tree: DiskTree) {
         var places = planPlaces
         places.resolve(plan.items, in: tree)
         planPlaces = places
@@ -210,8 +211,10 @@ extension AppModel {
                 let nodes = (planPlaces.nodes[item.id] ?? []).filter { focus == 0 || tree.isInside($0, focus) }
                 guard !nodes.isEmpty, all || !nodes.allSatisfy({ inSuggestions.contains($0) }) else { return nil }
                 let bytes = nodes.reduce(UInt64(0)) { $0 &+ tree.totals[Int($1)] }
-                var row = WinRow(id: item.id, title: item.title, subtitle: item.note, detail: detail, tier: item.tier, nodes: nodes, bytes: bytes, paperBytes: bytes,
-                                 action: .trash, command: nil, bundleID: nil)
+                var row = WinRow(
+                    id: item.id, title: item.title, subtitle: item.note, detail: detail, tier: item.tier, nodes: nodes, bytes: bytes,
+                    paperBytes: bytes,
+                    action: .trash, command: nil, bundleID: nil)
                 row.stepAfterPlanning = item.step
                 return row
             }
@@ -229,14 +232,19 @@ extension AppModel {
             let items = picked.filter { $0.agent == name }
             // Largest first, so what matters most is at the top of what you're asked to look over.
             let theirs = rows(of: items, saying: "Selected by \(name).", all: true).sorted { $0.bytes > $1.bytes }
-            if !theirs.isEmpty { boxes.append(Box(id: "agent:" + name, title: "Selected by \(name)", detail: count(theirs) + unlisted(items), color: Palette.Box.hand, rows: theirs)) }
+            if !theirs.isEmpty {
+                boxes.append(
+                    Box(
+                        id: "agent:" + name, title: "Selected by \(name)", detail: count(theirs) + unlisted(items), color: Palette.Box.hand,
+                        rows: theirs))
+            }
         }
         let own = rows(of: picked.filter { $0.agent == nil }, saying: "Selected by you.", all: false)
         if !own.isEmpty { boxes.append(Box(id: "hand", title: "Selected manually", detail: count(own), color: Palette.Box.hand, rows: own)) }
         return boxes
     }
 
-    func refreshRowStates() {
+    private func refreshRowStates() {
         guard tree != nil else { return }
         let planned = plannedTest()
         let set = planPlaces.set
@@ -274,42 +282,21 @@ extension AppModel {
         }
         func stateOf(_ box: Box) {
             let all = box.rows.map { states[$0.id] ?? .none }
-            states[box.id] = all.allSatisfy { $0 == .all } ? .all : (all.allSatisfy { $0 == .none } ? .none : .some)
+            // A box with nothing ticked has no entry, as before.
+            states[box.id] = all.allSatisfy { $0 == .all } ? .all : (all.allSatisfy { $0 == .none } ? nil : .some)
             box.kids.forEach(stateOf)
         }
         boxes.forEach(stateOf)
         rowStates = states
     }
 
-    /// One line on why this folder is as big as it is.
-    func insightLine() -> String? {
-        guard let tree, focus != 0 else { return nil }
-        let folder = RingLayout.chainTail(tree: tree, focus)
-        let total = tree.totals[Int(folder)]
-        guard total >= 500_000_000 else { return nil }
-        let kids = tree.children(folder).filter { tree.totals[Int($0)] > 0 }
-        guard let top = kids.first else { return nil }
-        let share = Double(tree.totals[Int(top)]) / Double(total)
-        if share >= 0.5, kids.count >= 2 {
-            return "\(displayName(top)): \(Int(share * 100))% of this folder"
-        }
-        if kids.count >= 5 {
-            let three = kids.prefix(3).reduce(UInt64(0)) { $0 &+ tree.totals[Int($1)] }
-            let part = Double(three) / Double(total)
-            if part >= 0.6 { return "Top 3 items: \(Int(part * 100))% of this folder" }
-        }
-        if tree.statRow(folder)[DiskTree.statRecent30] == 0 {
-            return "Unchanged for over a month"
-        }
-        return nil
-    }
-
     // MARK: Changing the plan
 
     private func item(for row: WinRow, in tree: DiskTree) -> PlanItem {
         let paths = row.nodes.compactMap { planPath($0, in: tree) } + row.extraPaths.map(PathMath.visible)
-        return PlanItem(id: row.id, title: row.title, note: row.subtitle, tierRaw: row.tier.rawValue, paths: paths, step: row.step, bundleID: row.bundleID,
-                        lastKnownBytes: row.bytes, diskID: paths.first.flatMap(Cleaner.diskID))
+        return PlanItem(
+            id: row.id, title: row.title, note: row.subtitle, tierRaw: row.tier.rawValue, paths: paths, step: row.step, bundleID: row.bundleID,
+            lastKnownBytes: row.bytes, diskID: paths.first.flatMap(Cleaner.diskID))
     }
 
     /// Takes a row out of the plan, and whatever only made sense with it.
@@ -371,7 +358,8 @@ extension AppModel {
             await MainActor.run {
                 guard self.effectGeneration == generation, self.tree === tree else { return }
                 // A few leftover kilobytes in a folder aren't space anyone gets back.
-                self.planNumbers = PlanNumbers(total: total < 1_000_000 ? 0 : total, byItem: byItemNow.mapValues { $0 < 1_000_000 ? 0 : $0 }, after: after)
+                self.planNumbers = PlanNumbers(
+                    total: total < 1_000_000 ? 0 : total, byItem: byItemNow.mapValues { $0 < 1_000_000 ? 0 : $0 }, after: after)
                 // The checks say what you'd get back, so they follow these numbers.
                 self.checkSoon()
             }
@@ -379,7 +367,7 @@ extension AppModel {
     }
 
     /// Looks at everything that's ticked as soon as the ticking stops, so what needs a look shows before you press Clean.
-    func checkSoon() {
+    private func checkSoon() {
         guard mode == .freeUp, !isCleaning else { return }
         checkTask?.cancel()
         checkTask = Task { [weak self] in
@@ -473,8 +461,10 @@ extension AppModel {
         let paths = row.otherCopies.compactMap { planPath($0, in: tree) }
         guard !paths.isEmpty else { return nil }
         let places = paths.map(DiskTree.friendly).joined(separator: ", ")
-        return PlanItem(id: PlanItem.otherCopyID(of: row.id), title: "Other copy of \(row.title)", note: row.otherCopiesCaution.map { $0 + " " + places } ?? places, tierRaw: Tier.yourCall.rawValue, paths: paths,
-                        lastKnownBytes: row.paperBytes, diskID: paths.first.flatMap(Cleaner.diskID))
+        return PlanItem(
+            id: PlanItem.otherCopyID(of: row.id), title: "Other copy of \(row.title)",
+            note: row.otherCopiesCaution.map { $0 + " " + places } ?? places, tierRaw: Tier.yourCall.rawValue, paths: paths,
+            lastKnownBytes: row.paperBytes, diskID: paths.first.flatMap(Cleaner.diskID))
     }
 
     // MARK: Pointing
@@ -514,18 +504,6 @@ extension AppModel {
         }
     }
 
-    /// What's ticked in the picture on screen.
-    var planBytesHere: UInt64 {
-        guard let tree, focus != 0 else { return planNumbers.total }
-        var sum: UInt64 = 0
-        for (id, nodes) in planPlaces.nodes where !nodes.isEmpty {
-            let inside = nodes.filter { tree.isInside($0, focus) }
-            if inside.count == nodes.count { sum &+= planNumbers.byItem[id] ?? 0 }
-            else { sum &+= inside.reduce(UInt64(0)) { $0 &+ tree.totals[Int($1)] } }
-        }
-        return sum
-    }
-
     /// A click on the ring: this too. A second click takes it back.
     func togglePiece(_ node: UInt32) {
         guard let tree, mayEditPlan() else { return }
@@ -550,8 +528,8 @@ extension AppModel {
             return
         }
         // Something you'd taken back from a planned folder comes back with it.
-        if plan.items.contains(where: { $0.excluded.contains(path) }) {
-            for at in plan.items.indices { plan.items[at].excluded.removeAll { $0 == path } }
+        if plan.excludes(path) {
+            plan.restoreExcluded(path)
             planChanged()
             return
         }
@@ -574,9 +552,16 @@ extension AppModel {
             showTip("\(displayName(node)) is protected.")
             return
         }
-        plan.add(PlanItem(id: PlanItem.id(pickedByHand: path), title: displayName(node), note: tree.friendlyPath(node), tierRaw: Tier.yourCall.rawValue, paths: [path], byHand: true,
-                          lastKnownBytes: tree.totals[Int(node)], diskID: Cleaner.diskID(of: path)))
+        plan.add(handPickedItem(node, at: path, in: tree))
         planChanged()
+    }
+
+    /// Something picked by hand on the map, as the plan keeps it.
+    private func handPickedItem(_ node: UInt32, at path: String, in tree: DiskTree, step: PlanStep = .trash) -> PlanItem {
+        PlanItem(
+            id: PlanItem.id(pickedByHand: path), title: displayName(node), note: tree.friendlyPath(node), tierRaw: Tier.yourCall.rawValue,
+            paths: [path],
+            step: step, byHand: true, lastKnownBytes: tree.totals[Int(node)], diskID: Cleaner.diskID(of: path))
     }
 
     /// A tick on one file in a row that's too small to be on the map, such as one screenshot of many.
@@ -585,8 +570,8 @@ extension AppModel {
         let path = PathMath.visible(path)
         if plan.covers(path) {
             plan.takeBack(path)
-        } else if plan.items.contains(where: { $0.excluded.contains(path) }) {
-            for at in plan.items.indices { plan.items[at].excluded.removeAll { $0 == path } }
+        } else if plan.excludes(path) {
+            plan.restoreExcluded(path)
         } else {
             guard Safety.canTrash(path) else { return }
             var part = item(for: row, in: tree)
@@ -638,13 +623,6 @@ extension AppModel {
         refreshRing(.live)
     }
 
-    func removeFromPlan(_ item: PlanItem) {
-        guard mayEditPlan() else { return }
-        plan.remove(item.id)
-        refusedRows.insert(item.id)
-        planChanged()
-    }
-
     func clearPlan() {
         guard mayEditPlan() else { return }
         clearedItems = plan.items
@@ -667,23 +645,21 @@ extension AppModel {
         planChanged()
     }
 
-    func acceptChange(for id: String) {
-        guard let at = plan.items.firstIndex(where: { $0.id == id }) else { return }
-        plan.items[at].acceptedChange = Date()
-        savePlan()
-        runChecks()
-    }
+    func acceptChange(for id: String) { accept(\.acceptedChange, for: id) }
 
-    func acceptInUse(for id: String) {
+    func acceptInUse(for id: String) { accept(\.acceptedInUseAt, for: id) }
+
+    /// You said it can go as it is now: the checks look again.
+    private func accept(_ field: WritableKeyPath<PlanItem, Date?>, for id: String) {
         guard let at = plan.items.firstIndex(where: { $0.id == id }) else { return }
-        plan.items[at].acceptedInUseAt = Date()
+        plan.items[at][keyPath: field] = Date()
         savePlan()
         runChecks()
     }
 
     func quit(bundleID: String) {
         let apps = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
-        apps.forEach { $0.terminate() }
+        for app in apps { app.terminate() }
         Task { [weak self] in
             // Up to six seconds for them to finish quitting.
             var waited = 0
@@ -697,8 +673,11 @@ extension AppModel {
 
     func alsoPlanOtherCopy(for item: PlanItem) {
         guard let other = otherCopies[item.id], mayEditPlan() else { return }
-        plan.add(PlanItem(id: PlanItem.otherCopyID(of: item.id), title: "Other copy of \(item.title)", note: other.title, tierRaw: Tier.yourCall.rawValue, paths: other.paths, lastKnownBytes: other.bytes,
-                          diskID: other.paths.first.flatMap(Cleaner.diskID)))
+        plan.add(
+            PlanItem(
+                id: PlanItem.otherCopyID(of: item.id), title: "Other copy of \(item.title)", note: other.title, tierRaw: Tier.yourCall.rawValue,
+                paths: other.paths, lastKnownBytes: other.bytes,
+                diskID: other.paths.first.flatMap(Cleaner.diskID)))
         planChanged()
     }
 
@@ -713,20 +692,18 @@ extension AppModel {
     func otherDisks(for path: String) -> [DiskChoice] {
         guard !HiddenNames.isOn else { return [] }
         let here = PathMath.mount(of: PathMath.visible(path))
-        var out = volumes.filter { $0.mountPath != here && $0.mountPath != "/" }.map { DiskChoice(name: $0.name, mountPath: $0.mountPath, isPluggedIn: true) }
-        for name in facts.knownDisks where "/Volumes/" + name != here && !out.contains(where: { $0.name == name }) && !volumes.contains(where: { $0.name == name }) {
+        var out = volumes.filter { $0.mountPath != here && $0.mountPath != "/" }.map {
+            DiskChoice(name: $0.name, mountPath: $0.mountPath, isPluggedIn: true)
+        }
+        for name in facts.knownDisks
+        where "/Volumes/" + name != here && !out.contains(where: { $0.name == name }) && !volumes.contains(where: { $0.name == name }) {
             out.append(DiskChoice(name: name, mountPath: "/Volumes/" + name, isPluggedIn: false))
         }
         return out
     }
 
-    /// Whether something moved to this folder stays in Plex, because that folder is one of Plex's libraries.
-    func staysInPlex(_ folder: String) -> Bool {
-        facts.plexRoots.contains { PathMath.isInside(folder, $0) }
-    }
-
     /// Where something would go on another disk: the matching folder, if that disk is set up the same way.
-    func moveFolder(for path: String, to disk: DiskChoice) -> String {
+    private func moveFolder(for path: String, to disk: DiskChoice) -> String {
         let visible = PathMath.visible(path)
         let parent = (visible as NSString).deletingLastPathComponent
         for root in facts.plexRoots where PathMath.isInside(parent, root) {
@@ -765,8 +742,7 @@ extension AppModel {
             setStep(.move(folder: folder), for: existing.id)
             return
         }
-        plan.add(PlanItem(id: PlanItem.id(pickedByHand: path), title: displayName(node), note: tree.friendlyPath(node), tierRaw: Tier.yourCall.rawValue, paths: [path],
-                          step: .move(folder: folder), byHand: true, lastKnownBytes: tree.totals[Int(node)], diskID: Cleaner.diskID(of: path)))
+        plan.add(handPickedItem(node, at: path, in: tree, step: .move(folder: folder)))
         planChanged()
     }
 
@@ -840,9 +816,6 @@ extension AppModel {
         }
     }
 
-}
-
-extension AppModel {
     /// The other copy of something has its own tick, because taking it costs something of its own.
     func toggleOtherCopies(of row: WinRow) {
         guard let tree, isCurrent(tree), mayEditPlan() else { return }
@@ -862,9 +835,13 @@ extension AppModel {
         if let first = paths.first, plan.covers(first) {
             plan.items.removeAll { $0.id == PlanItem.dataID(of: row.id) }
         } else {
-            plan.add(PlanItem(id: PlanItem.dataID(of: row.id), title: "\(row.title) data", note: paths.map(DiskTree.friendly).joined(separator: ", "), tierRaw: Tier.yourCall.rawValue, paths: paths,
-                              step: row.step == .uninstall ? .uninstall : .trash, bundleID: row.bundleID, lastKnownBytes: row.alsoNodes.reduce(0) { $0 &+ tree.totals[Int($1)] },
-                              diskID: paths.first.flatMap(Cleaner.diskID)))
+            plan.add(
+                PlanItem(
+                    id: PlanItem.dataID(of: row.id), title: "\(row.title) data", note: paths.map(DiskTree.friendly).joined(separator: ", "),
+                    tierRaw: Tier.yourCall.rawValue, paths: paths,
+                    step: row.step == .uninstall ? .uninstall : .trash, bundleID: row.bundleID,
+                    lastKnownBytes: row.alsoNodes.reduce(0) { $0 &+ tree.totals[Int($1)] },
+                    diskID: paths.first.flatMap(Cleaner.diskID)))
         }
         planChanged()
     }

@@ -1,13 +1,16 @@
 import AppKit
 import SwiftUI
 
-public extension View {
+extension View {
     /// Asks the user about each agent that wants in, one at a time, in an alert: Allow, Look Only or Don't Allow. Put it on
     /// the app's main window, so the question is there when an agent asks. `explaining` says what allowing an agent lets it
     /// do; by default, that it can see what the app shows and use its tools.
-    func agentQuestion(_ door: AgentDoor, explaining: String? = nil) -> some View {
-        modifier(AgentQuestion(agents: door.agents, app: door.host.name,
-                               explaining: explaining ?? "It can see what \(door.host.name) shows and use its tools. With Look Only, it can see but not change anything."))
+    public func agentQuestion(_ door: AgentDoor, explaining: String? = nil) -> some View {
+        modifier(
+            AgentQuestion(
+                agents: door.agents, app: door.host.name,
+                explaining: explaining
+                    ?? "It can see what \(door.host.name) shows and use its tools. With Look Only, it can see but not change anything."))
     }
 }
 
@@ -20,8 +23,10 @@ struct AgentQuestion: ViewModifier {
     func body(content: Content) -> some View {
         let request = agents.requests.first
         content
-            .alert("“\(request?.identity.name ?? "An agent")” would like to work with \(app)",
-                   isPresented: Binding(get: { request != nil }, set: { _ in }), presenting: request) { request in
+            .alert(
+                "“\(request?.identity.name ?? "An agent")” would like to work with \(app)",
+                isPresented: Binding(get: { request != nil }, set: { _ in }), presenting: request
+            ) { request in
                 Button("Allow") { agents.answer(request, .allow) }
                 Button("Look Only") { agents.answer(request, .lookOnly) }
                 Button("Don’t Allow", role: .cancel) { agents.answer(request, .deny) }
@@ -64,8 +69,10 @@ public struct AgentAccessView: View {
                 }
                 ForEach(agents.allowed) { one in
                     HStack {
-                        label(one.identity, detail: one.lastUsed.map { Text("Last used \($0, format: .relative(presentation: .named))") }
-                            ?? Text("Not used yet"))
+                        label(
+                            one.identity,
+                            detail: one.lastUsed.map { Text("Last used \($0, format: .relative(presentation: .named))") }
+                                ?? Text("Not used yet"))
                         Spacer(minLength: 12)
                         Picker("Access", selection: Binding(get: { one.maySelect }, set: { agents.setMaySelect(one, $0) })) {
                             Text("Look and select").tag(true)

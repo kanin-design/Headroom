@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 
 /// The centre, in a view of its own: what it says changes with the pointer, and this way only the centre is made again.
@@ -37,6 +36,8 @@ public struct Sunburst<Tree: SunburstTree, Centre: View>: View {
     }
 
     public var body: some View {
+        // Each init sets either `given` or `make`.
+        // swift-format-ignore: NeverForceUnwrap
         let chart = given ?? made.value { make!() }
         GeometryReader { geometry in
             let size = geometry.size
@@ -70,9 +71,9 @@ public struct Sunburst<Tree: SunburstTree, Centre: View>: View {
     }
 }
 
-public extension Sunburst where Centre == SunburstReadoutView {
+extension Sunburst where Centre == SunburstReadoutView {
     /// A chart you keep, to drive from code, with the kit's centre.
-    init(_ chart: SunburstChart<Tree>) {
+    public init(_ chart: SunburstChart<Tree>) {
         self.init(chart) { SunburstReadoutView($0, diameter: $1) }
     }
 
@@ -80,16 +81,20 @@ public extension Sunburst where Centre == SunburstReadoutView {
     /// otherwise, and `valueText`, if given, is written for a node in place of its size. `parts` are the chart's parts. The
     /// chart is made when the view first appears, from the tree it's given then. To show a tree that changes, keep a
     /// `SunburstChart` and set its `tree`.
-    init(_ tree: Tree, name: @escaping (UInt32) -> String, sizeText: @escaping (UInt64) -> String = SunburstFormat.bytes,
-         valueText: ((UInt32) -> String)? = nil, parts: SunburstParts = SunburstParts()) {
+    public init(
+        _ tree: Tree, name: @escaping (UInt32) -> String, sizeText: @escaping (UInt64) -> String = SunburstFormat.bytes,
+        valueText: ((UInt32) -> String)? = nil, parts: SunburstParts = SunburstParts()
+    ) {
         given = nil
         make = { SunburstChart(tree: tree, name: name, sizeText: sizeText, valueText: valueText, parts: parts) }
         centre = { SunburstReadoutView($0, diameter: $1) }
     }
 
     /// A chart of an `ItemTree`, each piece named from its item.
-    init<Item>(_ tree: ItemTree<Item>, sizeText: @escaping (UInt64) -> String = SunburstFormat.bytes,
-               valueText: ((UInt32) -> String)? = nil, parts: SunburstParts = SunburstParts()) where Tree == ItemTree<Item> {
+    public init<Item>(
+        _ tree: ItemTree<Item>, sizeText: @escaping (UInt64) -> String = SunburstFormat.bytes,
+        valueText: ((UInt32) -> String)? = nil, parts: SunburstParts = SunburstParts()
+    ) where Tree == ItemTree<Item> {
         given = nil
         make = { SunburstChart(tree: tree, sizeText: sizeText, valueText: valueText, parts: parts) }
         centre = { SunburstReadoutView($0, diameter: $1) }
@@ -98,7 +103,7 @@ public extension Sunburst where Centre == SunburstReadoutView {
 
 /// Holds something made the first time it's asked for. A class, so asking from `body` changes no state SwiftUI watches.
 @MainActor
-final class MadeOnce<Value> {
+private final class MadeOnce<Value> {
     private var made: Value?
 
     func value(_ make: () -> Value) -> Value {
@@ -110,7 +115,7 @@ final class MadeOnce<Value> {
 }
 
 /// The ring's own view, connected to a chart.
-struct SunburstCanvas<Tree: SunburstTree>: NSViewRepresentable {
+private struct SunburstCanvas<Tree: SunburstTree>: NSViewRepresentable {
     let chart: SunburstChart<Tree>
 
     func makeNSView(context: Context) -> SunburstView {

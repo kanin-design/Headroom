@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Headroom
 
 /// What the card Space opens shows. It all comes from the map.
@@ -38,7 +39,8 @@ final class LookTests: XCTestCase {
         let alone = FakeDisk()
         alone.file(shows + "/only.mkv", megabyte, kind: .video)
         alone.finish()
-        XCTAssertEqual(LookContents.next(after: alone.node(shows + "/only.mkv"), in: alone.tree), alone.node(shows), "Nothing next to it, so what held it")
+        XCTAssertEqual(
+            LookContents.next(after: alone.node(shows + "/only.mkv"), in: alone.tree), alone.node(shows), "Nothing next to it, so what held it")
     }
 
     func testPicturesOnlyWhenThatsMostlyWhatAFolderIs() {

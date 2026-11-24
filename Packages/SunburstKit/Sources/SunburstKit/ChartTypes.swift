@@ -1,6 +1,3 @@
-import AppKit
-import simd
-
 /// How the middle moves to a node (`SunburstChart.setFocus(_:_:)`).
 public enum SunburstMove: Sendable, Equatable {
     /// Zooming in: everything scales around the piece the node was drawn as, given from the picture before, until it fills
@@ -23,6 +20,11 @@ public struct SunburstPointed: Sendable, Equatable {
         self.node = node
         self.piece = piece
         self.isGathered = isGathered
+    }
+
+    /// A piece of the picture, at this index in its pieces.
+    init(_ piece: Piece, at index: Int) {
+        self.init(node: piece.node, piece: index, isGathered: piece.isSmaller)
     }
 }
 
@@ -65,8 +67,10 @@ public struct SunburstLighting: Sendable {
     /// stretches by group shows it on each stretch whose contents all take it. Nil, the default: everything lit takes it.
     public var tints: (@Sendable (UInt32) -> Bool)?
 
-    public init(also: [UInt32] = [], gathered: RingLayout.GatheredLight = .held, tint: SIMD3<Float>? = nil,
-                tints: (@Sendable (UInt32) -> Bool)? = nil) {
+    public init(
+        also: [UInt32] = [], gathered: RingLayout.GatheredLight = .held, tint: SIMD3<Float>? = nil,
+        tints: (@Sendable (UInt32) -> Bool)? = nil
+    ) {
         self.also = also
         self.gathered = gathered
         self.tint = tint

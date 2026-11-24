@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Headroom
 
 final class TitlesTests: XCTestCase {
@@ -20,7 +21,10 @@ final class TitlesTests: XCTestCase {
     }
 
     func testThingsThatArentEpisodes() {
-        for name in ["Blade Runner (1982).mkv", "video_1920x1080.mp4", "Movie.2019.x264.mkv", "clips1e2.mov", "Dress2.mkv", "S01.mkv", "Season 1.mkv", "render_4x3.mov", "100x20.mkv"] {
+        for name in [
+            "Blade Runner (1982).mkv", "video_1920x1080.mp4", "Movie.2019.x264.mkv", "clips1e2.mov", "Dress2.mkv", "S01.mkv", "Season 1.mkv",
+            "render_4x3.mov", "100x20.mkv",
+        ] {
             XCTAssertNil(Titles.parseEpisode(name), name)
         }
     }
@@ -48,7 +52,10 @@ final class TitlesTests: XCTestCase {
 
     func testFrames() {
         for name in ["shot_00123.png", "frame0001.exr", "12.jpg"] { XCTAssertTrue(Titles.isNumberedFrame(name), name) }
-        for name in ["cover.png", "shot_1.png", "final-v2a.png", "IMG_0001.JPG", "DSC01234.ARW", "PXL_20260101_123456.jpg", "GOPR0012.MP4", "Screenshot 2026-01-01 at 12.00.00.png"] {
+        for name in [
+            "cover.png", "shot_1.png", "final-v2a.png", "IMG_0001.JPG", "DSC01234.ARW", "PXL_20260101_123456.jpg", "GOPR0012.MP4",
+            "Screenshot 2026-01-01 at 12.00.00.png",
+        ] {
             XCTAssertFalse(Titles.isNumberedFrame(name), name)
         }
     }
@@ -64,7 +71,7 @@ final class TitlesTests: XCTestCase {
         _ = raw
         let text = "d9:done-datei1793682221e11:destination6:/a/b/c4:name5:Thing6:pausedi0e5:peersl2:abee"
         let value = try XCTUnwrap(Bencode.parse(Data(text.utf8))?.dict)
-        XCTAssertEqual(value["done-date"]?.int, 1793682221)
+        XCTAssertEqual(value["done-date"]?.int, 1_793_682_221)
         XCTAssertEqual(value["destination"]?.string, "/a/b/c")
         XCTAssertEqual(value["name"]?.string, "Thing")
         XCTAssertEqual(value["paused"]?.int, 0)
@@ -77,7 +84,8 @@ final class TitlesTests: XCTestCase {
     }
 
     func testSteamManifest() {
-        let text = "\"AppState\"\n{\n\t\"appid\"\t\t\"1332010\"\n\t\"name\"\t\t\"Stray\"\n\t\"SizeOnDisk\"\t\t\"8367235193\"\n\t\"LastPlayed\"\t\t\"1788276879\"\n}\n"
+        let text =
+            "\"AppState\"\n{\n\t\"appid\"\t\t\"1332010\"\n\t\"name\"\t\t\"Stray\"\n\t\"SizeOnDisk\"\t\t\"8367235193\"\n\t\"LastPlayed\"\t\t\"1788276879\"\n}\n"
         let values = SteamText.values(text)
         XCTAssertEqual(values["name"], "Stray")
         XCTAssertEqual(values["SizeOnDisk"], "8367235193")

@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Headroom
 
 /// Merging links is only allowed because no answer changes. So every question is asked before and after.
@@ -33,7 +34,9 @@ final class LinksTests: XCTestCase {
             out.total.append(effect.total)
         }
         var rows = folders.map { node in
-            WinRow(id: String(node), title: "", subtitle: "", detail: "", tier: .yourCall, nodes: [node], bytes: 0, paperBytes: disk.tree.totals[Int(node)], action: .trash, command: nil, bundleID: nil)
+            WinRow(
+                id: String(node), title: "", subtitle: "", detail: "", tier: .yourCall, nodes: [node], bytes: 0,
+                paperBytes: disk.tree.totals[Int(node)], action: .trash, command: nil, bundleID: nil)
         }
         Wins.settleReclaim(&rows, tree: disk.tree)
         out.rows = rows.map(\.bytes)
@@ -69,8 +72,12 @@ final class LinksTests: XCTestCase {
             // A big file has a node of its own, which can be picked by itself.
             for one in big.dropLast() {
                 let other = dirs.randomElement(using: &generator)!
-                records.append(LinkRecord(key: key, bytes: disk.tree.totals[Int(one)], dir: disk.tree.nodes[Int(one)].parent, file: one, when: 0, kind: Kind.video.rawValue, counted: true))
-                records.append(LinkRecord(key: key, bytes: disk.tree.totals[Int(one)], dir: other, file: 0, when: 0, kind: Kind.video.rawValue, counted: false))
+                records.append(
+                    LinkRecord(
+                        key: key, bytes: disk.tree.totals[Int(one)], dir: disk.tree.nodes[Int(one)].parent, file: one, when: 0,
+                        kind: Kind.video.rawValue, counted: true))
+                records.append(
+                    LinkRecord(key: key, bytes: disk.tree.totals[Int(one)], dir: other, file: 0, when: 0, kind: Kind.video.rawValue, counted: false))
                 key += 1
             }
             disk.tree.links = records
@@ -135,8 +142,10 @@ final class LinksTests: XCTestCase {
 
     func testOnlyTheSameThingIsAddedUp() {
         func group(_ key: UInt64, _ first: UInt32, _ second: UInt32, kind: UInt8 = 0, countedFirst: Bool = true) -> [LinkRecord] {
-            [LinkRecord(key: key, bytes: 100, dir: first, file: 0, when: 0, kind: kind, counted: countedFirst),
-             LinkRecord(key: key, bytes: 100, dir: second, file: 0, when: 0, kind: kind, counted: !countedFirst)]
+            [
+                LinkRecord(key: key, bytes: 100, dir: first, file: 0, when: 0, kind: kind, counted: countedFirst),
+                LinkRecord(key: key, bytes: 100, dir: second, file: 0, when: 0, kind: kind, counted: !countedFirst),
+            ]
         }
         var same = group(1, 5, 6) + group(2, 6, 5, countedFirst: false)
         Accounting.merge(&same)
@@ -155,9 +164,12 @@ final class LinksTests: XCTestCase {
         Accounting.merge(&otherSort)
         XCTAssertEqual(otherSort.count, 4, "A hard link and a clone get different names")
 
-        var threePlaces = group(1, 5, 6) + [LinkRecord(key: 2, bytes: 100, dir: 5, file: 0, when: 0, kind: 0, counted: true),
-                                            LinkRecord(key: 2, bytes: 100, dir: 6, file: 0, when: 0, kind: 0, counted: false),
-                                            LinkRecord(key: 2, bytes: 100, dir: 7, file: 0, when: 0, kind: 0, counted: false)]
+        var threePlaces =
+            group(1, 5, 6) + [
+                LinkRecord(key: 2, bytes: 100, dir: 5, file: 0, when: 0, kind: 0, counted: true),
+                LinkRecord(key: 2, bytes: 100, dir: 6, file: 0, when: 0, kind: 0, counted: false),
+                LinkRecord(key: 2, bytes: 100, dir: 7, file: 0, when: 0, kind: 0, counted: false),
+            ]
         Accounting.merge(&threePlaces)
         XCTAssertEqual(threePlaces.count, 5)
     }

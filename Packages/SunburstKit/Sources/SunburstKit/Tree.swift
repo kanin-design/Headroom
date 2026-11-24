@@ -1,5 +1,3 @@
-import Foundation
-
 /// The data a sunburst is drawn from. The kit never owns it: the app keeps its own tree and answers these questions about
 /// it. Nodes are numbers. Node 0 is the root, and 0 as a child or a sibling means there is none. Children are listed
 /// biggest first.
@@ -69,17 +67,17 @@ public struct SunburstStretch: Sendable, Equatable {
     }
 }
 
-public extension SunburstTree where Branches == SunburstNodes<Self> {
-    func branches(_ nodes: [UInt32]) -> SunburstNodes<Self> { SunburstNodes(nodes, in: self) }
+extension SunburstTree where Branches == SunburstNodes<Self> {
+    public func branches(_ nodes: [UInt32]) -> SunburstNodes<Self> { SunburstNodes(nodes, in: self) }
 }
 
-public extension SunburstTree {
-    func role(of node: UInt32) -> SunburstRole { isFolder(node) ? .container : .item }
-    func isShared(_ node: UInt32) -> Bool { false }
-    func group(of node: UInt32) -> UInt8? { nil }
-    func isStillGrowing(_ node: UInt32) -> Bool { false }
+extension SunburstTree {
+    public func role(of node: UInt32) -> SunburstRole { isFolder(node) ? .container : .item }
+    public func isShared(_ node: UInt32) -> Bool { false }
+    public func group(of node: UInt32) -> UInt8? { nil }
+    public func isStillGrowing(_ node: UInt32) -> Bool { false }
 
-    func isInside(_ node: UInt32, _ folder: UInt32) -> Bool {
+    public func isInside(_ node: UInt32, _ folder: UInt32) -> Bool {
         var at = node
         while true {
             if at == folder { return true }
@@ -88,7 +86,7 @@ public extension SunburstTree {
         }
     }
 
-    func hasNode(_ node: UInt32) -> Bool {
+    public func hasNode(_ node: UInt32) -> Bool {
         if node == 0 { return true }
         // Only nodes reached from the root are asked about, so a number the tree doesn't have is never looked up.
         var stack: [UInt32] = [0]
@@ -104,7 +102,7 @@ public extension SunburstTree {
     }
 
     /// The node's children, in the tree's order.
-    func children(of node: UInt32) -> [UInt32] {
+    public func children(of node: UInt32) -> [UInt32] {
         var out: [UInt32] = []
         var c = firstChild(of: node)
         while c != 0 {
@@ -116,7 +114,7 @@ public extension SunburstTree {
 
     /// How many levels the node is below the root: 0 for the root.
     @inlinable
-    func depth(of node: UInt32) -> Int {
+    public func depth(of node: UInt32) -> Int {
         var depth = 0
         var at = node
         while at != 0 {

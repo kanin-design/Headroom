@@ -1,5 +1,5 @@
-@_exported import SunburstKit
 import Foundation
+@_exported import SunburstKit
 
 /// The disk map is drawn by SunburstKit from the scanned tree as it is: each node's numbers are read where the scan keeps
 /// them. What the map is about stays here: what each node is, and the parts each view is drawn with.
@@ -44,8 +44,9 @@ extension DiskTree {
     /// place's colour; otherwise each is in the folder's own colour, as the folder it is.
     func parts(_ sizes: RingSizes, byPlace: Bool = false) -> SunburstParts {
         if twoSides {
-            return SunburstParts(split: .band, rings: .init(sizes, order: .byGroup, stretchColours: byPlace ? .contents : .folder),
-                                 dial: .init(counts: .eachSide))
+            return SunburstParts(
+                split: .band, rings: .init(sizes, order: .byGroup, stretchColours: byPlace ? .contents : .folder),
+                dial: .init(counts: .eachSide))
         }
         // While a scan is running, the big groups keep their places instead of swapping as they fill up.
         var band = SunburstParts.Band()
@@ -56,7 +57,7 @@ extension DiskTree {
         return SunburstParts(bands: [band], rings: .init(sizes, order: order.isEmpty ? .bySize : .byGroup))
     }
 
-    @inline(__always) func partialRank(of node: UInt32) -> Int {
+    @inline(__always) private func partialRank(of node: UInt32) -> Int {
         node == home ? 0 : (nodes[Int(node)].has(NodeFlag.synthetic) ? 1 : 2)
     }
 }
@@ -95,8 +96,10 @@ struct MapTree: SunburstTree {
 extension RingLayout {
     /// The picture of the disk, or of the disk as it will be after the plan has run, in Headroom's parts. `byPlace` is for
     /// both disks coloured by where things are, as Backed Up colours them.
-    static func build(tree: DiskTree, focus: UInt32, colorer: Colorer, marked: Marker? = nil, after: AfterPlan? = nil,
-                      sizes: RingSizes = .saved, byPlace: Bool = false) -> RingLayout {
+    static func build(
+        tree: DiskTree, focus: UInt32, colorer: Colorer, marked: Marker? = nil, after: AfterPlan? = nil,
+        sizes: RingSizes = .saved, byPlace: Bool = false
+    ) -> RingLayout {
         let parts = tree.parts(sizes, byPlace: byPlace)
         if let after { return build(tree: MapTree(tree, after: after), focus: focus, parts: parts, colorer: colorer, marked: marked) }
         return build(tree: tree, focus: focus, parts: parts, colorer: colorer, marked: marked)

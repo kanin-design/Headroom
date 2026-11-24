@@ -80,7 +80,7 @@ struct PairPicture {
     let driveNodes: [String: UInt32]
 
     /// Each drive file's size in bytes, as the file says it, which is what's compared.
-    let driveSizes: [UInt32: UInt64]
+    private let driveSizes: [UInt32: UInt64]
     /// Each file on the Mac's half, by its path from the folder.
     let macRel: [UInt32: String]
     /// Whether the drive was read just now, or its half is what was read there last, and when that was. Never read: nil.
@@ -91,9 +91,9 @@ struct PairPicture {
     let realFolder: UInt32
     let realOf: [UInt32: UInt32]
     /// Where each thing on either half is, from the folder, and what's there on each half.
-    let relOf: [UInt32: String]
-    let macByRel: [String: UInt32]
-    let driveByRel: [String: UInt32]
+    private let relOf: [UInt32: String]
+    private let macByRel: [String: UInt32]
+    private let driveByRel: [String: UInt32]
 
     /// A path on the Mac, from one from the folder.
     func onMac(_ rel: String) -> String {
@@ -126,8 +126,9 @@ struct PairPicture {
     /// A file on the drive's half, as it's selected.
     func driveFile(_ node: UInt32) -> DriveFile? {
         guard let rel = driveRel[node] else { return nil }
-        return DriveFile(path: drivePath + "/" + rel, macPath: onMac(rel), bytes: driveSizes[node] ?? tree.nodes[Int(node)].bytes,
-                         place: places[node] ?? .onlyDrive, driveName: driveName)
+        return DriveFile(
+            path: drivePath + "/" + rel, macPath: onMac(rel), bytes: driveSizes[node] ?? tree.nodes[Int(node)].bytes,
+            place: places[node] ?? .onlyDrive, driveName: driveName)
     }
 
     /// The folder both halves are of, by its name.
@@ -138,10 +139,15 @@ struct PairPicture {
 
     func colour(_ node: UInt32) -> SIMD3<Float> {
         var colour: SIMD3<Float>
-        if let place = places[node] { colour = place.colour }
-        else if node == macSide { colour = SIMD3(0.30, 0.31, 0.36) }
-        else if node == driveSide { colour = SIMD3(0.24, 0.28, 0.36) }
-        else { colour = SIMD3(0.20, 0.21, 0.25) }
+        if let place = places[node] {
+            colour = place.colour
+        } else if node == macSide {
+            colour = SIMD3(0.30, 0.31, 0.36)
+        } else if node == driveSide {
+            colour = SIMD3(0.24, 0.28, 0.36)
+        } else {
+            colour = SIMD3(0.20, 0.21, 0.25)
+        }
         return dimmed(colour, node)
     }
 
@@ -153,8 +159,10 @@ struct PairPicture {
 
     /// `online` reads the drive; otherwise its half comes from what was read there last, kept under `listingID` with paths
     /// from `mount`, the drive's top.
-    static func build(real: DiskTree, macFolder: UInt32, macPath: String, drivePath: String, driveName: String, notes: [MovedNote],
-                      ghosts: Bool, online: Bool = true, listingID: String? = nil, mount: String? = nil, stop: LockedFlag? = nil) -> PairPicture? {
+    static func build(
+        real: DiskTree, macFolder: UInt32, macPath: String, drivePath: String, driveName: String, notes: [MovedNote],
+        ghosts: Bool, online: Bool = true, listingID: String? = nil, mount: String? = nil, stop: LockedFlag? = nil
+    ) -> PairPicture? {
         let builder = Builder()
         let root = builder.add(parent: 0, name: "This Mac and \(driveName)", flags: NodeFlag.synthetic | NodeFlag.directory, isRoot: true)
         // At the top of the disk the Mac's half is the disk itself, named as the map's own top is, so paths read from it are real.
@@ -212,17 +220,23 @@ struct PairPicture {
                 }
                 let isGroup = n.has(NodeFlag.synthetic) && !n.has(NodeFlag.anchor)
                 // An anchor is named by its own path; a group of macOS's own parts adds nothing to the path.
-                let path: String? = n.has(NodeFlag.anchor) ? relative(PathMath.visible(name)) : isGroup ? nil : (rel.isEmpty ? name : rel + "/" + name)
+                let path: String? =
+                    n.has(NodeFlag.anchor) ? relative(PathMath.visible(name)) : isGroup ? nil : (rel.isEmpty ? name : rel + "/" + name)
                 let kept = n.flags & (NodeFlag.anchor | NodeFlag.synthetic | NodeFlag.hidden | NodeFlag.locked | NodeFlag.alias)
                 let id: UInt32
                 if n.firstChild != 0, builder.count < Self.most {
-                    id = builder.add(parent: into, name: name, flags: kept | NodeFlag.directory, bytes: n.bytes, modTime: n.modTime, files: n.fileCount)
+                    id = builder.add(
+                        parent: into, name: name, flags: kept | NodeFlag.directory, bytes: n.bytes, modTime: n.modTime, files: n.fileCount)
                     folders.append((child, id, path ?? rel))
                 } else if n.firstChild != 0 || n.has(NodeFlag.directory) || isGroup {
                     // Too much to draw it all, or a part drawn whole: one piece, its size as it is.
-                    id = builder.add(parent: into, name: name, flags: kept, bytes: real.totals[Int(child)], kind: real.dominantKind(child), modTime: real.newest[Int(child)])
+                    id = builder.add(
+                        parent: into, name: name, flags: kept, bytes: real.totals[Int(child)], kind: real.dominantKind(child),
+                        modTime: real.newest[Int(child)])
                 } else {
-                    id = builder.add(parent: into, name: name, flags: kept, bytes: n.bytes, alias: n.aliasBytes, kind: Kind(rawValue: n.kind) ?? .other, modTime: n.modTime)
+                    id = builder.add(
+                        parent: into, name: name, flags: kept, bytes: n.bytes, alias: n.aliasBytes, kind: Kind(rawValue: n.kind) ?? .other,
+                        modTime: n.modTime)
                     if let path {
                         // Compared by what the file says it holds, read only when the drive has one by the same path. A second path
                         // of a hard link or a clone has its bytes counted elsewhere on the map, and holds them all the same.
@@ -255,7 +269,9 @@ struct PairPicture {
             let folder = (note.notePath as NSString).deletingLastPathComponent
             let realFolder = real.find(path: folder) ?? real.find(visible: folder)
             guard let into = realFolder.flatMap({ copied[$0] }) else { continue }
-            let id = builder.add(parent: into, name: note.name, flags: 0, bytes: note.size, kind: .other, modTime: UInt32(clamping: Int(note.moved.timeIntervalSince1970)))
+            let id = builder.add(
+                parent: into, name: note.name, flags: 0, bytes: note.size, kind: .other,
+                modTime: UInt32(clamping: Int(note.moved.timeIntervalSince1970)))
             tree.ghosts[id] = note
             relOf[id] = rel
             ghostBytes &+= note.size
@@ -284,9 +300,12 @@ struct PairPicture {
                 continue
             }
             let name = (rel as NSString).lastPathComponent
-            let id = builder.add(parent: into, name: name, flags: 0, bytes: file.allocated,
-                                 kind: Array(name.utf8).withUnsafeBufferPointer { Kind(rawValue: ExtensionTable.shared.kind(name: $0.baseAddress!, length: $0.count)) ?? .other },
-                                 modTime: file.modified)
+            // A file's name is never empty.
+            // swift-format-ignore: NeverForceUnwrap
+            let kind = Array(name.utf8).withUnsafeBufferPointer {
+                Kind(rawValue: ExtensionTable.shared.kind(name: $0.baseAddress!, length: $0.count)) ?? .other
+            }
+            let id = builder.add(parent: into, name: name, flags: 0, bytes: file.allocated, kind: kind, modTime: file.modified)
             driveFiles[rel] = (id, file.size)
             relOf[id] = rel
         }
@@ -382,13 +401,14 @@ struct PairPicture {
         let withoutName = RingLayout.pathKey(MapTree(tree), mac)
         tree.standIn = (mac, RingLayout.pathKey(MapTree(real), standsFor) ^ withoutName)
         let macTotal = tree.totals[Int(mac)]
-        return PairPicture(tree: tree, macSide: mac, driveSide: drive, macPath: macPath, drivePath: drivePath, driveName: driveName,
-                           places: places, backedUp: backedUp, counts: counts, macBytes: macTotal &- min(ghostBytes, macTotal), driveBytes: tree.totals[Int(drive)],
-                           driveRel: driveFiles.reduce(into: [:]) { $0[$1.value.node] = $1.key }, driveNodes: driveFiles.mapValues(\.node),
-                           driveSizes: driveFiles.reduce(into: [:]) { $0[$1.value.node] = $1.value.size },
-                           macRel: macFiles.reduce(into: [:]) { $0[$1.value.node] = $1.key }, online: online, readAt: readAt,
-                           realFolder: macFolder, realOf: realOfNode, relOf: relOf, macByRel: macByRel,
-                           driveByRel: driveFolders.merging(driveFiles.mapValues(\.node)) { a, _ in a })
+        return PairPicture(
+            tree: tree, macSide: mac, driveSide: drive, macPath: macPath, drivePath: drivePath, driveName: driveName,
+            places: places, backedUp: backedUp, counts: counts, macBytes: macTotal &- min(ghostBytes, macTotal), driveBytes: tree.totals[Int(drive)],
+            driveRel: driveFiles.reduce(into: [:]) { $0[$1.value.node] = $1.key }, driveNodes: driveFiles.mapValues(\.node),
+            driveSizes: driveFiles.reduce(into: [:]) { $0[$1.value.node] = $1.value.size },
+            macRel: macFiles.reduce(into: [:]) { $0[$1.value.node] = $1.key }, online: online, readAt: readAt,
+            realFolder: macFolder, realOf: realOfNode, relOf: relOf, macByRel: macByRel,
+            driveByRel: driveFolders.merging(driveFiles.mapValues(\.node)) { a, _ in a })
     }
 
     /// Writes nodes and their names into a new map, as a scan would.
@@ -397,8 +417,10 @@ struct PairPicture {
         private var nameCursor: UInt32 = 0
         private(set) var count = 0
 
-        func add(parent: UInt32, name: String, flags: UInt16, bytes: UInt64 = 0, alias: UInt64 = 0, kind: Kind = .other, modTime: UInt32 = 0,
-                 files: UInt32 = 0, isRoot: Bool = false) -> UInt32 {
+        func add(
+            parent: UInt32, name: String, flags: UInt16, bytes: UInt64 = 0, alias: UInt64 = 0, kind: Kind = .other, modTime: UInt32 = 0,
+            files: UInt32 = 0, isRoot: Bool = false
+        ) -> UInt32 {
             let id = UInt32(count)
             var node = Node()
             node.parent = parent
@@ -411,7 +433,9 @@ struct PairPicture {
             let utf8 = Array(name.utf8.prefix(Int(UInt16.max)))
             node.nameOffset = nameCursor
             node.nameLength = UInt16(utf8.count)
-            utf8.withUnsafeBufferPointer { (tree.names + Int(nameCursor)).update(from: $0.baseAddress!, count: utf8.count) }
+            // Only when there are bytes, which have an address.
+            // swift-format-ignore: NeverForceUnwrap
+            if !utf8.isEmpty { utf8.withUnsafeBufferPointer { (tree.names + Int(nameCursor)).update(from: $0.baseAddress!, count: utf8.count) } }
             nameCursor += UInt32(utf8.count)
             if !isRoot {
                 node.nextSibling = tree.nodes[Int(parent)].firstChild

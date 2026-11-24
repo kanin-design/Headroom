@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Headroom
 
 /// The map on screen is never changed where it is, because other threads read it. A change is made to a copy.
@@ -16,8 +17,11 @@ final class MapCopyTests: XCTestCase {
     private func numbers(_ tree: DiskTree) -> [[UInt64]] {
         (0..<tree.count).map { i in
             let id = UInt32(i)
-            return [tree.totals[i], UInt64(tree.totalFiles[i]), UInt64(tree.nodes[i].flags), UInt64(tree.nodes[i].firstChild), UInt64(tree.nodes[i].nextSibling),
-                    tree.aliasTotals[i], UInt64(tree.dfsIn[i]), UInt64(tree.dfsSize[i])] + tree.kindBytes(id)
+            return [
+                tree.totals[i], UInt64(tree.totalFiles[i]), UInt64(tree.nodes[i].flags), UInt64(tree.nodes[i].firstChild),
+                UInt64(tree.nodes[i].nextSibling),
+                tree.aliasTotals[i], UInt64(tree.dfsIn[i]), UInt64(tree.dfsSize[i]),
+            ] + tree.kindBytes(id)
         }
     }
 

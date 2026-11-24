@@ -1,5 +1,4 @@
 import AppKit
-import SwiftUI
 
 /// The keyboard in Free Up.
 extension AppModel {
@@ -24,7 +23,9 @@ extension AppModel {
             moveCursor(1)
             keep(row)
         case 46:
-            guard let box = cursorBox, box.rows.count == 1, let row = box.rows.first, let tree, let node = row.nodes.first, let path = tree.path(node), let disk = otherDisks(for: path).first else { return false }
+            guard let box = cursorBox, box.rows.count == 1, let row = box.rows.first, let tree, let node = row.nodes.first,
+                let path = tree.path(node), let disk = otherDisks(for: path).first
+            else { return false }
             planMove(row, to: disk)
         default:
             return false
@@ -41,7 +42,7 @@ extension AppModel {
         }
     }
 
-    var cursorBox: Box? { boxes.first { $0.id == cursorRow } }
+    private var cursorBox: Box? { boxes.first { $0.id == cursorRow } }
 
     private func moveCursor(_ by: Int) {
         guard !boxes.isEmpty else { return }

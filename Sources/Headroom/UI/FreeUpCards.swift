@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 
 /// The card at the top of Free Up's list, and Copies': what's selected while nothing runs, how a clean is going while it does,
@@ -8,7 +7,7 @@ struct FreeUpTopCard: View {
     /// Copies lists its own sets, so the selection's summary is Free Up's alone.
     var showsSelection = true
     /// The room under it, when there is a card.
-    var gap: CGFloat = 8
+    private let gap = Kit.Space.regular
 
     var body: some View {
         if let progress = model.cleanProgress {
@@ -42,7 +41,9 @@ private struct CleaningCard: View {
                 CardRing(fraction: 0, accent: Kit.green, spins: true) { EmptyView() }
             }
         } lines: {
-            CardLine(text: progress.total > 0 ? "\(progress.done) of \(progress.total)" + (progress.title == title ? "" : " · \(progress.title)") : progress.title)
+            CardLine(
+                text: progress.total > 0
+                    ? "\(progress.done) of \(progress.total)" + (progress.title == title ? "" : " · \(progress.title)") : progress.title)
         } content: {
             if progress.bytesTotal > 0 {
                 ThinBar(fraction: Double(progress.bytesDone) / Double(progress.bytesTotal), tint: Kit.green)
@@ -63,8 +64,11 @@ private struct AfterCleanCard: View {
             RingCard(title: "\(formatBytes(after.bytes)) in the Trash") {
                 CardRing(ended: after.failed > 0 ? Kit.amber : Kit.green, symbol: after.failed > 0 ? "exclamationmark" : "checkmark")
             } lines: {
-                CardNote(text: after.includesOldTrash && after.oldTrashBytes > 0 ? "Includes \(formatBytes(after.oldTrashBytes)) that was already in the Trash"
-                         : "Not freed until the Trash is emptied") {
+                CardNote(
+                    text: after.includesOldTrash && after.oldTrashBytes > 0
+                        ? "Includes \(formatBytes(after.oldTrashBytes)) that was already in the Trash"
+                        : "Not freed until the Trash is emptied"
+                ) {
                     Button("Open Trash") { model.openTrash() }
                         .buttonStyle(.textLink)
                 }
@@ -82,14 +86,19 @@ private struct AfterCleanCard: View {
                 CardRing(ended: after.notDeleted > 0 ? Kit.amber : Kit.green, symbol: after.notDeleted > 0 ? "exclamationmark" : "checkmark")
             } lines: {
                 if after.notDeleted > 0 {
-                    CardNote(text: "\(after.notDeleted) left in the Trash. Only Finder can delete \(after.notDeleted == 1 ? "it" : "them").", colour: Kit.amber) {
+                    CardNote(
+                        text: "\(after.notDeleted) left in the Trash. Only Finder can delete \(after.notDeleted == 1 ? "it" : "them").",
+                        colour: Kit.amber
+                    ) {
                         Button("Open Trash") { model.openTrash() }
                             .buttonStyle(.textLink)
                     }
                 }
                 if Double(got) < Double(after.bytes) * 0.93 {
-                    CardLine(text: "\(formatBytes(after.bytes &- min(after.bytes, got))) still held by a snapshot or another link. Snapshots expire on their own.",
-                             wraps: true)
+                    CardLine(
+                        text:
+                            "\(formatBytes(after.bytes &- min(after.bytes, got))) still held by a snapshot or another link. Snapshots expire on their own.",
+                        wraps: true)
                 }
             }
         }
@@ -107,23 +116,20 @@ private struct FreeUpSelectionCard: View {
         let frees = model.planNumbers.total
         let bytes = max(items.reduce(UInt64(0)) { $0 &+ $1.lastKnownBytes }, frees)
         let share = bytes == 0 ? 1 : min(Double(frees) / Double(bytes), 1)
-        let agents = items.compactMap(\.agent)
         let short = model.boxes.filter { model.shortfall(of: $0) != nil }
-        let where_ = model.volume.map { $0.isBoot ? "this Mac" : $0.shownName } ?? "this Mac"
+        let diskName = model.volume.map { $0.isBoot ? "this Mac" : $0.shownName } ?? "this Mac"
         RingCard(title: "\(formatBytes(bytes)) selected") {
             CardRing(fraction: share, upTo: 1, accent: Kit.green, text: "\(items.count)")
-                .help(items.count == 1 ? "1 item" : "\(items.count) items")
+                .help(counted(items.count, "item"))
         } lines: {
-            CardLine(text: frees == 0 ? "Frees nothing on \(where_)" : "Frees \(formatBytes(frees)) on \(where_)")
-            if let agent = agents.first {
-                let count = agents.filter { $0 == agent }.count
-                AgentChip(name: count == items.count ? agent : "\(count) by \(agent)")
-            }
+            CardLine(text: freesText(frees, on: diskName))
+            if let chip = AgentChip(agents: items.compactMap(\.agent), of: items.count) { chip }
         } content: {
             if let free = model.shownFree, model.shownCapacity > 0 {
-                RoomBar(icon: model.volume?.isBoot == false ? "externaldrive.fill" : "internaldrive.fill", place: model.volume?.shownName ?? "Disk",
-                        capacity: model.shownCapacity, free: free, adds: frees, frees: true,
-                        trailing: "\(formatBytes(free &+ frees)) free after", accent: Kit.green)
+                RoomBar(
+                    icon: model.volume?.isBoot == false ? "externaldrive.fill" : "internaldrive.fill", place: model.volume?.shownName ?? "Disk",
+                    capacity: model.shownCapacity, free: free, adds: frees, frees: true,
+                    trailing: "\(formatBytes(free &+ frees)) free after", accent: Kit.green)
             }
             if !short.isEmpty {
                 CardNote(text: "Other copies remain", colour: Kit.amber, symbol: "exclamationmark.triangle.fill") {

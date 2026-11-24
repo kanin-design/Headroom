@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Headroom
 
 /// What the 2026-11-11 review found and fixed, pinned so it stays fixed.
@@ -49,17 +50,21 @@ final class ReviewFixTests: XCTestCase {
         let tree = d.tree
         func row(_ path: String) -> WinRow {
             let node = d.node(path)
-            return WinRow(id: path, title: path, subtitle: "", detail: "", tier: .redownload, nodes: [node], bytes: tree.totals[Int(node)],
-                          paperBytes: tree.totals[Int(node)], action: .trash, command: nil, bundleID: nil)
+            return WinRow(
+                id: path, title: path, subtitle: "", detail: "", tier: .redownload, nodes: [node], bytes: tree.totals[Int(node)],
+                paperBytes: tree.totals[Int(node)], action: .trash, command: nil, bundleID: nil)
         }
-        let models = [d.node("/Volumes/Fake/cache/hub/models--a"), a, d.node("/Volumes/Fake/cache/hub/models--b"), d.node("/Volumes/Fake/other/models--z")]
+        let models = [
+            d.node("/Volumes/Fake/cache/hub/models--a"), a, d.node("/Volumes/Fake/cache/hub/models--b"), d.node("/Volumes/Fake/other/models--z"),
+        ]
 
         var rows = [row("/Volumes/Fake/cache"), row("/Volumes/Fake/other"), row("/Volumes/Fake/cache/hub/models--a")]
         Advisors.leaveOut(models, from: &rows, tree: tree)
         let cache = try XCTUnwrap(rows.first { $0.id == "/Volumes/Fake/cache" }, "it holds 4 GB that no model row covers")
         XCTAssertEqual(Set(cache.nodes), [d.node("/Volumes/Fake/cache/hub/datasets--c"), d.node("/Volumes/Fake/cache/xet")])
         XCTAssertEqual(cache.bytes, 4_000_000_000)
-        XCTAssertFalse(cache.nodes.contains { node in models.contains { tree.isInside($0, node) || tree.isInside(node, $0) } }, "no model is in two rows")
+        XCTAssertFalse(
+            cache.nodes.contains { node in models.contains { tree.isInside($0, node) || tree.isInside(node, $0) } }, "no model is in two rows")
         XCTAssertNil(rows.first { $0.id == "/Volumes/Fake/other" }, "nothing but a model in it: the model's row is all there is to say")
         XCTAssertNotNil(rows.first { $0.id == "/Volumes/Fake/cache/hub/models--a" }, "a row that is a listed thing is someone else's to settle")
     }
@@ -83,7 +88,8 @@ final class ReviewFixTests: XCTestCase {
         try FileManager.default.createDirectory(atPath: library, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(atPath: home) }
         func manifest(_ id: Int, _ dir: String) throws {
-            let text = "\"AppState\"\n{\n\t\"appid\"\t\t\"\(id)\"\n\t\"name\"\t\t\"Game \(id)\"\n\t\"installdir\"\t\t\"\(dir)\"\n\t\"LastPlayed\"\t\t\"1700000000\"\n}\n"
+            let text =
+                "\"AppState\"\n{\n\t\"appid\"\t\t\"\(id)\"\n\t\"name\"\t\t\"Game \(id)\"\n\t\"installdir\"\t\t\"\(dir)\"\n\t\"LastPlayed\"\t\t\"1700000000\"\n}\n"
             try text.write(toFile: library + "/appmanifest_\(id).acf", atomically: true, encoding: .utf8)
         }
         try manifest(1, "Good Game")

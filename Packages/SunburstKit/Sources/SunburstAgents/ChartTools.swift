@@ -28,38 +28,63 @@ public enum SunburstAgentTools {
 
     /// The chart's tools, to add to an `AgentHost`'s.
     public static let tools: [AgentTool] = [
-        AgentTool(name: "chart_summary",
-                  description: "What the chart shows now: the node in the middle, and the biggest pieces on the ring, biggest first, each with its node number, name, size, share of the middle, ring (0 is the innermost), the node it is inside, and where it is in degrees clockwise from 12 o'clock. Pieces that gather what is too small to draw alone are marked. The other chart tools take these node numbers.",
-                  properties: ["limit": ["type": "integer", "minimum": 1, "maximum": most, "description": "How many pieces to list. 60 unless given."]]),
-        AgentTool(name: "chart_find",
-                  description: "Find nodes by name anywhere in the tree, not only on the ring, without moving the chart. Biggest first, each with its node number, name, size, path (the names from the top down to it), whether anything is inside it, and whether it has a piece on the ring now. Case and accents are ignored.",
-                  properties: ["name": ["type": "string", "minLength": 1, "description": "Part of the name to look for."],
-                               "limit": ["type": "integer", "minimum": 1, "maximum": most, "description": "How many to list. 20 unless given."]],
-                  required: ["name"]),
-        AgentTool(name: "chart_children",
-                  description: "What is inside a node, biggest first, without moving the chart: each one's node number, name, size, share of the node, whether anything is inside it, and whether it has a piece on the ring now. The node in the middle unless given.",
-                  properties: ["node": ["type": "integer", "minimum": 0, "description": "A node number from chart_summary, chart_find or chart_children."],
-                               "limit": ["type": "integer", "minimum": 1, "maximum": most, "description": "How many to list. 60 unless given."]]),
-        AgentTool(name: "chart_picture",
-                  description: "A picture of the chart as it is now, as a PNG: the ring, without names. chart_summary says what each piece is.",
-                  properties: ["width": ["type": "integer", "minimum": 64, "maximum": largestPicture, "description": "Pixels across. 800 unless given."],
-                               "height": ["type": "integer", "minimum": 64, "maximum": largestPicture, "description": "Pixels down. 800 unless given."]]),
-        AgentTool(name: "chart_zoom_in",
-                  description: "Zoom the chart into a node, so it fills the ring with what is inside it around it. Any node with something inside it, on the ring or not.",
-                  properties: ["node": ["type": "integer", "minimum": 0, "description": "A node number from chart_summary, chart_find or chart_children."]],
-                  required: ["node"], selects: true),
-        AgentTool(name: "chart_zoom_out",
-                  description: "Zoom the chart out one level, or all the way back to the whole tree.",
-                  properties: ["to_root": ["type": "boolean", "description": "All the way out. One level unless true."]],
-                  selects: true),
-        AgentTool(name: "chart_highlight",
-                  description: "Light nodes on the chart, and the way out to them, so the user sees them; everything else steps back. In place of what was lit before. A node too small for a piece of its own lights the piece that holds it. A node outside the one in the middle can't be lit until the chart is zoomed out to it. Zooming turns it off.",
-                  properties: ["nodes": ["type": "array", "items": ["type": "integer", "minimum": 0], "minItems": 1, "maxItems": most,
-                                         "description": "Node numbers from chart_summary, chart_find or chart_children."]],
-                  required: ["nodes"], selects: true),
-        AgentTool(name: "chart_clear_highlight",
-                  description: "Turn off what chart_highlight lit.",
-                  selects: true),
+        AgentTool(
+            name: "chart_summary",
+            description:
+                "What the chart shows now: the node in the middle, and the biggest pieces on the ring, biggest first, each with its node number, name, size, share of the middle, ring (0 is the innermost), the node it is inside, and where it is in degrees clockwise from 12 o'clock. Pieces that gather what is too small to draw alone are marked. The other chart tools take these node numbers.",
+            properties: ["limit": ["type": "integer", "minimum": 1, "maximum": most, "description": "How many pieces to list. 60 unless given."]]),
+        AgentTool(
+            name: "chart_find",
+            description:
+                "Find nodes by name anywhere in the tree, not only on the ring, without moving the chart. Biggest first, each with its node number, name, size, path (the names from the top down to it), whether anything is inside it, and whether it has a piece on the ring now. Case and accents are ignored.",
+            properties: [
+                "name": ["type": "string", "minLength": 1, "description": "Part of the name to look for."],
+                "limit": ["type": "integer", "minimum": 1, "maximum": most, "description": "How many to list. 20 unless given."],
+            ],
+            required: ["name"]),
+        AgentTool(
+            name: "chart_children",
+            description:
+                "What is inside a node, biggest first, without moving the chart: each one's node number, name, size, share of the node, whether anything is inside it, and whether it has a piece on the ring now. The node in the middle unless given.",
+            properties: [
+                "node": ["type": "integer", "minimum": 0, "description": "A node number from chart_summary, chart_find or chart_children."],
+                "limit": ["type": "integer", "minimum": 1, "maximum": most, "description": "How many to list. 60 unless given."],
+            ]),
+        AgentTool(
+            name: "chart_picture",
+            description: "A picture of the chart as it is now, as a PNG: the ring, without names. chart_summary says what each piece is.",
+            properties: [
+                "width": ["type": "integer", "minimum": 64, "maximum": largestPicture, "description": "Pixels across. 800 unless given."],
+                "height": ["type": "integer", "minimum": 64, "maximum": largestPicture, "description": "Pixels down. 800 unless given."],
+            ]),
+        AgentTool(
+            name: "chart_zoom_in",
+            description:
+                "Zoom the chart into a node, so it fills the ring with what is inside it around it. Any node with something inside it, on the ring or not.",
+            properties: [
+                "node": ["type": "integer", "minimum": 0, "description": "A node number from chart_summary, chart_find or chart_children."]
+            ],
+            required: ["node"], selects: true),
+        AgentTool(
+            name: "chart_zoom_out",
+            description: "Zoom the chart out one level, or all the way back to the whole tree.",
+            properties: ["to_root": ["type": "boolean", "description": "All the way out. One level unless true."]],
+            selects: true),
+        AgentTool(
+            name: "chart_highlight",
+            description:
+                "Light nodes on the chart, and the way out to them, so the user sees them; everything else steps back. In place of what was lit before. A node too small for a piece of its own lights the piece that holds it. A node outside the one in the middle can't be lit until the chart is zoomed out to it. Zooming turns it off.",
+            properties: [
+                "nodes": [
+                    "type": "array", "items": ["type": "integer", "minimum": 0], "minItems": 1, "maxItems": most,
+                    "description": "Node numbers from chart_summary, chart_find or chart_children.",
+                ]
+            ],
+            required: ["nodes"], selects: true),
+        AgentTool(
+            name: "chart_clear_highlight",
+            description: "Turn off what chart_highlight lit.",
+            selects: true),
     ]
 
     /// The answer to a call to one of `tools`. A call to any other tool is an `AgentFailure`.
@@ -75,11 +100,13 @@ public enum SunburstAgentTools {
             }
             let limit = min(max(integer(call.arguments["limit"]) ?? 20, 1), most)
             let (found, all) = find(text, in: chart, limit: limit)
-            var out: [String: Any] = ["matches": found.map { node in
-                var entry = describe(node, in: chart)
-                entry["path"] = path(to: node, in: chart)
-                return entry
-            }, "more": all - found.count]
+            var out: [String: Any] = [
+                "matches": found.map { node in
+                    var entry = describe(node, in: chart)
+                    entry["path"] = path(to: node, in: chart)
+                    return entry
+                }, "more": all - found.count,
+            ]
             if all == 0 { out["note"] = "No name has \"\(text)\" in it." }
             return .json(out)
         case "chart_children":
@@ -208,7 +235,10 @@ public enum SunburstAgentTools {
 
     @MainActor
     private static func middle<Tree: SunburstTree>(of chart: SunburstChart<Tree>) -> [String: Any] {
-        ["focus": chart.focus, "name": chart.name(chart.focus), "size": chart.tree.size(of: chart.focus), "size_text": text(of: chart.focus, in: chart)]
+        [
+            "focus": chart.focus, "name": chart.name(chart.focus), "size": chart.tree.size(of: chart.focus),
+            "size_text": text(of: chart.focus, in: chart),
+        ]
     }
 
     /// What the chart writes for a node: its value text, or its size.
@@ -220,8 +250,10 @@ public enum SunburstAgentTools {
     /// A node the tree has, as `chart_find` and `chart_children` list it.
     @MainActor
     private static func describe<Tree: SunburstTree>(_ node: UInt32, in chart: SunburstChart<Tree>) -> [String: Any] {
-        ["node": node, "name": chart.name(node), "size": chart.tree.size(of: node), "size_text": text(of: node, in: chart),
-         "has_inside": chart.tree.firstChild(of: node) != 0, "on_the_ring": chart.engine.layout.piece(of: node) != nil]
+        [
+            "node": node, "name": chart.name(node), "size": chart.tree.size(of: node), "size_text": text(of: node, in: chart),
+            "has_inside": chart.tree.firstChild(of: node) != 0, "on_the_ring": chart.engine.layout.piece(of: node) != nil,
+        ]
     }
 
     /// The names from the top of the tree down to a node, its own last.

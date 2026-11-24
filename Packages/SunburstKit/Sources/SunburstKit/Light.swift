@@ -186,8 +186,10 @@ extension RingLayout {
 
     /// What lights for nodes pointed at from outside the ring, such as a row in a list: each with everything inside it, and
     /// the way out to each. `primary`, one of them, stands out most.
-    public func emphasis<T: SunburstTree>(lighting nodes: [UInt32], primary: UInt32? = nil, in tree: T, gathered: GatheredLight = .shown,
-                                          tint: SIMD3<Float>? = nil) -> RingEmphasis {
+    public func emphasis<T: SunburstTree>(
+        lighting nodes: [UInt32], primary: UInt32? = nil, in tree: T, gathered: GatheredLight = .shown,
+        tint: SIMD3<Float>? = nil
+    ) -> RingEmphasis {
         // The primary's own piece: the first it lights, as it's lit among the others.
         let own = primary.flatMap { light([$0], in: tree, gathered: gathered).full.first?.lowerBound }
         return RingEmphasis(primary: own, light: light(nodes, in: tree, gathered: gathered), tint: tint)

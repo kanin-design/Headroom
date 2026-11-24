@@ -1,6 +1,5 @@
 import Foundation
 import SwiftUI
-import simd
 
 enum Palette {
     /// What has to be noticed before going on: a warning's text and tint.
@@ -13,18 +12,18 @@ enum Palette {
     static let window = Color(red: 0.03, green: 0.03, blue: 0.042)
 
     /// One colour per Kind. Hues are spread so that neighbours stay apart, and what you can remove runs hot.
-    static let kinds: [Lab] = [
-        Lab(lch: 0.45, 0.028, 285),     // other: muted lilac grey
-        Lab(lch: 0.58, 0.205, 298),     // video: violet
-        Lab(lch: 0.66, 0.195, 352),     // audio: rose
-        Lab(lch: 0.79, 0.150, 72),      // images: amber
-        Lab(lch: 0.85, 0.105, 100),     // documents: pale gold
-        Lab(lch: 0.75, 0.120, 208),     // code: cyan
-        Lab(lch: 0.58, 0.170, 258),     // apps: blue
-        Lab(lch: 0.65, 0.105, 50),      // archives: copper
-        Lab(lch: 0.80, 0.180, 158),     // AI models: jade
-        Lab(lch: 0.66, 0.190, 30),      // caches and builds: coral
-        Lab(lch: 0.38, 0.014, 255),     // system: slate
+    private static let kinds: [Lab] = [
+        Lab(lch: 0.45, 0.028, 285),  // other: muted lilac grey
+        Lab(lch: 0.58, 0.205, 298),  // video: violet
+        Lab(lch: 0.66, 0.195, 352),  // audio: rose
+        Lab(lch: 0.79, 0.150, 72),  // images: amber
+        Lab(lch: 0.85, 0.105, 100),  // documents: pale gold
+        Lab(lch: 0.75, 0.120, 208),  // code: cyan
+        Lab(lch: 0.58, 0.170, 258),  // apps: blue
+        Lab(lch: 0.65, 0.105, 50),  // archives: copper
+        Lab(lch: 0.80, 0.180, 158),  // AI models: jade
+        Lab(lch: 0.66, 0.190, 30),  // caches and builds: coral
+        Lab(lch: 0.38, 0.014, 255),  // system: slate
     ]
 
     static func color(_ kind: Kind) -> Lab { kinds[Int(kind.rawValue)] }
@@ -101,18 +100,10 @@ enum Palette {
         /// What you picked yourself on the ring.
         static let hand = Lab(lch: 0.95, 0, 0)
         /// A folder that's all one kind of thing has a colour for each thing, from all around the wheel.
-        static let spread: [Lab] = [apps, quick, series, android, models, watched, leftovers, games, used, films, repos, Lab(lch: 0.78, 0.13, 180), installers, Lab(lch: 0.76, 0.09, 250), Lab(lch: 0.86, 0.11, 150), Lab(lch: 0.8, 0.12, 70)]
-    }
-
-    /// What can go, in Free Up. The surer it is, the greener and brighter.
-    static func reclaim(_ tier: Tier) -> Lab {
-        switch tier {
-        case .noLoss: Lab(lch: 0.90, 0.205, 155)
-        case .rebuilds: Lab(lch: 0.80, 0.225, 150)
-        case .redownload: Lab(lch: 0.76, 0.145, 200)
-        case .yourCall: Lab(lch: 0.78, 0.150, 75)
-        default: quiet
-        }
+        static let spread: [Lab] = [
+            apps, quick, series, android, models, watched, leftovers, games, used, films, repos, Lab(lch: 0.78, 0.13, 180), installers,
+            Lab(lch: 0.76, 0.09, 250), Lab(lch: 0.86, 0.11, 150), Lab(lch: 0.8, 0.12, 70),
+        ]
     }
 }
 
@@ -121,6 +112,16 @@ enum Palette {
 func splitBytes(_ bytes: UInt64) -> (value: String, unit: String) { SunburstFormat.splitBytes(bytes) }
 
 func formatBytes(_ bytes: UInt64) -> String { SunburstFormat.bytes(bytes) }
+
+/// A count with its noun: "1 file", "3 files". `many` for a noun that isn't made plural with an s.
+func counted(_ n: Int, _ one: String, _ many: String? = nil) -> String {
+    n == 1 ? "1 \(one)" : "\(n) \(many ?? one + "s")"
+}
+
+/// What something gives back: "Frees 3.20 GB", "Frees nothing", and where, when that's to be said: "on this Mac".
+func freesText(_ bytes: UInt64, on place: String? = nil) -> String {
+    (bytes == 0 ? "Frees nothing" : "Frees \(formatBytes(bytes))") + (place.map { " on \($0)" } ?? "")
+}
 
 func formatCount(_ n: Int) -> String {
     if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1_000_000) }

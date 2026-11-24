@@ -18,7 +18,7 @@ public protocol SunburstNamer {
     var valuesAreSizes: Bool { get }
 }
 
-public extension SunburstNamer {
-    var leavesOutRepeats: Bool { true }
-    var valuesAreSizes: Bool { true }
+extension SunburstNamer {
+    public var leavesOutRepeats: Bool { true }
+    public var valuesAreSizes: Bool { true }
 }

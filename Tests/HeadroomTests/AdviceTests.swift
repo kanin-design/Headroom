@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Headroom
 
 final class AccountingTests: XCTestCase {
@@ -16,7 +17,8 @@ final class AccountingTests: XCTestCase {
         let disk = FakeDisk()
         disk.linked("/Volumes/Fake/Media/TV/Show/ep1.mkv", "/Volumes/Fake/Downloads/Show.S01/ep1.mkv", 5_000_000_000)
         disk.finish()
-        let effect = Accounting.effect(of: [disk.node("/Volumes/Fake/Media/TV/Show"), disk.node("/Volumes/Fake/Downloads/Show.S01")], except: [], in: disk.tree)
+        let effect = Accounting.effect(
+            of: [disk.node("/Volumes/Fake/Media/TV/Show"), disk.node("/Volumes/Fake/Downloads/Show.S01")], except: [], in: disk.tree)
         XCTAssertEqual(effect.total, 5_000_000_000)
     }
 
@@ -100,7 +102,8 @@ final class AccountingTests: XCTestCase {
         let disk = FakeDisk()
         disk.linked("/Volumes/Fake/Movies/Film.mkv", "/Volumes/Fake/Pile/Film.mkv", 5_000_000_000)
         disk.finish()
-        let effect = Accounting.effect(of: [disk.node("/Volumes/Fake/Movies/Film.mkv"), disk.node("/Volumes/Fake/Pile/Film.mkv")], except: [], in: disk.tree)
+        let effect = Accounting.effect(
+            of: [disk.node("/Volumes/Fake/Movies/Film.mkv"), disk.node("/Volumes/Fake/Pile/Film.mkv")], except: [], in: disk.tree)
         XCTAssertEqual(effect.total, 5_000_000_000)
     }
 
@@ -154,7 +157,9 @@ final class MediaAdviceTests: XCTestCase {
     private func library() -> FakeDisk {
         let disk = FakeDisk()
         for e in 1...6 {
-            disk.linked("/Volumes/Fake/Media/TV/Big Show/Season 01/Big Show - S01E0\(e).mkv", "/Volumes/Fake/Downloads/Torrents/Big.Show.S01/Big.Show.S01E0\(e).mkv", 9_000_000_000)
+            disk.linked(
+                "/Volumes/Fake/Media/TV/Big Show/Season 01/Big Show - S01E0\(e).mkv",
+                "/Volumes/Fake/Downloads/Torrents/Big.Show.S01/Big.Show.S01E0\(e).mkv", 9_000_000_000)
         }
         for s in ["Small One", "Small Two", "Small Three"] {
             for e in 1...4 { disk.file("/Volumes/Fake/Media/TV/\(s)/Season 01/\(s) - S01E0\(e).mkv", 1_800_000_000, kind: .video) }
@@ -241,7 +246,9 @@ final class MediaAdviceTests: XCTestCase {
     func testAFreshTorrentIsCalledOut() throws {
         let disk = library()
         var facts = Facts()
-        facts.torrents = [Facts.Torrent(path: "/Volumes/Fake/Downloads/Torrents/Big.Show.S01", name: "Big.Show.S01", finished: now.addingTimeInterval(-86_400 * 2))]
+        facts.torrents = [
+            Facts.Torrent(path: "/Volumes/Fake/Downloads/Torrents/Big.Show.S01", name: "Big.Show.S01", finished: now.addingTimeInterval(-86_400 * 2))
+        ]
         let big = try XCTUnwrap(Advisors.media(tree: disk.tree, facts: facts, now: now).first { $0.title == "Big Show" })
         XCTAssertEqual(big.otherCopiesTitle, "Include the torrent copy")
         XCTAssertTrue(big.otherCopiesNote?.contains("may still be seeding") == true, big.otherCopiesNote ?? "")
@@ -251,7 +258,9 @@ final class MediaAdviceTests: XCTestCase {
     func testAnOldTorrentJustSaysWhatHappens() throws {
         let disk = library()
         var facts = Facts()
-        facts.torrents = [Facts.Torrent(path: "/Volumes/Fake/Downloads/Torrents/Big.Show.S01", name: "Big.Show.S01", finished: now.addingTimeInterval(-86_400 * 30))]
+        facts.torrents = [
+            Facts.Torrent(path: "/Volumes/Fake/Downloads/Torrents/Big.Show.S01", name: "Big.Show.S01", finished: now.addingTimeInterval(-86_400 * 30))
+        ]
         let big = try XCTUnwrap(Advisors.media(tree: disk.tree, facts: facts, now: now).first { $0.title == "Big Show" })
         XCTAssertTrue(big.otherCopiesNote?.contains("stops seeding") == true, big.otherCopiesNote ?? "")
         XCTAssertNil(big.otherCopiesCaution)
@@ -298,8 +307,11 @@ final class AppAdviceTests: XCTestCase {
     private let day: TimeInterval = 86_400
 
     private func fact(newest: Date?, running: Bool = false, signs: Int = 3, maker: String? = nil) -> AppFact {
-        AppFact(path: "/Volumes/Fake/Applications/Thing.app", name: "Thing", bundleID: "com.maker.thing", fromAppStore: false, newestSign: newest, signCount: signs, isRunning: running, makerNote: maker,
-                settings: ["/Volumes/Fake/Library/Caches/com.maker.thing", "/Volumes/Fake/Library/Preferences/com.maker.thing.plist"], data: ["/Volumes/Fake/Library/Application Support/Thing"])
+        AppFact(
+            path: "/Volumes/Fake/Applications/Thing.app", name: "Thing", bundleID: "com.maker.thing", fromAppStore: false, newestSign: newest,
+            signCount: signs, isRunning: running, makerNote: maker,
+            settings: ["/Volumes/Fake/Library/Caches/com.maker.thing", "/Volumes/Fake/Library/Preferences/com.maker.thing.plist"],
+            data: ["/Volumes/Fake/Library/Application Support/Thing"])
     }
 
     private func disk() -> FakeDisk {
@@ -345,7 +357,9 @@ final class AppAdviceTests: XCTestCase {
 
     func testItSaysWhenItsMakerIsStillAround() throws {
         let d = disk()
-        let row = try XCTUnwrap(Advisors.appRow(fact(newest: now.addingTimeInterval(-300 * day), maker: "Helper, by the same developer, is running."), tree: d.tree, now: now))
+        let row = try XCTUnwrap(
+            Advisors.appRow(
+                fact(newest: now.addingTimeInterval(-300 * day), maker: "Helper, by the same developer, is running."), tree: d.tree, now: now))
         XCTAssertTrue(row.subtitle.contains("by the same developer"), row.subtitle)
     }
 
@@ -370,7 +384,8 @@ final class ProjectAdviceTests: XCTestCase {
 
     private func fact(clean: Bool = true, pushed: Bool = true, remote: String? = "git@github.com:someone/old.git", age: TimeInterval = 300) -> Facts {
         var facts = Facts()
-        facts.repos["/Volumes/Fake/dev/old"] = Facts.RepoFact(path: "/Volumes/Fake/dev/old", lastCommit: now.addingTimeInterval(-age * 86_400), remote: remote, isClean: clean, allPushed: pushed)
+        facts.repos["/Volumes/Fake/dev/old"] = Facts.RepoFact(
+            path: "/Volumes/Fake/dev/old", lastCommit: now.addingTimeInterval(-age * 86_400), remote: remote, isClean: clean, allPushed: pushed)
         return facts
     }
 
@@ -530,10 +545,12 @@ final class WinsTests: XCTestCase {
         mark(disk, "/Volumes/Fake/fine/node_modules", 200_000_000, rule: id)
         mark(disk, "/Volumes/Fake/lost/node_modules", 200_000_000, rule: id)
         disk.finish()
-        let rows = Wins.build(tree: disk.tree, rules: rules, recipeFound: { folder, recipe in
-            XCTAssertEqual(recipe, ["package.json"])
-            return folder.hasSuffix("/fine")
-        })
+        let rows = Wins.build(
+            tree: disk.tree, rules: rules,
+            recipeFound: { folder, recipe in
+                XCTAssertEqual(recipe, ["package.json"])
+                return folder.hasSuffix("/fine")
+            })
         let fine = try XCTUnwrap(rows.first { $0.id == "group:node_modules" })
         let lost = try XCTUnwrap(rows.first { $0.id == "group:node_modules:no-recipe" })
         XCTAssertTrue(fine.isQuick)
@@ -561,7 +578,11 @@ final class WinsTests: XCTestCase {
         let question = "test-" + UUID().uuidString
         let start = Date()
         var looks = 0
-        func ask(at now: Date, _ answer: Bool) -> Bool { JustLooked.answer(question, now: now) { looks += 1; return answer } }
+        func ask(at now: Date, _ answer: Bool) -> Bool {
+            JustLooked.answer(question, now: now) {
+                looks += 1; return answer
+            }
+        }
         XCTAssertFalse(ask(at: start, false))
         XCTAssertFalse(ask(at: start.addingTimeInterval(60), true), "still the answer from a minute ago")
         XCTAssertEqual(looks, 1)
@@ -684,16 +705,25 @@ final class LayoutTests: XCTestCase {
 final class SafetyTests: XCTestCase {
     func testWhatsNeverOffered() {
         let home = NSHomeDirectory()
-        for path in ["/", home, "/Applications", "/System/Library/CoreServices", home + "/Library", home + "/.ssh/id_rsa", home + "/Library/Keychains/login.keychain-db", home + "/Library/Mail/x", "/usr/local/bin/x", home + "/.Trash", home + "/Downloads", home + "/Documents",
-                     home + "/Library/Mail", home + "/Library/Messages", home + "/.gnupg", home + "/Library/Mobile Documents", home + "/Library/CloudStorage", home + "/Music/Music",
-                     home + "/Pictures/Photos Library.photoslibrary", home + "/Pictures/Photos Library.photoslibrary/originals/a.jpg", "/Applications/Thing.app/Contents/Resources/x", "/Volumes/Spare/Thing.app/Contents"] {
+        for path in [
+            "/", home, "/Applications", "/System/Library/CoreServices", home + "/Library", home + "/.ssh/id_rsa",
+            home + "/Library/Keychains/login.keychain-db", home + "/Library/Mail/x", "/usr/local/bin/x", home + "/.Trash", home + "/Downloads",
+            home + "/Documents",
+            home + "/Library/Mail", home + "/Library/Messages", home + "/.gnupg", home + "/Library/Mobile Documents", home + "/Library/CloudStorage",
+            home + "/Music/Music",
+            home + "/Pictures/Photos Library.photoslibrary", home + "/Pictures/Photos Library.photoslibrary/originals/a.jpg",
+            "/Applications/Thing.app/Contents/Resources/x", "/Volumes/Spare/Thing.app/Contents",
+        ] {
             XCTAssertFalse(Safety.canTrash(path), path)
         }
     }
 
     func testWhatCanGo() {
         let home = NSHomeDirectory()
-        for path in [home + "/Downloads/x.zip", home + "/Library/Caches/com.maker.app", "/Applications/Thing.app", "/Volumes/Spare/Media/x.mkv", "/System/Volumes/Data" + home + "/Movies/x.mov"] {
+        for path in [
+            home + "/Downloads/x.zip", home + "/Library/Caches/com.maker.app", "/Applications/Thing.app", "/Volumes/Spare/Media/x.mkv",
+            "/System/Volumes/Data" + home + "/Movies/x.mov",
+        ] {
             XCTAssertTrue(Safety.canTrash(path), path)
         }
     }
@@ -729,24 +759,30 @@ final class CleanerTests: XCTestCase {
         XCTAssertFalse(Cleaner.mayTouch(NSHomeDirectory() + "/Documents/anything"))
         XCTAssertThrowsError(try Cleaner.trash(NSHomeDirectory() + "/Documents/anything"))
         XCTAssertThrowsError(try Cleaner.putBack(CleanedThing(itemID: "a", title: "a", original: "/Users/x", inTrash: "/Users/x/.Trash/a", bytes: 0)))
-        XCTAssertThrowsError(try Cleaner.deleteForGood(CleanedThing(itemID: "a", title: "a", original: root + "/a", inTrash: NSHomeDirectory() + "/.Trash/a", bytes: 0)))
+        XCTAssertThrowsError(
+            try Cleaner.deleteForGood(
+                CleanedThing(itemID: "a", title: "a", original: root + "/a", inTrash: NSHomeDirectory() + "/.Trash/a", bytes: 0)))
     }
 
     func testOnlyWhatsInTheTrashCanBeDeletedForGood() throws {
         try write(root + "/plain/file")
-        XCTAssertThrowsError(try Cleaner.deleteForGood(CleanedThing(itemID: "a", title: "a", original: root + "/a", inTrash: root + "/plain/file", bytes: 0)))
+        XCTAssertThrowsError(
+            try Cleaner.deleteForGood(CleanedThing(itemID: "a", title: "a", original: root + "/a", inTrash: root + "/plain/file", bytes: 0)))
         XCTAssertTrue(FileManager.default.fileExists(atPath: root + "/plain/file"))
         try write(root + "/.Trash/gone")
-        try Cleaner.deleteForGood(CleanedThing(itemID: "a", title: "a", original: root + "/a", inTrash: root + "/.Trash/gone", bytes: 0,
-                                               identity: Cleaner.identity(of: root + "/.Trash/gone")))
+        try Cleaner.deleteForGood(
+            CleanedThing(
+                itemID: "a", title: "a", original: root + "/a", inTrash: root + "/.Trash/gone", bytes: 0,
+                identity: Cleaner.identity(of: root + "/.Trash/gone")))
         XCTAssertFalse(FileManager.default.fileExists(atPath: root + "/.Trash/gone"))
     }
 
     func testPuttingBackNeverReplacesAnything() throws {
         try write(root + "/.Trash/thing", "old")
         try write(root + "/thing", "new")
-        let thing = CleanedThing(itemID: "a", title: "a", original: root + "/thing", inTrash: root + "/.Trash/thing", bytes: 0,
-                                 identity: Cleaner.identity(of: root + "/.Trash/thing"))
+        let thing = CleanedThing(
+            itemID: "a", title: "a", original: root + "/thing", inTrash: root + "/.Trash/thing", bytes: 0,
+            identity: Cleaner.identity(of: root + "/.Trash/thing"))
         XCTAssertThrowsError(try Cleaner.putBack(thing))
         XCTAssertEqual(try String(contentsOfFile: root + "/thing", encoding: .utf8), "new")
         try FileManager.default.removeItem(atPath: root + "/thing")
@@ -756,8 +792,10 @@ final class CleanerTests: XCTestCase {
 
     func testPuttingBackRemakesAMissingFolder() throws {
         try write(root + "/.Trash/thing")
-        try Cleaner.putBack(CleanedThing(itemID: "a", title: "a", original: root + "/gone/deep/thing", inTrash: root + "/.Trash/thing", bytes: 0,
-                                         identity: Cleaner.identity(of: root + "/.Trash/thing")))
+        try Cleaner.putBack(
+            CleanedThing(
+                itemID: "a", title: "a", original: root + "/gone/deep/thing", inTrash: root + "/.Trash/thing", bytes: 0,
+                identity: Cleaner.identity(of: root + "/.Trash/thing")))
         XCTAssertTrue(FileManager.default.fileExists(atPath: root + "/gone/deep/thing"))
     }
 
@@ -849,7 +887,9 @@ final class CleanerTests: XCTestCase {
         let identity = Cleaner.identity(of: root + "/.Trash/thing")
         try FileManager.default.removeItem(atPath: root + "/.Trash/thing")
         try write(root + "/.Trash/thing", "something else entirely")
-        let thing = CleanedThing(itemID: "a", title: "a", original: root + "/back", inTrash: root + "/.Trash/thing", bytes: 0, identity: identity == Cleaner.identity(of: root + "/.Trash/thing") ? "0:0" : identity)
+        let thing = CleanedThing(
+            itemID: "a", title: "a", original: root + "/back", inTrash: root + "/.Trash/thing", bytes: 0,
+            identity: identity == Cleaner.identity(of: root + "/.Trash/thing") ? "0:0" : identity)
         XCTAssertEqual(try Cleaner.deleteForGood(thing), false)
         XCTAssertThrowsError(try Cleaner.putBack(thing))
         XCTAssertEqual(try String(contentsOfFile: root + "/.Trash/thing", encoding: .utf8), "something else entirely")
@@ -886,7 +926,8 @@ final class CleanerTests: XCTestCase {
 
     func testAMoveToWhereItAlreadyIsStops() throws {
         try write(root + "/here/thing")
-        let item = PlanItem(id: "a", title: "a", note: "", tierRaw: Tier.yourCall.rawValue, paths: [root + "/here/thing"], step: .move(folder: root + "/here"))
+        let item = PlanItem(
+            id: "a", title: "a", note: "", tierRaw: Tier.yourCall.rawValue, paths: [root + "/here/thing"], step: .move(folder: root + "/here"))
         let result = PlanChecks.run(items: [item], trueBytes: [:], otherCopy: [:], runningApps: [])
         XCTAssertEqual(result["a"]?.problems.contains(.alreadyThere), true)
     }
@@ -943,7 +984,8 @@ final class CleanerTests: XCTestCase {
     func testChecksFindAnOpenApp() throws {
         try write(root + "/Thing.app/Contents/x")
         let item = PlanItem(id: "a", title: "a", note: "", tierRaw: Tier.yourCall.rawValue, paths: [root + "/Thing.app"], bundleID: "com.maker.thing")
-        let result = PlanChecks.run(items: [item], trueBytes: [:], otherCopy: [:], runningApps: [PlanChecks.RunningApp(bundleID: "com.maker.thing", name: "Thing")])
+        let result = PlanChecks.run(
+            items: [item], trueBytes: [:], otherCopy: [:], runningApps: [PlanChecks.RunningApp(bundleID: "com.maker.thing", name: "Thing")])
         XCTAssertEqual(result["a"]?.canGo, false)
         XCTAssertEqual(result["a"]?.problems.contains(.appOpen(name: "Thing", bundleID: "com.maker.thing")), true)
     }
@@ -1019,7 +1061,9 @@ final class CleanerTests: XCTestCase {
 
     func testAMissingDiskKeepsItPlanned() throws {
         try write(root + "/thing")
-        let item = PlanItem(id: "a", title: "a", note: "", tierRaw: Tier.yourCall.rawValue, paths: [root + "/thing"], step: .move(folder: "/Volumes/NoSuchDiskHere/Media"))
+        let item = PlanItem(
+            id: "a", title: "a", note: "", tierRaw: Tier.yourCall.rawValue, paths: [root + "/thing"],
+            step: .move(folder: "/Volumes/NoSuchDiskHere/Media"))
         let result = PlanChecks.run(items: [item], trueBytes: [:], otherCopy: [:], runningApps: [])
         XCTAssertEqual(result["a"]?.problems.contains(.diskMissing("NoSuchDiskHere")), true)
         XCTAssertEqual(result["a"]?.canGo, false)
@@ -1028,7 +1072,8 @@ final class CleanerTests: XCTestCase {
     func testGettingNothingBackIsSaidOutLoud() throws {
         try write(root + "/thing")
         let item = PlanItem(id: "a", title: "a", note: "", tierRaw: Tier.rebuilds.rawValue, paths: [root + "/thing"])
-        let result = PlanChecks.run(items: [item], trueBytes: ["a": 100], otherCopy: ["a": (title: "~/Downloads/x", bytes: 5_000_000_000)], runningApps: [])
+        let result = PlanChecks.run(
+            items: [item], trueBytes: ["a": 100], otherCopy: ["a": (title: "~/Downloads/x", bytes: 5_000_000_000)], runningApps: [])
         XCTAssertEqual(result["a"]?.problems.contains(.noGain(other: "~/Downloads/x")), true)
         // It doesn't stop you, because removing it from the library may be exactly what you wanted.
         XCTAssertFalse(CheckProblem.noGain(other: "x").holdsBack)
@@ -1040,18 +1085,23 @@ final class FinderAskTests: XCTestCase {
         XCTAssertEqual(FinderAsk.failure(from: "0:40: execution error: Not authorized to send Apple events to Finder. (-1743)\n"), .notAllowed)
         XCTAssertEqual(FinderAsk.failure(from: "1:2: execution error: Finder got an error: User canceled. (-128)"), .cancelled)
         XCTAssertEqual(FinderAsk.failure(from: "execution error: The folder can't be found. (-1728)\n"), .failed("The folder can't be found."))
-        XCTAssertEqual(FinderAsk.failure(from: "0:9: execution error: Finder got an error: The file “Stuck” is locked (for now). (-45)\n"), .failed("The file “Stuck” is locked (for now)."))
+        XCTAssertEqual(
+            FinderAsk.failure(from: "0:9: execution error: Finder got an error: The file “Stuck” is locked (for now). (-45)\n"),
+            .failed("The file “Stuck” is locked (for now)."))
     }
 
     func testEveryFailureSaysWhyInWords() {
-        let failures: [Error] = [FinderAsk.Failure.notAllowed, FinderAsk.Failure.cancelled, FinderAsk.Failure.failed("x"), Cleaner.Failure.notAllowed,
-                                 Cleaner.Failure.wouldOverwrite("/a"), Cleaner.Failure.copyDidNotMatch("/a"), Cleaner.Failure.sameFile, Cleaner.Failure.stopped,
-                                 NSError(domain: NSCocoaErrorDomain, code: NSFileWriteOutOfSpaceError)]
+        let failures: [Error] = [
+            FinderAsk.Failure.notAllowed, FinderAsk.Failure.cancelled, FinderAsk.Failure.failed("x"), Cleaner.Failure.notAllowed,
+            Cleaner.Failure.wouldOverwrite("/a"), Cleaner.Failure.copyDidNotMatch("/a"), Cleaner.Failure.sameFile, Cleaner.Failure.stopped,
+            NSError(domain: NSCocoaErrorDomain, code: NSFileWriteOutOfSpaceError),
+        ]
         for failure in failures {
             guard case .couldntGo(let why, _) = Cleaner.whyItFailed(failure) else { return XCTFail("\(failure) has no reason") }
             XCTAssertFalse(why.isEmpty)
         }
-        XCTAssertEqual(Cleaner.whyItFailed(FinderAsk.Failure.notAllowed), .couldntGo("Headroom isn't allowed to control the Finder.", askSettings: true))
+        XCTAssertEqual(
+            Cleaner.whyItFailed(FinderAsk.Failure.notAllowed), .couldntGo("Headroom isn't allowed to control the Finder.", askSettings: true))
     }
 
     func testWhatFailedWaitsForYouToSayTryAgain() {

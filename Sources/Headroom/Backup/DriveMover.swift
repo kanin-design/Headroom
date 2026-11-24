@@ -59,7 +59,7 @@ enum DriveMover {
     }
 
     /// Where a scripted check may write. Real moves are never made by a script, except between Headroom's two test disks.
-    static func mayWrite(_ path: String) -> Bool { Cleaner.mayAct(on: path) }
+    private static func mayWrite(_ path: String) -> Bool { Cleaner.mayAct(on: path) }
 
     static func hex(_ digest: SHA256.Digest) -> String { digest.map { String(format: "%02x", $0) }.joined() }
 
@@ -79,7 +79,7 @@ enum DriveMover {
     /// macOS gives everything an app makes a `com.apple.provenance` attribute, which the app can't take off, and on a drive
     /// that can't hold attributes, as exFAT can't, it keeps them in a `._name` file beside it: a whole cluster, 128 KB on a
     /// large drive. For what Backup has just made, a copy or a folder for it, that file goes. Nothing else's is touched.
-    static func dropAppleDouble(of path: String) {
+    private static func dropAppleDouble(of path: String) {
         let double = (path as NSString).deletingLastPathComponent + "/._" + (path as NSString).lastPathComponent
         var info = stat()
         // Only a small file, which is what macOS writes there.
@@ -115,8 +115,10 @@ enum DriveMover {
     /// Copies one file to `target`, hashing it on the way, then reads the copy back from the drive and hashes it again.
     /// Only a copy that matches is given its name, and it never replaces anything: something already there is either the
     /// same file, which is left as it is, or a reason to stop. `expected` is the hash the original must have, when it's known.
-    static func copy(_ source: String, to target: String, expected: String? = nil, stop: LockedFlag,
-                     progress: @escaping (Progress) -> Void) throws -> Copied {
+    static func copy(
+        _ source: String, to target: String, expected: String? = nil, stop: LockedFlag,
+        progress: @escaping (Progress) -> Void
+    ) throws -> Copied {
         guard mayWrite(target), mayWrite(source) else { throw Failure.notAllowed }
         var info = stat()
         guard lstat(source, &info) == 0 else { throw Failure.notThere }
@@ -192,7 +194,8 @@ enum DriveMover {
         // The original mustn't have changed while it was read.
         var after = stat()
         guard lstat(source, &after) == 0, after.st_size == info.st_size, after.st_mtimespec.tv_sec == info.st_mtimespec.tv_sec,
-              after.st_mtimespec.tv_nsec == info.st_mtimespec.tv_nsec, done == size else { throw Failure.changedWhileCopying }
+            after.st_mtimespec.tv_nsec == info.st_mtimespec.tv_nsec, done == size
+        else { throw Failure.changedWhileCopying }
         let copyHash = try hash(part, stop: stop) { progress(Progress(phase: .checking, bytes: $0, of: size)) }
         guard copyHash.hash == sourceHash, copyHash.size == size else { throw Failure.mismatch }
         // Its own dates, as the original had them.
@@ -205,7 +208,7 @@ enum DriveMover {
     }
 
     /// Writes a small file whole, or not at all, and never over something else.
-    static func writeNew(_ text: String, to path: String) throws {
+    private static func writeNew(_ text: String, to path: String) throws {
         guard mayWrite(path) else { throw Failure.notAllowed }
         if FileManager.default.fileExists(atPath: path) {
             // The same words are the same note: writing it again changes nothing.
@@ -215,7 +218,9 @@ enum DriveMover {
         let folder = (path as NSString).deletingLastPathComponent
         let part = folder + "/." + (path as NSString).lastPathComponent + ".hrpart"
         unlink(part)
-        guard FileManager.default.createFile(atPath: part, contents: Data(text.utf8)) else { throw Failure.io("Couldn't write \(DiskTree.friendly(path)).") }
+        guard FileManager.default.createFile(atPath: part, contents: Data(text.utf8)) else {
+            throw Failure.io("Couldn't write \(DiskTree.friendly(path)).")
+        }
         do { try name(part, as: path) } catch {
             unlink(part)
             throw error
@@ -224,15 +229,18 @@ enum DriveMover {
 
     /// Sends one file to the drive: the copy, its hash beside it, and, for a move, the note where the file was. Nothing is
     /// removed here: the original is still where it was when this returns, and only then may it go to the Trash.
-    static func send(_ source: String, to target: String, drive: DriveInfo, writeNote: Bool, stop: LockedFlag,
-                     progress: @escaping (Progress) -> Void) throws -> (copied: Copied, note: MovedNote?) {
+    static func send(
+        _ source: String, to target: String, drive: DriveInfo, writeNote: Bool, stop: LockedFlag,
+        progress: @escaping (Progress) -> Void
+    ) throws -> (copied: Copied, note: MovedNote?) {
         let copied = try copy(source, to: target, stop: stop, progress: progress)
         // Nothing else goes on the drive: the hash is kept on the Mac.
         guard writeNote else { return (copied, nil) }
-        let note = MovedNote(name: (source as NSString).lastPathComponent, size: copied.size, sha256: copied.hash, driveName: drive.name,
-                             driveID: drive.uuid, drivePath: BackupPaths.fromDriveTop(target, mount: drive.mountPath),
-                             moved: Date(timeIntervalSince1970: Date().timeIntervalSince1970.rounded(.down)),
-                             notePath: MovedNote.notePath(for: source))
+        let note = MovedNote(
+            name: (source as NSString).lastPathComponent, size: copied.size, sha256: copied.hash, driveName: drive.name,
+            driveID: drive.uuid, drivePath: BackupPaths.fromDriveTop(target, mount: drive.mountPath),
+            moved: Date(timeIntervalSince1970: Date().timeIntervalSince1970.rounded(.down)),
+            notePath: MovedNote.notePath(for: source))
         try writeNew(note.text, to: note.notePath)
         return (copied, note)
     }

@@ -59,7 +59,10 @@ enum Aliases {
             }
             let n = nodes[Int(folder)]
             guard own > 0, !n.has(NodeFlag.synthetic) else { continue }
-            let yours = onBoot ? n.has(NodeFlag.projects) : !Duplicates.isInsidePackage(folder, tree: tree, rules: rules) && !isPackage(folder, tree: tree, rules: rules)
+            let yours =
+                onBoot
+                ? n.has(NodeFlag.projects)
+                : !Duplicates.isInsidePackage(folder, tree: tree, rules: rules) && !isPackage(folder, tree: tree, rules: rules)
             guard yours, let path = tree.path(folder), !isNoise(path) else { continue }
             for link in read(folder: path) {
                 looked += 1
@@ -121,7 +124,7 @@ enum Aliases {
         var st = stat()
         let exists = stat(full, &st) == 0
         let disk = full.hasPrefix("/Volumes/") ? full.split(separator: "/").dropFirst().first.map(String.init) : nil
-        let onThisDisk = disk == nil ? tree.isBoot : tree.rootPath == "/Volumes/" + disk!
+        let onThisDisk = disk.map { tree.rootPath == "/Volumes/" + $0 } ?? tree.isBoot
         guard exists else {
             if let disk, !onThisDisk, !FileManager.default.fileExists(atPath: "/Volumes/" + disk) {
                 return Found(dir: folder, name: name, target: full, node: nil, state: .diskMissing(disk))

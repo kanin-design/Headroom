@@ -716,3 +716,53 @@ On the ring and in lists, a name that doesn't fit is handled the same way.
 |---|---|---|
 | 2026-11-23 | Palettes, dynamic and fixed; glow as a switch in the menu | Asked for, "for testing" |
 | 2026-11-23 | Quiet slivers | From the blind build's review, chosen by the owner |
+
+### The panel's type, tints and controls
+
+The inspector, the bar under it, the card Shift-Space opens, the messages over the map and the small windows (About, Agents,
+Full Disk Access, updates) take their type, text tints, fills, corners and controls from one place: `Kit`
+(`Sources/Headroom/UI/Kit/Kit.swift`). A view asks for a role (`Kit.Font.detail`, `Kit.Text.tertiary`), never a size or an
+opacity. The middle of the ring, the path bar and the names around the ring keep their own values, above; where one of
+those is exactly a role (the path bar's 12 points medium and semibold, the disk selector's 12 semibold and 11), it's
+written as the role.
+
+**Type.** Five sizes a clear step apart, each with its weight, and a few more weights of the same sizes.
+
+| Role | Size | Weight | For |
+|---|---|---|---|
+| `title` | 18 | semibold | A panel's or a small window's title: "2 749 found", the card's name, Agents |
+| `headline` | 13 | semibold | A card's, a box's or a set's title and its size; the big button's words |
+| `note` | 13 | medium | A line that says what a list holds, or that it's empty: "3.54 GB in duplicates", "No suggestions" |
+| `name` | 12 | medium | A thing's name in a list (what `FittedText` measures names with) |
+| `strong` | 12 | semibold | A name that's also something to press: Select recommended, an action, a fold, Undo |
+| `body` | 12 | regular | Sentences in the small windows |
+| `detail` | 11 | regular | The line under a name, what's said about it, a size at a line's end |
+| `label` | 11 | semibold | A section's name, a pill's words, a word before a picker |
+| `caption` | 10 | regular | The least said: "5 more, 525 MB", a small pill, a command |
+| `number` | 12 | medium, digits of equal width | A size at a row's end |
+| `figure` | 20 | semibold, rounded, digits of equal width | The card's size |
+
+**Text tints**, white at: `primary` 0.92 (names, titles), `secondary` 0.7 (sizes and values, what should still be read),
+`tertiary` 0.5 (the line under a name, a section's name, a count), `quaternary` 0.35 (switched off, a hint, an arrow at
+rest, what hasn't started). Green, amber, blue and red keep their meanings and values.
+
+**Fills**, white at: the bar under the inspector 0.03, a card 0.05, a card's hairline and a row under the pointer 0.07,
+the empty part of a bar 0.08, a control at rest 0.1, under the pointer 0.17, what's on a disk already 0.28. **Corners**: a
+card 12, a row 9, a file's line inside a row 6, the big buttons 15, a pane of glass 18.
+
+**Controls.** One of a few choices is macOS's own segmented control, in one wrapper (`Segmented`): the toolbar's View and
+Mode at the toolbar's size, and in the inspector, small: Changes' two rows of time windows (sharing one choice, so a value
+from the other row lights none), Large Files' Untouched age, and an agent's access (the Agents window is 480 points wide so its row still fits). Buttons are the Kit's: the big button
+(`GoButton`, blue in Backup), the quieter one beside it (`SoftButton`), pills, text links, and symbols (Close, Back).
+
+**Building blocks.** One list row (`ListRow`): a mark in a slot of its own, a name, a line under it, a warning, and a value
+at its end; compact for the files inside an opened row. One box head (`BoxHead`) for Free Up's boxes and things and Copies'
+sets. One card (`.card()`), one section heading (`PanelSection`), one fold (`Fold`). A row that's genuinely different says
+how in a comment where it's written.
+
+**Never**: a font size or a white opacity written in a view; a hand-made picker or toggle where macOS has one.
+
+| Date | Decision | Why |
+|---|---|---|
+| 2026-11-24 | One type scale, four text tints and native segmented pickers for the panel, from `Kit`; one row, one box head, one card | The owner: "Is the gui built as components sharing code, and no slop there?" and "Do a UI pass where you make everything correctly built before we continue." There were 18 sizes and 33 opacities written by hand, and a hand-made picker beside the toolbar's own |
+| 2026-11-24 | The sizes 18, 13, 12, 11 and 10, and the tints 0.92, 0.7, 0.5 and 0.35 (Claude's proposal) | Taken from the values used most, a clear step apart; each text moved at most a point (but About's stand-in for its logo, shown only when the logo can't be read: 24 to 18). 12 and 11 are the names' specced sizes in lists |

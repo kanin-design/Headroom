@@ -56,18 +56,21 @@ struct MovedNote: Codable, Equatable, Hashable, Sendable {
             if fields[key] == nil { fields[key] = value }
         }
         guard let name = fields["name"], !name.isEmpty, let size = fields["size"].flatMap(UInt64.init), let hash = fields["sha256"]?.lowercased(),
-              hash.count == 64, hash.allSatisfy(\.isHexDigit), let drive = fields["drive"], !drive.isEmpty, let path = fields["path"], !path.isEmpty,
-              !path.split(separator: "/").contains("..") else { return nil }
+            hash.count == 64, hash.allSatisfy(\.isHexDigit), let drive = fields["drive"], !drive.isEmpty, let path = fields["path"], !path.isEmpty,
+            !path.split(separator: "/").contains("..")
+        else { return nil }
         let moved = fields["moved"].flatMap { dates.date(from: $0) } ?? Date(timeIntervalSince1970: 0)
-        return MovedNote(name: name, size: size, sha256: hash, driveName: drive, driveID: fields["drive-id"].flatMap { $0.isEmpty ? nil : $0 },
-                         drivePath: path, moved: moved, notePath: notePath)
+        return MovedNote(
+            name: name, size: size, sha256: hash, driveName: drive, driveID: fields["drive-id"].flatMap { $0.isEmpty ? nil : $0 },
+            drivePath: path, moved: moved, notePath: notePath)
     }
 
     /// The note at this path, if there's a readable one. Notes are small: anything big isn't one.
     static func read(at path: String) -> MovedNote? {
         var info = stat()
         guard lstat(path, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_size < 64 << 10,
-              let data = FileManager.default.contents(atPath: path) else { return nil }
+            let data = FileManager.default.contents(atPath: path)
+        else { return nil }
         return parse(String(decoding: data, as: UTF8.self), at: path)
     }
 }
@@ -83,7 +86,8 @@ enum Sidecar {
     /// The hash in the `.sha256` beside a file, if one is there.
     static func hash(for file: String) -> String? {
         guard let data = FileManager.default.contents(atPath: path(for: file)), data.count < 4096,
-              let first = String(decoding: data, as: UTF8.self).split(whereSeparator: \.isNewline).first else { return nil }
+            let first = String(decoding: data, as: UTF8.self).split(whereSeparator: \.isNewline).first
+        else { return nil }
         let hash = String(first.prefix(64)).lowercased()
         return hash.count == 64 && hash.allSatisfy(\.isHexDigit) ? hash : nil
     }

@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 
 /// The bottom row: the disk the map is of at the left, the folder you're in right after it, and in Backup, where its files
@@ -39,17 +38,17 @@ private struct DriveCapsuleLabel: View {
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: icon)
-                .font(.system(size: 13, weight: .medium))
+                .font(Kit.Font.headline.weight(.medium))
                 .foregroundStyle(.white.opacity(dim ? 0.45 : 0.8))
             VStack(alignment: .leading, spacing: 0) {
                 Text(title)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(Kit.Font.strong)
                     .foregroundStyle(.white.opacity(dim ? 0.55 : 0.95))
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Text(detail)
-                    .font(.system(size: 11).monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.5))
+                    .font(Kit.Font.detail.monospacedDigit())
+                    .foregroundStyle(Kit.Text.tertiary)
                     .lineLimit(1)
             }
             Image(systemName: "chevron.up.chevron.down")
@@ -102,10 +101,12 @@ private struct SourceCapsule: View {
             // being read, how far that's got.
             let free = model.shownFree ?? drive?.free ?? current?.free ?? 0
             let scanning = model.scanFiles > 0 ? "Scanning… \(formatCount(model.scanFiles)) files" : "Scanning…"
-            DriveCapsuleLabel(icon: current?.isBoot == false ? "externaldrive" : "internaldrive",
-                         title: current?.shownName ?? "Disk",
-                         detail: model.isScanning ? scanning
-                             : drive.map { "\(formatBytes(free)) free · \($0.fileSystemTitle)" } ?? (current == nil ? "" : "\(formatBytes(free)) free"))
+            DriveCapsuleLabel(
+                icon: current?.isBoot == false ? "externaldrive" : "internaldrive",
+                title: current?.shownName ?? "Disk",
+                detail: model.isScanning
+                    ? scanning
+                    : drive.map { "\(formatBytes(free)) free · \($0.fileSystemTitle)" } ?? (current == nil ? "" : "\(formatBytes(free)) free"))
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
@@ -140,8 +141,9 @@ private struct DestinationCapsule: View {
                 .disabled(model.isCleaning)
         } label: {
             if let destination {
-                DriveCapsuleLabel(icon: icon(destination.drive), title: destination.title,
-                             detail: connected.map { "\(formatBytes($0.free)) free · \($0.fileSystemTitle)" } ?? "Not connected", dim: connected == nil)
+                DriveCapsuleLabel(
+                    icon: icon(destination.drive), title: destination.title,
+                    detail: connected.map { "\(formatBytes($0.free)) free · \($0.fileSystemTitle)" } ?? "Not connected", dim: connected == nil)
             } else {
                 DriveCapsuleLabel(icon: "externaldrive.badge.plus", title: "Choose a location", detail: "Backup location", dim: true)
             }
@@ -160,7 +162,9 @@ private struct DestinationCapsule: View {
         return Button(action: choose) {
             Label {
                 Text(title)
-                Text(why.map { "\($0) · \(drive.fileSystemTitle)" } ?? (drive.largestFile != nil ? detail(drive) + " · No files over 4 GB" : detail(drive)))
+                Text(
+                    why.map { "\($0) · \(drive.fileSystemTitle)" }
+                        ?? (drive.largestFile != nil ? detail(drive) + " · No files over 4 GB" : detail(drive)))
             } icon: {
                 Image(systemName: isCurrent ? "checkmark" : icon(drive))
             }

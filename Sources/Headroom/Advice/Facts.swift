@@ -18,7 +18,7 @@ struct Facts: Sendable {
 
     // Spotlight
     var lastOpened: [String: Date] = [:]
-    var askedSpotlight: Set<String> = []
+    private var askedSpotlight: Set<String> = []
 
     // Apps
     var apps: [AppFact] = []
@@ -142,7 +142,7 @@ enum DiskIndex {
     }
 
     private static func url(_ volume: String) -> URL {
-        AppData.folder.appendingPathComponent("index-" + String(volume.map { $0.isLetter || $0.isNumber ? $0 : "_" }) + ".json")
+        AppData.folder.appendingPathComponent("index-" + History.safe(volume) + ".json")
     }
 
     /// Big files only, by name. Called when a scan has finished.
@@ -164,7 +164,9 @@ enum DiskIndex {
 
     /// How long ago this disk was last read, in seconds.
     static func age(of volume: String) -> TimeInterval {
-        guard let values = try? url(volume).resourceValues(forKeys: [.contentModificationDateKey]), let date = values.contentModificationDate else { return .infinity }
+        guard let values = try? url(volume).resourceValues(forKeys: [.contentModificationDateKey]), let date = values.contentModificationDate else {
+            return .infinity
+        }
         return Date().timeIntervalSince(date)
     }
 
@@ -177,7 +179,9 @@ enum DiskIndex {
             guard let data = try? Data(contentsOf: file), let index = try? JSONDecoder().decode(File.self, from: data) else { continue }
             disks.append(index.disk)
             guard index.disk != volume else { continue }
-            for (name, size) in index.files { elsewhere[name, default: []].append(Entry(disk: index.disk, size: size, readAt: index.readAt ?? .distantPast)) }
+            for (name, size) in index.files {
+                elsewhere[name, default: []].append(Entry(disk: index.disk, size: size, readAt: index.readAt ?? .distantPast))
+            }
         }
         return (disks, elsewhere)
     }
@@ -228,11 +232,14 @@ extension Facts {
         screenshotName.firstMatch(in: name, range: NSRange(name.startIndex..., in: name)) != nil
     }
 
+    // A fixed pattern, so it can't fail on a name: FreeUpBoxesTests runs it.
+    // swift-format-ignore: NeverUseForceTry
     private static let screenshotName = try! NSRegularExpression(
-        pattern: #"\d{4}-\d{2}-\d{2}\D{1,8}\d{1,2}\.\d{2}\.\d{2}(\s?[AP]M)?( \(\d+\)| \d+)?\.(png|jpe?g|heic|tiff?|pdf|gif|mov|mp4)$"#, options: [.caseInsensitive])
+        pattern: #"\d{4}-\d{2}-\d{2}\D{1,8}\d{1,2}\.\d{2}\.\d{2}(\s?[AP]M)?( \(\d+\)| \d+)?\.(png|jpe?g|heic|tiff?|pdf|gif|mov|mp4)$"#,
+        options: [.caseInsensitive])
 
     /// Where screenshots are saved: the folder set in macOS, the Desktop it defaults to, and the usual folders people pick.
-    static func screenshotFolders(home: String) -> [String] {
+    private static func screenshotFolders(home: String) -> [String] {
         var folders: [String] = []
         if let set = CFPreferencesCopyAppValue("location" as CFString, "com.apple.screencapture" as CFString) as? String {
             folders.append((set as NSString).expandingTildeInPath)
@@ -248,9 +255,13 @@ extension Facts {
         var out: [Screenshot] = []
         let keys: [URLResourceKey] = [.isRegularFileKey, .totalFileAllocatedSizeKey, .contentModificationDateKey]
         for folder in folders ?? screenshotFolders(home: home) {
-            let files = (try? FileManager.default.contentsOfDirectory(at: URL(fileURLWithPath: folder), includingPropertiesForKeys: keys, options: [.skipsHiddenFiles])) ?? []
+            let files =
+                (try? FileManager.default.contentsOfDirectory(
+                    at: URL(fileURLWithPath: folder), includingPropertiesForKeys: keys, options: [.skipsHiddenFiles])) ?? []
             for file in files where isScreenshotName(file.lastPathComponent) {
-                guard let values = try? file.resourceValues(forKeys: Set(keys)), values.isRegularFile == true, let changed = values.contentModificationDate else { continue }
+                guard let values = try? file.resourceValues(forKeys: Set(keys)), values.isRegularFile == true,
+                    let changed = values.contentModificationDate
+                else { continue }
                 out.append(Screenshot(path: file.path, bytes: UInt64(values.totalFileAllocatedSize ?? 0), changed: changed))
             }
         }
@@ -264,7 +275,11 @@ extension Facts {
         guard FileManager.default.fileExists(atPath: path) else { return }
         var db: OpaquePointer?
         // Read-only, so Plex can't be disturbed.
-        guard sqlite3_open_v2("file:\(path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? path)?mode=ro", &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil) == SQLITE_OK else {
+        guard
+            sqlite3_open_v2(
+                "file:\(path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? path)?mode=ro", &db,
+                SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil) == SQLITE_OK
+        else {
             sqlite3_close(db)
             return
         }
@@ -279,16 +294,19 @@ extension Facts {
         each("select root_path from section_locations") { row in
             if let text = sqlite3_column_text(row, 0) { facts.plexRoots.append(String(cString: text)) }
         }
-        each("""
-             select p.file, coalesce(s.view_count, 0), s.last_viewed_at from media_parts p
-             join media_items i on p.media_item_id = i.id
-             join metadata_items m on i.metadata_item_id = m.id
-             left join metadata_item_settings s on s.guid = m.guid
-             """) { row in
+        each(
+            """
+            select p.file, coalesce(s.view_count, 0), s.last_viewed_at from media_parts p
+            join media_items i on p.media_item_id = i.id
+            join metadata_items m on i.metadata_item_id = m.id
+            left join metadata_item_settings s on s.guid = m.guid
+            """
+        ) { row in
             guard let text = sqlite3_column_text(row, 0) else { return }
             let views = Int(sqlite3_column_int(row, 1))
             let seen = sqlite3_column_int64(row, 2)
-            facts.plexFiles[String(cString: text)] = PlexFile(views: views, lastViewed: seen > 0 ? Date(timeIntervalSince1970: TimeInterval(seen)) : nil)
+            facts.plexFiles[String(cString: text)] = PlexFile(
+                views: views, lastViewed: seen > 0 ? Date(timeIntervalSince1970: TimeInterval(seen)) : nil)
         }
     }
 
@@ -299,10 +317,12 @@ extension Facts {
         let names = (try? FileManager.default.contentsOfDirectory(atPath: folder)) ?? []
         for name in names where name.hasSuffix(".resume") {
             guard let data = FileManager.default.contents(atPath: folder + "/" + name),
-                  let record = Bencode.parse(data)?.dict,
-                  let destination = record["destination"]?.string, let title = record["name"]?.string else { continue }
+                let record = Bencode.parse(data)?.dict,
+                let destination = record["destination"]?.string, let title = record["name"]?.string
+            else { continue }
             let done = record["done-date"]?.int ?? 0
-            facts.torrents.append(Torrent(path: destination + "/" + title, name: title, finished: done > 0 ? Date(timeIntervalSince1970: TimeInterval(done)) : nil))
+            facts.torrents.append(
+                Torrent(path: destination + "/" + title, name: title, finished: done > 0 ? Date(timeIntervalSince1970: TimeInterval(done)) : nil))
         }
     }
 
@@ -319,8 +339,10 @@ extension Facts {
             // A game's folder is one plain name. Anything else could point at the whole library.
             guard !dir.isEmpty, !dir.contains("/"), dir != ".", dir != ".." else { continue }
             let played = TimeInterval(values["LastPlayed"] ?? "") ?? 0
-            facts.games.append(SteamGame(appID: appID, name: title, folder: library + "/common/" + dir, manifest: path,
-                                         lastPlayed: played > 0 ? Date(timeIntervalSince1970: played) : nil))
+            facts.games.append(
+                SteamGame(
+                    appID: appID, name: title, folder: library + "/common/" + dir, manifest: path,
+                    lastPlayed: played > 0 ? Date(timeIntervalSince1970: played) : nil))
         }
     }
 
@@ -340,7 +362,9 @@ extension Facts {
     }
 
     /// The makers whose name says nothing about who made it.
-    private static let sharedPrefixes: Set<String> = ["com.github", "io.github", "com.electron", "org.electron", "com.apple", "dev.tauri", "com.tauri", "local.headroom", "com.example"]
+    private static let sharedPrefixes: Set<String> = [
+        "com.github", "io.github", "com.electron", "org.electron", "com.apple", "dev.tauri", "com.tauri", "local.headroom", "com.example",
+    ]
 
     private static func readApps(into facts: inout Facts, home: String, running: [PlanChecks.RunningApp], open: OpenFiles, fullAccess: Bool) {
         let fm = FileManager.default
@@ -355,7 +379,9 @@ extension Facts {
             // An entry that's only a link into the system is part of macOS, like Safari.
             var link = stat()
             guard lstat(path, &link) == 0, link.st_mode & S_IFMT != S_IFLNK else { continue }
-            guard let plist = NSDictionary(contentsOfFile: path + "/Contents/Info.plist"), let id = plist["CFBundleIdentifier"] as? String else { continue }
+            guard let plist = NSDictionary(contentsOfFile: path + "/Contents/Info.plist"), let id = plist["CFBundleIdentifier"] as? String else {
+                continue
+            }
             let name = Titles.withoutAppEnding((path as NSString).lastPathComponent)
             let fromAppStore = fm.fileExists(atPath: path + "/Contents/_MASReceipt/receipt")
             // Apple's apps only if the App Store can give them back.
@@ -414,8 +440,10 @@ extension Facts {
                     }
                 }
             }
-            facts.apps.append(AppFact(path: path, name: name, bundleID: id, fromAppStore: fromAppStore, newestSign: signs.max(), signCount: signs.count,
-                                      isRunning: running.contains { $0.bundleID == id }, makerNote: makerNote, settings: settings, data: data))
+            facts.apps.append(
+                AppFact(
+                    path: path, name: name, bundleID: id, fromAppStore: fromAppStore, newestSign: signs.max(), signCount: signs.count,
+                    isRunning: running.contains { $0.bundleID == id }, makerNote: makerNote, settings: settings, data: data))
         }
     }
 
@@ -436,7 +464,8 @@ extension Facts {
                 // Only a full bundle ID says for certain which app something belongs to.
                 let parts = name.split(separator: ".")
                 guard parts.count >= 3, !name.hasPrefix("com.apple."), !name.contains(" "), parts[0].count <= 5,
-                      parts.allSatisfy({ $0.allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" } }) else { continue }
+                    parts.allSatisfy({ $0.allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" } })
+                else { continue }
                 if installed.contains(name) { continue }
                 if NSWorkspace.shared.urlForApplication(withBundleIdentifier: name) != nil { continue }
                 // A helper inside an app that's still here: its maker still has an app on this Mac.
@@ -461,15 +490,21 @@ extension Facts {
             if n.has(NodeFlag.directory) {
                 // A Hugging Face cache. Its model folders can be too small to be on a saved map, so they're read from here.
                 if n.nameLength == 3, tree.rawName(id) == "hub", let path = tree.path(id),
-                   let names = try? FileManager.default.contentsOfDirectory(atPath: path) {
+                    let names = try? FileManager.default.contentsOfDirectory(atPath: path)
+                {
                     for name in names where name.hasPrefix("models--") { modelFolders.append(path + "/" + name) }
                 }
                 guard nodes[Int(n.parent)].has(NodeFlag.projects) || n.has(NodeFlag.projects) else { continue }
                 // A project under git.
-                if gitAvailable, n.nameLength == 4, tree.rawName(id) == ".git", tree.totals[Int(n.parent)] >= 100_000_000, let path = tree.path(n.parent) {
+                if gitAvailable, n.nameLength == 4, tree.rawName(id) == ".git", tree.totals[Int(n.parent)] >= 100_000_000,
+                    let path = tree.path(n.parent)
+                {
                     // Worked on lately, or not yours to move: it won't be suggested, whatever git would say.
                     if tree.statRow(n.parent)[DiskTree.statRecent30] == 0, Safety.canTrash(path),
-                       let fact = earlier?.repos[path] ?? Git.read(path) { facts.repos[path] = fact }
+                        let fact = earlier?.repos[path] ?? Git.read(path)
+                    {
+                        facts.repos[path] = fact
+                    }
                     continue
                 }
                 // A folder of numbered images.
@@ -489,19 +524,14 @@ extension Facts {
                 }
                 // A new file gets a "last used" date just from being indexed. Only a use count means someone opened it.
                 if let item = MDItemCreateWithURL(nil, URL(fileURLWithPath: visible) as CFURL),
-                   let count = MDItemCopyAttribute(item, "kMDItemUseCount" as CFString) as? Int, count > 0,
-                   let used = MDItemCopyAttribute(item, kMDItemLastUsedDate) as? Date {
+                    let count = MDItemCopyAttribute(item, "kMDItemUseCount" as CFString) as? Int, count > 0,
+                    let used = MDItemCopyAttribute(item, kMDItemLastUsedDate) as? Date
+                {
                     facts.lastOpened[visible] = used
                 }
             }
         }
         facts.models = readModels(modelFolders)
-    }
-
-    private static func realPath(_ path: String) -> String {
-        guard let resolved = realpath(path, nil) else { return path }
-        defer { free(resolved) }
-        return String(cString: resolved)
     }
 
     /// A model's files can live in a store shared by the whole cache, with its own folder holding only links to them.
@@ -512,14 +542,14 @@ extension Facts {
         var inner: [String: UInt64] = [:]
         for folder in folders {
             guard let walker = fm.enumerator(atPath: folder + "/snapshots") else { continue }
-            let realFolder = realPath(folder)
+            let realFolder = PathMath.canonical(folder)
             // Only the cache's own store. A link that leads anywhere else is to something that can't be downloaded again.
             let store = (realFolder as NSString).deletingLastPathComponent + "/blobs"
             for case let relative as String in walker {
                 let path = folder + "/snapshots/" + relative
                 guard (try? fm.destinationOfSymbolicLink(atPath: path)) != nil else { continue }
                 // Follow it all the way: a link can lead to another link.
-                let real = realPath(path)
+                let real = PathMath.canonical(path)
                 guard !PathMath.isInside(real, realFolder), PathMath.isInside(real, store) else { continue }
                 if !(usedBy[real]?.contains(folder) ?? false) { usedBy[real, default: []].append(folder) }
             }
@@ -538,7 +568,10 @@ extension Facts {
                 newest = max(newest, info.st_mtimespec.tv_sec)
             }
             let name = (folder as NSString).lastPathComponent.dropFirst("models--".count).replacingOccurrences(of: "--", with: "/")
-            models.append(Model(name: name, folder: folder, blobs: blobs, blobBytes: bytes, changed: newest > 0 ? Date(timeIntervalSince1970: TimeInterval(newest)) : nil))
+            models.append(
+                Model(
+                    name: name, folder: folder, blobs: blobs, blobBytes: bytes,
+                    changed: newest > 0 ? Date(timeIntervalSince1970: TimeInterval(newest)) : nil))
         }
         return models
     }
@@ -562,7 +595,11 @@ enum Git {
     static let tool: String? = {
         let fm = FileManager.default
         for path in ["/opt/homebrew/bin/git", "/usr/local/bin/git"] where fm.isExecutableFile(atPath: path) { return path }
-        if fm.fileExists(atPath: "/Library/Developer/CommandLineTools/usr/bin/git") || fm.fileExists(atPath: "/Applications/Xcode.app/Contents/Developer/usr/bin/git") { return "/usr/bin/git" }
+        if fm.fileExists(atPath: "/Library/Developer/CommandLineTools/usr/bin/git")
+            || fm.fileExists(atPath: "/Applications/Xcode.app/Contents/Developer/usr/bin/git")
+        {
+            return "/usr/bin/git"
+        }
         return nil
     }()
 
@@ -618,5 +655,37 @@ enum Git {
         guard let status = run(["status", "--porcelain"], in: path) else { return fact }
         fact.isClean = status.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         return fact
+    }
+}
+
+extension AppModel {
+    /// Reads other apps' records, off the main thread, and then looks at the suggestions again.
+    func gatherFacts(for tree: DiskTree, afresh: Bool = false) {
+        if factsRunning {
+            factsWanted = factsWanted || afresh
+            return
+        }
+        guard afresh || Date().timeIntervalSince(facts.gatheredAt) > 30 else { return }
+        factsRunning = true
+        // At launch these are read for the saved map, and again when the scan that follows has finished, seconds later.
+        let earlier = factsOfSavedMap && afresh && Date().timeIntervalSince(facts.gatheredAt) < 300 ? facts : nil
+        factsOfSavedMap = !afresh
+        let fullAccess = hasFullAccess
+        let apps = NSWorkspace.shared.runningApplications.compactMap { app -> PlanChecks.RunningApp? in
+            guard let id = app.bundleIdentifier else { return nil }
+            return PlanChecks.RunningApp(bundleID: id, name: app.localizedName ?? id)
+        }
+        Task.detached(priority: .utility) {
+            let gathered = Facts.gather(tree: tree, running: apps, fullAccess: fullAccess, reusing: earlier)
+            await MainActor.run {
+                self.factsRunning = false
+                self.facts = gathered
+                self.rebuildInsights()
+                if self.factsWanted, let current = self.tree {
+                    self.factsWanted = false
+                    self.gatherFacts(for: current, afresh: true)
+                }
+            }
+        }
     }
 }

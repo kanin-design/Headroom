@@ -20,7 +20,9 @@ struct LinkStory: Equatable {
         func matters(_ bytes: UInt64) -> Bool { bytes >= 50_000_000 || (bytes > 0 && Double(bytes) >= Double(size) * 0.1) }
         var places: [(path: String, node: UInt32)] = []
         if matters(sharedOut), let sharedPlace, let sharedPlaceNode { places.append((sharedPlace, sharedPlaceNode)) }
-        if matters(linkedIn), let linkedPlace, let linkedPlaceNode, linkedPlaceNode != sharedPlaceNode { places.append((linkedPlace, linkedPlaceNode)) }
+        if matters(linkedIn), let linkedPlace, let linkedPlaceNode, linkedPlaceNode != sharedPlaceNode {
+            places.append((linkedPlace, linkedPlaceNode))
+        }
         return places
     }
 }
@@ -106,10 +108,8 @@ enum Accounting {
     static func settleLinks(_ links: UnsafeMutableBufferPointer<LinkRecord>, in tree: DiskTree) {
         groupByKey(links)
         let nodes = tree.nodes
-        let home = tree.home
-        var downloads: UInt32 = 0
         // In your home folder, or at the top of any other disk.
-        var top = home
+        var top = tree.home
         if top == 0 {
             var c = nodes[0].firstChild
             while c != 0 {
@@ -117,13 +117,7 @@ enum Accounting {
                 c = nodes[Int(c)].nextSibling
             }
         }
-        if top != 0 {
-            var c = nodes[Int(top)].firstChild
-            while c != 0 {
-                if tree.rawName(c) == "Downloads" { downloads = c; break }
-                c = nodes[Int(c)].nextSibling
-            }
-        }
+        let downloads = top == 0 ? 0 : tree.child(of: top, named: "Downloads") ?? 0
         let now = UInt32(seconds: Date().timeIntervalSince1970)
         func isUnder(_ id: UInt32, _ ancestor: UInt32) -> Bool {
             var i = id
@@ -279,14 +273,18 @@ enum Accounting {
             var hash = UInt64(size)
             for i in start..<end {
                 let r = links[i]
-                hash = (hash ^ UInt64(r.dir) ^ UInt64(r.file) << 32 ^ UInt64(r.kind) << 8 ^ (r.counted ? 1 : 0) ^ (r.isClone ? 2 : 0)) &* 0x9E37_79B9_7F4A_7C15
+                hash =
+                    (hash ^ UInt64(r.dir) ^ UInt64(r.file) << 32 ^ UInt64(r.kind) << 8 ^ (r.counted ? 1 : 0) ^ (r.isClone ? 2 : 0))
+                    &* 0x9E37_79B9_7F4A_7C15
                 hash ^= hash >> 29
             }
             if let same = seen[hash] {
-                let isSame = same.count == size && (0..<size).allSatisfy { at in
-                    let a = links[same.at + at], b = links[start + at]
-                    return a.dir == b.dir && a.file == b.file && a.kind == b.kind && a.counted == b.counted && a.isClone == b.isClone
-                }
+                let isSame =
+                    same.count == size
+                    && (0..<size).allSatisfy { at in
+                        let a = links[same.at + at], b = links[start + at]
+                        return a.dir == b.dir && a.file == b.file && a.kind == b.kind && a.counted == b.counted && a.isClone == b.isClone
+                    }
                 if isSame {
                     for at in 0..<size { links[same.at + at].bytes &+= links[start].bytes }
                     continue

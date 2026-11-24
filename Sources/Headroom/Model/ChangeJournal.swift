@@ -33,10 +33,8 @@ enum ChangeJournal {
         return current.event - place.event
     }
 
-    /// The journal names folders the way you see them, so the Data volume's own paths lose their prefix to ask about them,
-    /// and get it back in what comes back.
-
-    /// The folders to watch for a map: the ones its scan started from.
+    /// The folders to watch for a map: the ones its scan started from. The journal names folders the way you see them, so the
+    /// Data volume's own paths lose their prefix to ask about them, and get it back in what comes back.
     static func roots(of tree: DiskTree) -> [String] { tree.anchors.map { PathMath.visible($0.path) }.sorted() }
 
     /// Collects what changes on a disk from a place onwards, for as long as it runs: first what the journal already holds
@@ -59,10 +57,12 @@ enum ChangeJournal {
         /// Nil when the journal isn't the one `place` is in, or can't be watched.
         init?(from place: Place, roots: [String]) {
             guard let root = roots.first, let current = ChangeJournal.now(for: root), current.journal == place.journal,
-                  place.event <= current.event else { return nil }
+                place.event <= current.event
+            else { return nil }
             self.roots = roots
             from = place
-            var context = FSEventStreamContext(version: 0, info: Unmanaged.passUnretained(self).toOpaque(), retain: nil, release: nil, copyDescription: nil)
+            var context = FSEventStreamContext(
+                version: 0, info: Unmanaged.passUnretained(self).toOpaque(), retain: nil, release: nil, copyDescription: nil)
             let flags = FSEventStreamCreateFlags(kFSEventStreamCreateFlagUseCFTypes)
             guard let stream = FSEventStreamCreate(nil, Self.callback, &context, roots as CFArray, place.event, 0.5, flags) else { return nil }
             FSEventStreamSetDispatchQueue(stream, queue)
@@ -96,7 +96,9 @@ enum ChangeJournal {
         func take(from place: Place) -> (changes: Changes, next: Place)? {
             lock.lock()
             defer { lock.unlock() }
-            guard let stream, queue.sync(execute: { from == place }), let root = roots.first, let next = ChangeJournal.now(for: root) else { return nil }
+            guard let stream, queue.sync(execute: { from == place }), let root = roots.first, let next = ChangeJournal.now(for: root) else {
+                return nil
+            }
             // Everything up to now is handed over before the lot is taken.
             FSEventStreamFlushSync(stream)
             return queue.sync {

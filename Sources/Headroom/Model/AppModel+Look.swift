@@ -199,7 +199,7 @@ extension AppModel {
         }
     }
 
-    func stepLook(by step: Int) {
+    private func stepLook(by step: Int) {
         guard let current = look, let tree else { return }
         let row = LookContents.siblings(of: current.node, in: tree)
         guard let at = row.firstIndex(of: current.node), row.indices.contains(at + step) else { return }
@@ -283,15 +283,15 @@ extension AppModel {
         case .keyDown:
             if window.firstResponder is NSText || event.modifierFlags.contains(.command) { return false }
             switch event.keyCode {
-            case 53: closeLook()                        // escape
-            case 49:                                    // space selects; with shift, the card closes
+            case 53: closeLook()  // escape
+            case 49:  // space selects; with shift, the card closes
                 if event.modifierFlags.contains(.shift) { closeLook() } else { spaceSelect() }
-            case 123: stepLook(by: -1)                  // left
-            case 124: stepLook(by: 1)                   // right
-            case 125: return moveLookCursor(by: 1)      // down
-            case 126: return moveLookCursor(by: -1)     // up
-            case 36, 76: lookPrimary()                  // return, enter
-            case 51:                                    // delete
+            case 123: stepLook(by: -1)  // left
+            case 124: stepLook(by: 1)  // right
+            case 125: return moveLookCursor(by: 1)  // down
+            case 126: return moveLookCursor(by: -1)  // up
+            case 36, 76: lookPrimary()  // return, enter
+            case 51:  // delete
                 guard look?.back.isEmpty == false else { return false }
                 lookBack()
             default: return false
@@ -304,7 +304,8 @@ extension AppModel {
         case .rightMouseDown:
             // The rows have their own menu. A preview would offer macOS's.
             guard onCard, let node = look?.node, let tree, !LookContents.isFolder(node, in: tree), lookContentFrame.contains(at),
-                  let view = window.contentView, let menu = menu(for: NamedThing(node)) else { return false }
+                let view = window.contentView, let menu = menu(for: NamedThing(node))
+            else { return false }
             NSMenu.popUpContextMenu(menu, with: event, for: view)
             return true
         default:

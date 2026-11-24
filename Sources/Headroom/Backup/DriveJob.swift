@@ -37,7 +37,9 @@ final class DriveJob {
     private(set) var entries: [Entry]
     private(set) var finished: Date?
     private(set) var current: Int?
-    /// Everything a file is read for: once to copy it and once more to check the copy, or once to check it.
+    /// How many times a file is read: once to copy it and once more to check the copy, or once to check it.
+    let passes: UInt64
+    /// Everything that's read, for all the files.
     let work: UInt64
     private(set) var workDone: UInt64 = 0
     /// Bytes a second, smoothed, so the time left doesn't jump about.
@@ -65,7 +67,7 @@ final class DriveJob {
         self.title = title
         self.driveName = driveName
         self.entries = entries
-        let passes: UInt64 = kind == .verify || kind == .deleteFromDrive ? 1 : 2
+        passes = kind == .verify || kind == .deleteFromDrive ? 1 : 2
         work = max(entries.reduce(0) { $0 &+ $1.bytes } * passes, 1)
     }
 
@@ -74,7 +76,7 @@ final class DriveJob {
     var doneCount: Int { entries.filter { if case .done = $0.step { true } else { false } }.count }
     var failedCount: Int { entries.filter { if case .failed = $0.step { true } else { false } }.count }
     var doneBytes: UInt64 { entries.reduce(0) { if case .done = $1.step { $0 &+ $1.bytes } else { $0 } } }
-    var wasStopped: Bool { stop.value }
+    private var wasStopped: Bool { stop.value }
     /// What's been freed on the Mac so far: what's moved, less what had another copy that stays.
     var freed: UInt64 {
         guard kind == .move else { return 0 }
@@ -99,7 +101,6 @@ final class DriveJob {
     /// How far the file it's on has got: copying is the first read, checking the copy the second.
     func progress(_ index: Int, phase: DriveMover.Progress.Phase, bytes: UInt64, of size: UInt64) {
         guard index < entries.count, !entries[index].step.isOver else { return }
-        let passes: UInt64 = kind == .verify || kind == .deleteFromDrive ? 1 : 2
         let inFile = kind == .verify ? bytes : (phase == .copying ? bytes : size &+ bytes)
         workDone = doneBeforeCurrent &+ min(inFile, size &* passes)
         if kind != .verify { landed = landedBefore &+ (phase == .copying ? min(bytes, size) : size) }
@@ -111,7 +112,6 @@ final class DriveJob {
     func finish(_ index: Int, _ step: Step) {
         guard index < entries.count else { return }
         entries[index].step = step
-        let passes: UInt64 = kind == .verify || kind == .deleteFromDrive ? 1 : 2
         workDone = doneBeforeCurrent &+ entries[index].bytes &* passes
         doneBeforeCurrent = workDone
         // A copy that failed is taken away again, so only what's done stays landed.
@@ -139,18 +139,45 @@ final class DriveJob {
         lastSample = (now, workDone)
     }
 
+    /// One line on how it's going: how many, how fast and how long is left; afterwards, how long it took and how fast.
+    var status: String {
+        // Afterwards the title says how it ended, so this says how long it took.
+        if let finished {
+            let seconds = finished.timeIntervalSince(started)
+            var parts = ["Took " + Self.duration(seconds)]
+            if kind != .deleteFromDrive, seconds >= 1, doneBytes > 0 {
+                parts.append("\(formatBytes(UInt64(Double(doneBytes) / seconds)))/s")
+            }
+            return parts.joined(separator: " · ")
+        }
+        let done = entries.filter(\.step.isOver).count
+        var parts = ["\(done) of \(entries.count)"]
+        if speed > 0 { parts.append("\(formatBytes(UInt64(speed)))/s") }
+        if let left = timeLeft { parts.append(Self.duration(left) + " left") }
+        return parts.joined(separator: " · ")
+    }
+
+    /// 12 s, 4 min, 1 h 5 min.
+    static func duration(_ seconds: TimeInterval) -> String {
+        let s = Int(seconds.rounded())
+        if s < 60 { return "\(max(s, 1)) s" }
+        if s < 3600 { return "\(s / 60) min" }
+        return "\(s / 3600) h \((s % 3600) / 60) min"
+    }
+
     /// One line on how it ended.
     var summary: String {
         let n = doneCount, failed = failedCount
-        let what: String
-        switch kind {
-        case .move: what = n == 1 ? "1 file moved to \(driveName)" : "\(n) files moved to \(driveName)"
-        case .copy: what = n == 1 ? "1 file copied to \(driveName)" : "\(n) files copied to \(driveName)"
-        case .bringBack: what = n == 1 ? "1 file back on this Mac" : "\(n) files back on this Mac"
-        case .copyToMac: what = n == 1 ? "1 file copied to this Mac" : "\(n) files copied to this Mac"
-        case .verify: what = n == 1 ? "1 file verified" : "\(n) files verified"
-        case .deleteFromDrive: what = n == 1 ? "1 file moved to \(driveName)'s Trash" : "\(n) files moved to \(driveName)'s Trash"
-        }
+        let files = counted(n, "file")
+        let what =
+            switch kind {
+            case .move: "\(files) moved to \(driveName)"
+            case .copy: "\(files) copied to \(driveName)"
+            case .bringBack: "\(files) back on this Mac"
+            case .copyToMac: "\(files) copied to this Mac"
+            case .verify: "\(files) verified"
+            case .deleteFromDrive: "\(files) moved to \(driveName)'s Trash"
+            }
         var parts = [what]
         if kind != .verify, n > 0 { parts.append(formatBytes(doneBytes)) }
         if failed > 0 { parts.append(failed == 1 ? "1 failed" : "\(failed) failed") }

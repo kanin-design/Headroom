@@ -1,7 +1,7 @@
 import AppKit
 import CoreText
-import os
 import SwiftUI
+import os
 
 /// One line of text as the outlines of its glyphs, each where it stands along a straight baseline: what's needed to set
 /// the line along an arc instead. Made once for each text and font and kept, since names are placed again on every change
@@ -29,6 +29,8 @@ struct GlyphLine: Sendable {
             guard count > 0 else { continue }
             // The run's own font: a character the line's font lacks comes from another.
             let attributes = CTRunGetAttributes(run) as NSDictionary
+            // Core Text keeps a run's font as a CTFont, and a cast to a Core Foundation type can't be conditional.
+            // swift-format-ignore: NeverForceUnwrap
             let runFont = attributes[kCTFontAttributeName as String].map { $0 as! CTFont } ?? font as CTFont
             var ids = [CGGlyph](repeating: 0, count: count)
             var positions = [CGPoint](repeating: .zero, count: count)

@@ -44,19 +44,44 @@ extension TickState {
         switch self {
         case .all: tint.opacity(isLit ? 0.2 : (small ? 0.1 : 0.14))
         case .some: tint.opacity(isLit ? 0.13 : 0.07)
-        case .none: .white.opacity(isLit ? 0.07 : 0)
+        case .none: isLit ? Kit.Fill.hover : .clear
         }
     }
 }
 
-/// The arrow on anything that opens. It points down when it's open.
+/// The arrow on anything that opens. It points down when it's open. A box at the top of a list has the large one.
 struct DisclosureChevron: View {
     let isOpen: Bool
-    var size: CGFloat = 9.5
+    var isLarge = false
 
     var body: some View {
         Image(systemName: "chevron.right")
-            .font(.system(size: size, weight: .bold))
+            .font(.system(size: isLarge ? 11 : 9.5, weight: .bold))
             .rotationEffect(.degrees(isOpen ? 90 : 0))
+    }
+}
+
+/// The arrow that opens what's in a row, apart from the row's own click: quiet at rest, brighter on the row under the
+/// pointer and while it's open. Free Up's things, the folders inside them and Copies' sets have it.
+struct DisclosureButton: View {
+    let isOpen: Bool
+    /// The row it's on is under the pointer.
+    let isLit: Bool
+    /// What a click does, open and shut: "Hide contents", "Show contents".
+    let help: (hide: String, show: String)
+    var width: CGFloat = Kit.markSlot
+    let toggle: () -> Void
+
+    var body: some View {
+        Button {
+            Motion.animate(.snappy(duration: 0.22)) { toggle() }
+        } label: {
+            DisclosureChevron(isOpen: isOpen)
+                .foregroundStyle(isLit || isOpen ? Kit.Text.secondary : Kit.Text.quaternary)
+                .frame(width: width, height: 14)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(isOpen ? help.hide : help.show)
     }
 }

@@ -49,8 +49,7 @@ extension AppModel {
             return
         }
         backupFoldersRead.insert(drive.id)
-        let root = BackupPaths.onDrive("/", under: BackupDestination(drive: drive, folder: destination.folder).root)
-        let folder = root.hasSuffix("/") ? String(root.dropLast()) : root
+        let folder = Self.backupFolder(of: BackupDestination(drive: drive, folder: destination.folder))
         let id = drive.id, fromTop = BackupPaths.fromDriveTop(folder, mount: drive.mountPath)
         Task.detached(priority: .utility) {
             guard FileManager.default.fileExists(atPath: folder), let files = DriveListings.read(folder) else { return }
@@ -62,9 +61,14 @@ extension AppModel {
     /// folder it mirrors.
     func shownFolder(_ folder: String) -> String {
         guard let destination = backup.destination else { return DiskTree.friendly(folder) }
-        let root = BackupPaths.onDrive("/", under: destination.root)
-        let top = root.hasSuffix("/") ? String(root.dropLast()) : root
+        let top = Self.backupFolder(of: destination)
         return folder.hasPrefix(top + "/") ? DiskTree.friendly(String(folder.dropFirst(top.count))) : DiskTree.friendly(folder)
+    }
+
+    /// This Mac's backup folder on a drive, without a slash at the end.
+    private static func backupFolder(of destination: BackupDestination) -> String {
+        let root = BackupPaths.onDrive("/", under: destination.root)
+        return root.hasSuffix("/") ? String(root.dropLast()) : root
     }
 
     /// Whether a file on the Mac is on the drive too, by the picture of both disks.
@@ -170,10 +174,20 @@ extension AppModel {
     /// How old a big file has to be for Backup's list, in days, 0 for any age: the age chosen over the list, or in Changes,
     /// where the list has no picker of its own, the Untouched window chosen there. A Changes window of what changed lately
     /// leaves out nothing.
-    var backupAgeShown: Int {
+    private var backupAgeShown: Int {
         guard view == .changes else { return backupAge }
         if case .untouched(let days) = changeWindow { return days }
         return 0
+    }
+
+    /// Backup's list of big files as the panel shows it: what's offered here, less what's selected already and what's on
+    /// the drive already, which isn't waiting to go.
+    func backupCandidatesWaiting() -> [UInt32] {
+        guard let tree = workTree else { return [] }
+        return backupCandidates().filter { node in
+            guard let path = tree.path(node) else { return false }
+            return !backup.has(PathMath.visible(path)) && !isBackedUp(path)
+        }
     }
 
     /// Files in the folder you're in that Backup offers: at least `BackupState.smallest`, yours to move, and at least as old as
@@ -191,7 +205,9 @@ extension AppModel {
         var rows: [UInt32] = []
         for i in 1..<tree.count {
             let n = tree.nodes[i]
-            guard n.flags & (NodeFlag.directory | NodeFlag.synthetic | NodeFlag.gone | NodeFlag.alias) == 0, n.bytes >= BackupState.smallest else { continue }
+            guard n.flags & (NodeFlag.directory | NodeFlag.synthetic | NodeFlag.gone | NodeFlag.alias) == 0, n.bytes >= BackupState.smallest else {
+                continue
+            }
             let at = Int(tree.dfsIn[i])
             guard at >= start, at < start + size else { continue }
             let id = UInt32(i)
@@ -201,11 +217,12 @@ extension AppModel {
         }
         rows.sort { tree.totals[Int($0)] > tree.totals[Int($1)] }
         // What isn't yours to move, or lives inside something macOS shows as one thing, isn't offered.
-        let offered = Array(rows.lazy.filter { id in
-            guard let path = tree.path(id) else { return false }
-            let visible = PathMath.visible(path)
-            return Safety.canTrash(path) && !self.backup.isKept(visible)
-        }.prefix(300))
+        let offered = Array(
+            rows.lazy.filter { id in
+                guard let path = tree.path(id) else { return false }
+                let visible = PathMath.visible(path)
+                return Safety.canTrash(path) && !self.backup.isKept(visible)
+            }.prefix(300))
         backupCandidatesMemo = (treeVersion, here, age, offered)
         return offered
     }
@@ -215,7 +232,9 @@ extension AppModel {
     /// What to know before moving it: a file with another hard link, or a clone, frees nothing while its other copy stays,
     /// and the drive's file system may not hold it.
     func backupWarning(_ item: BackupItem) -> String? {
-        if let drive = backup.destination?.drive, let largest = drive.largestFile, item.bytes > largest { return "Too big for \(drive.fileSystemTitle)" }
+        if let drive = backup.destination?.drive, let largest = drive.largestFile, item.bytes > largest {
+            return "Too big for \(drive.fileSystemTitle)"
+        }
         if let memo = backupWarningMemo, memo.version == treeVersion, let said = memo.said[item.path] { return said }
         let said = linkWarning(item)
         if backupWarningMemo?.version != treeVersion { backupWarningMemo = (treeVersion, [:]) }
@@ -303,7 +322,8 @@ extension AppModel {
             var info = stat()
             guard lstat(path, &info) == 0 else { return AgentPick(path: path, outcome: .refused("Not found.")) }
             guard info.st_mode & S_IFMT == S_IFREG else {
-                return AgentPick(path: path, outcome: .refused(info.st_mode & S_IFMT == S_IFDIR ? "Backup moves files, not folders." : "Only files can be moved."))
+                return AgentPick(
+                    path: path, outcome: .refused(info.st_mode & S_IFMT == S_IFDIR ? "Backup moves files, not folders." : "Only files can be moved."))
             }
             guard !MovedNote.isNote(path) else { return AgentPick(path: path, outcome: .refused("That's a note for a moved file.")) }
             guard UInt64(info.st_size) >= BackupState.smallest else {
@@ -319,12 +339,15 @@ extension AppModel {
                 plan.takeBack(path)
                 tookFromFreeUp.append(path)
             }
-            backup.items.append(BackupItem(path: path, title: (path as NSString).lastPathComponent, bytes: UInt64(info.st_size), agent: agent, reason: note))
+            backup.items.append(
+                BackupItem(path: path, title: (path as NSString).lastPathComponent, bytes: UInt64(info.st_size), agent: agent, reason: note))
             return AgentPick(path: path, outcome: .selected, node: node)
         }
         if !tookFromFreeUp.isEmpty {
             planChanged()
-            showTip(tookFromFreeUp.count == 1 ? "Removed from Free Up: \((tookFromFreeUp[0] as NSString).lastPathComponent)" : "\(tookFromFreeUp.count) removed from Free Up")
+            showTip(
+                tookFromFreeUp.count == 1
+                    ? "Removed from Free Up: \((tookFromFreeUp[0] as NSString).lastPathComponent)" : "\(tookFromFreeUp.count) removed from Free Up")
         }
         if picks.contains(where: { $0.outcome == .selected }) { backupChanged() }
         return picks
@@ -336,8 +359,12 @@ extension AppModel {
         let picks = references.map { reference -> AgentPick in
             let written = AgentLook.written(reference)
             let path = PathMath.visible(AgentLook.real(written) ?? written)
-            guard let item = backup.items.first(where: { $0.path == path || $0.path == written }) else { return AgentPick(path: path, outcome: .asItWas("not selected")) }
-            if byAgent, item.agent == nil { return AgentPick(path: path, outcome: .refused("The user selected this in Headroom, so it's theirs to deselect.")) }
+            guard let item = backup.items.first(where: { $0.path == path || $0.path == written }) else {
+                return AgentPick(path: path, outcome: .asItWas("not selected"))
+            }
+            if byAgent, item.agent == nil {
+                return AgentPick(path: path, outcome: .refused("The user selected this in Headroom, so it's theirs to deselect."))
+            }
             backup.items.removeAll { $0.path == item.path }
             return AgentPick(path: item.path, outcome: .deselected)
         }
@@ -387,7 +414,8 @@ extension AppModel {
         // On this Mac: the files in it big enough for Backup. What else it won't take, it says no to.
         var paths: [String] = []
         if let pair, pair.tree === tree {
-            for (file, rel) in pair.macRel where tree.isInside(file, node) && max(tree.nodes[Int(file)].bytes, tree.nodes[Int(file)].aliasBytes) >= BackupState.smallest {
+            for (file, rel) in pair.macRel
+            where tree.isInside(file, node) && max(tree.nodes[Int(file)].bytes, tree.nodes[Int(file)].aliasBytes) >= BackupState.smallest {
                 paths.append(pair.onMac(rel))
             }
         } else {
@@ -395,7 +423,8 @@ extension AppModel {
             for i in 1..<tree.count {
                 let n = tree.nodes[i]
                 guard tree.dfsIn[i] &- start < size, n.firstChild == 0, n.flags & (NodeFlag.directory | NodeFlag.synthetic | NodeFlag.gone) == 0,
-                      max(n.bytes, n.aliasBytes) >= BackupState.smallest, !tree.isGhost(UInt32(i)), let path = tree.path(UInt32(i)) else { continue }
+                    max(n.bytes, n.aliasBytes) >= BackupState.smallest, !tree.isGhost(UInt32(i)), let path = tree.path(UInt32(i))
+                else { continue }
                 paths.append(PathMath.visible(path))
             }
         }
@@ -440,20 +469,16 @@ extension AppModel {
     /// its note when it was moved from here. A file the Mac has already is left alone. The drive keeps its copies.
     func copyToMac(_ files: [DriveFile]) {
         guard !isCleaning, let first = files.first else { return }
-        let notes = Dictionary(movedNotes.map { ($0.originalPath, $0) }, uniquingKeysWith: { a, _ in a })
+        let notes = notesByOriginalPath
         let known = expectedHashes()
-        runDriveJob(.copyToMac, title: "Copying from \(first.driveName)", driveName: first.driveName,
-                    entries: files.map { DriveJob.Entry(id: $0.path, title: $0.title, bytes: $0.bytes) }) { index, job in
+        runDriveJob(.copyToMac, title: "Copying from \(first.driveName)", driveName: first.driveName, entries: Self.entries(files)) { index, job in
             let file = files[index]
             let note = notes[file.macPath]
             let expected = note?.sha256 ?? known[file.path] ?? Sidecar.hash(for: file.path)
-            var last = Date.distantPast
+            let report = Self.reporter(for: job, at: index)
             do {
-                let copied = try DriveMover.copy(file.path, to: file.macPath, expected: expected, stop: job.stop) { p in
-                    let now = Date()
-                    guard now.timeIntervalSince(last) > 0.1 else { return }
-                    last = now
-                    Task { @MainActor in job.progress(index, phase: p.phase, bytes: p.bytes, of: p.of) }
+                let copied = try DriveMover.copy(file.path, to: file.macPath, expected: expected, stop: job.stop) {
+                    report($0.phase, $0.bytes, $0.of)
                 }
                 if let note, Cleaner.mayAct(on: note.notePath) { unlink(note.notePath) }
                 return .done(copied.wasThere ? "Already on this Mac" : "Copied")
@@ -462,7 +487,7 @@ extension AppModel {
             }
         } after: { job in
             // What's copied is done with; new files on the Mac, so the map is read again for them.
-            let done = Set(job.entries.filter { if case .done = $0.step { true } else { false } }.map(\.id))
+            let done = Self.doneIDs(of: job)
             self.driveSelection.removeAll { done.contains($0.path) }
             if !done.isEmpty { self.scan() }
         }
@@ -471,23 +496,20 @@ extension AppModel {
     /// Reads files on the drive and compares each with the hash beside it, or its note, or else the Mac's copy.
     func checkOnDrive(_ files: [DriveFile]) {
         guard !isCleaning, let first = files.first else { return }
-        let notes = Dictionary(movedNotes.map { ($0.originalPath, $0) }, uniquingKeysWith: { a, _ in a })
+        let notes = notesByOriginalPath
         let known = expectedHashes()
-        runDriveJob(.verify, title: "Verifying", driveName: first.driveName,
-                    entries: files.map { DriveJob.Entry(id: $0.path, title: $0.title, bytes: $0.bytes) }) { index, job in
+        runDriveJob(.verify, title: "Verifying", driveName: first.driveName, entries: Self.entries(files)) { index, job in
             let file = files[index]
             var expected = notes[file.macPath]?.sha256 ?? known[file.path] ?? Sidecar.hash(for: file.path)
             if expected == nil, file.place == .both { expected = try? DriveMover.hash(file.macPath, stop: job.stop).hash }
             guard let expected else { return .failed("No hash to compare with") }
-            var last = Date.distantPast
-            guard let found = try? DriveMover.hash(file.path, stop: job.stop, progress: { bytes in
-                let now = Date()
-                guard now.timeIntervalSince(last) > 0.1 else { return }
-                last = now
-                Task { @MainActor in job.progress(index, phase: .checking, bytes: bytes, of: file.bytes) }
-            }) else { return .failed(job.stop.value ? "Stopped" : "Couldn't read it") }
+            let report = Self.reporter(for: job, at: index)
+            guard let found = try? DriveMover.hash(file.path, stop: job.stop, progress: { report(.checking, $0, file.bytes) }) else {
+                return .failed(job.stop.value ? "Stopped" : "Couldn't read it")
+            }
             return found.hash == expected ? .done("Verified") : .failed("Doesn't match")
-        } after: { _ in }
+        } after: { _ in
+        }
     }
 
     /// Files on the drive go to the drive's Trash, with the hash beside each. A moved file's note goes too: it would point
@@ -496,27 +518,24 @@ extension AppModel {
     /// aren't on this Mac are asked about first, by the panel.
     func deleteFromDrive(_ files: [DriveFile]) {
         guard !isCleaning, let first = files.first else { return }
-        let notes = Dictionary(movedNotes.map { ($0.originalPath, $0) }, uniquingKeysWith: { a, _ in a })
+        let notes = notesByOriginalPath
         let known = expectedHashes()
-        runDriveJob(.deleteFromDrive, title: "Deleting from \(first.driveName)", driveName: first.driveName,
-                    entries: files.map { DriveJob.Entry(id: $0.path, title: $0.title, bytes: $0.bytes) }) { index, job in
+        runDriveJob(.deleteFromDrive, title: "Deleting from \(first.driveName)", driveName: first.driveName, entries: Self.entries(files)) {
+            index, job in
             let file = files[index]
             guard Cleaner.mayAct(on: file.path) else { return .failed(DriveMover.Failure.notAllowed.text) }
             var there = stat()
             guard lstat(file.path, &there) == 0 else { return .failed("Not on \(file.driveName) any more") }
             if file.place == .both {
                 var mine = stat()
-                guard lstat(file.macPath, &mine) == 0, mine.st_mode & S_IFMT == S_IFREG else { return .failed("Not on this Mac any more, so it stays") }
-                guard mine.st_size == there.st_size else { return .failed("This Mac's copy is different now, so it stays") }
-                var last = Date.distantPast
-                let report: (UInt64) -> Void = { bytes in
-                    let now = Date()
-                    guard now.timeIntervalSince(last) > 0.1 else { return }
-                    last = now
-                    Task { @MainActor in job.progress(index, phase: .checking, bytes: bytes, of: file.bytes) }
+                guard lstat(file.macPath, &mine) == 0, mine.st_mode & S_IFMT == S_IFREG else {
+                    return .failed("Not on this Mac any more, so it stays")
                 }
+                guard mine.st_size == there.st_size else { return .failed("This Mac's copy is different now, so it stays") }
+                let report = Self.reporter(for: job, at: index)
                 let expected = known[file.path] ?? Sidecar.hash(for: file.path) ?? (try? DriveMover.hash(file.path, stop: job.stop).hash)
-                guard let expected, let found = try? DriveMover.hash(file.macPath, stop: job.stop, progress: report) else {
+                guard let expected, let found = try? DriveMover.hash(file.macPath, stop: job.stop, progress: { report(.checking, $0, file.bytes) })
+                else {
                     return .failed(job.stop.value ? "Stopped" : "Couldn't read it")
                 }
                 guard found.hash == expected else { return .failed("This Mac's copy is different, so it stays") }
@@ -531,9 +550,33 @@ extension AppModel {
             if file.place == .moved, let note = notes[file.macPath], Cleaner.mayAct(on: note.notePath) { unlink(note.notePath) }
             return .done("In \(file.driveName)'s Trash")
         } after: { job in
-            let done = Set(job.entries.filter { if case .done = $0.step { true } else { false } }.map(\.id))
+            let done = Self.doneIDs(of: job)
             self.driveSelection.removeAll { done.contains($0.path) }
             self.forgetCopies(done)
+        }
+    }
+
+    /// The moved notes this Mac knows of, by where each file was.
+    private var notesByOriginalPath: [String: MovedNote] {
+        Dictionary(movedNotes.map { ($0.originalPath, $0) }, uniquingKeysWith: { a, _ in a })
+    }
+
+    /// One entry of a job for each file.
+    private static func entries(_ files: [DriveFile]) -> [DriveJob.Entry] {
+        files.map { DriveJob.Entry(id: $0.path, title: $0.title, bytes: $0.bytes) }
+    }
+
+    /// The entries of a finished job that went as asked.
+    private static func doneIDs(of job: DriveJob) -> Set<String> {
+        Set(job.entries.filter { if case .done = $0.step { true } else { false } }.map(\.id))
+    }
+
+    /// How far one entry of a job has got, said at most ten times a second: it's reported far more often than that.
+    nonisolated private static func reporter(for job: DriveJob, at index: Int) -> (DriveMover.Progress.Phase, UInt64, UInt64) -> Void {
+        let pace = Pace()
+        return { phase, bytes, size in
+            guard pace.isDue() else { return }
+            Task { @MainActor in job.progress(index, phase: phase, bytes: bytes, of: size) }
         }
     }
 
@@ -541,7 +584,7 @@ extension AppModel {
 
     /// What files on Backup's drive should hash to, by where they are on it now: from the notes of what was moved there, and
     /// Backup's record of what was copied.
-    func expectedHashes() -> [String: String] {
+    private func expectedHashes() -> [String: String] {
         var out: [String: String] = [:]
         for note in movedNotes {
             if let drive = drive(of: note) { out[note.pathOnDrive(mountedAt: drive.mountPath)] = note.sha256 }
@@ -562,7 +605,7 @@ extension AppModel {
     }
 
     /// Forgets copies that are gone from the drive, by where they were on it.
-    func forgetCopies(_ paths: Set<String>) {
+    private func forgetCopies(_ paths: Set<String>) {
         guard let drive = destinationDrive, var copies = backup.copies, !paths.isEmpty else { return }
         let before = copies.count
         copies.removeAll { $0.driveID == drive.id && paths.contains(drive.mountPath + "/" + $0.path) }
@@ -585,7 +628,7 @@ extension AppModel {
         /// When it's for some of what's selected, not all: then it says how many.
         var partial = false
         var id: String { kind.rawValue }
-        var detail: String { (files == 1 ? "1 file" : "\(files) files") + " · " + formatBytes(bytes) }
+        var detail: String { counted(files, "file") + " · " + formatBytes(bytes) }
     }
 
     /// What fits the selection: for files on this Mac, Move, Copy and Keep on Mac; for files picked on the drive's half, Copy
@@ -600,10 +643,14 @@ extension AppModel {
             // What would go now, or while it can't, everything that's selected.
             let going = ready.problem == nil ? ready.items : items
             let goingBytes = going.reduce(UInt64(0)) { $0 &+ $1.bytes }
-            out.append(BackupAction(kind: .move, title: "Move to \(drive)", files: going.count, bytes: goingBytes, blocked: ready.problem,
-                                    partial: going.count < items.count))
-            out.append(BackupAction(kind: .copy, title: "Copy to \(drive)", files: going.count, bytes: goingBytes, blocked: ready.problem,
-                                    partial: going.count < items.count))
+            out.append(
+                BackupAction(
+                    kind: .move, title: "Move to \(drive)", files: going.count, bytes: goingBytes, blocked: ready.problem,
+                    partial: going.count < items.count))
+            out.append(
+                BackupAction(
+                    kind: .copy, title: "Copy to \(drive)", files: going.count, bytes: goingBytes, blocked: ready.problem,
+                    partial: going.count < items.count))
             out.append(BackupAction(kind: .keep, title: "Keep on Mac", files: items.count, bytes: bytes))
         }
         let picks = driveSelection
@@ -611,8 +658,10 @@ extension AppModel {
             let unplugged = destinationDrive == nil ? "Connect \(first.driveName)" : nil
             let back = picks.filter { $0.place == .onlyDrive || $0.place == .moved }
             if !back.isEmpty {
-                out.append(BackupAction(kind: .copyToMac, title: "Copy to Mac", files: back.count, bytes: back.reduce(0) { $0 &+ $1.bytes }, blocked: unplugged,
-                                        partial: back.count < picks.count))
+                out.append(
+                    BackupAction(
+                        kind: .copyToMac, title: "Copy to Mac", files: back.count, bytes: back.reduce(0) { $0 &+ $1.bytes }, blocked: unplugged,
+                        partial: back.count < picks.count))
             }
             let bytes = picks.reduce(UInt64(0)) { $0 &+ $1.bytes }
             out.append(BackupAction(kind: .verify, title: "Verify", files: picks.count, bytes: bytes, blocked: unplugged))
@@ -661,7 +710,7 @@ extension AppModel {
     }
 
     /// Backup's list changed: it's written down, and the ring shows it.
-    func backupChanged() {
+    private func backupChanged() {
         saveBackup()
         planner = nil
         if mode == .backup { refreshRing(.live) }
@@ -700,7 +749,7 @@ extension AppModel {
 
     /// Finds the notes this Mac knows of: the ones it wrote, and any Spotlight knows that were written elsewhere or moved
     /// with their folder. Each is read again, so a note that's gone, or isn't one, drops out.
-    func refreshNotes() {
+    private func refreshNotes() {
         let known = backup.notes
         let scripted = ScriptRunner.path != nil
         Task.detached(priority: .utility) {
@@ -732,16 +781,14 @@ extension AppModel {
         return String(decoding: data, as: UTF8.self).split(separator: "\n").map(String.init).filter(MovedNote.isNote)
     }
 
-    func setShowDriveSide(_ on: Bool) {
-        guard on != showDriveSide else { return }
-        showDriveSide = on
-        if on { setMode(.backup); setView(.map) }
-        applyGhosts()
-    }
+    func setShowDriveSide(_ on: Bool) { setShown(\.showDriveSide, on) }
 
-    func setShowGhosts(_ on: Bool) {
-        guard on != showGhosts else { return }
-        showGhosts = on
+    func setShowGhosts(_ on: Bool) { setShown(\.showGhosts, on) }
+
+    /// Turning on what Backup's map shows takes you there.
+    private func setShown(_ setting: ReferenceWritableKeyPath<AppModel, Bool>, _ on: Bool) {
+        guard on != self[keyPath: setting] else { return }
+        self[keyPath: setting] = on
         if on { setMode(.backup); setView(.map) }
         applyGhosts()
     }
@@ -764,14 +811,9 @@ extension AppModel {
         }
         runNoteJob(.bringBack, title: "Moving back from \(ready[0].driveName)", notes: ready) { note, job, index in
             guard let drive = await self.drive(of: note) else { return .failed("\(note.driveName) isn't connected.") }
-            var last = Date.distantPast
+            let report = Self.reporter(for: job, at: index)
             do {
-                _ = try DriveMover.bringBack(note, from: drive, stop: job.stop) { p in
-                    let now = Date()
-                    guard now.timeIntervalSince(last) > 0.1 else { return }
-                    last = now
-                    Task { @MainActor in job.progress(index, phase: p.phase, bytes: p.bytes, of: p.of) }
-                }
+                _ = try DriveMover.bringBack(note, from: drive, stop: job.stop) { report($0.phase, $0.bytes, $0.of) }
             } catch {
                 return .failed(((error as? DriveMover.Failure) ?? .io(error.localizedDescription)).text)
             }
@@ -784,13 +826,8 @@ extension AppModel {
     func verifyMoved(_ notes: [MovedNote]) {
         guard !isCleaning, !notes.isEmpty else { return }
         runNoteJob(.verify, title: "Verifying", notes: notes) { note, job, index in
-            var last = Date.distantPast
-            let found = DriveMover.verify(note, on: await self.drive(of: note), stop: job.stop) { bytes in
-                let now = Date()
-                guard now.timeIntervalSince(last) > 0.1 else { return }
-                last = now
-                Task { @MainActor in job.progress(index, phase: .checking, bytes: bytes, of: note.size) }
-            }
+            let report = Self.reporter(for: job, at: index)
+            let found = DriveMover.verify(note, on: await self.drive(of: note), stop: job.stop) { report(.checking, $0, note.size) }
             return found == .fine ? .done(found.text) : .failed(found.text)
         }
     }
@@ -815,10 +852,14 @@ extension AppModel {
     }
 
     /// Runs one piece of work per note, one note at a time, and forgets the notes that are gone at the end.
-    private func runNoteJob(_ kind: DriveJob.Kind, title: String, notes: [MovedNote],
-                            work: @escaping @Sendable (MovedNote, DriveJob, Int) async -> DriveJob.Step) {
-        runDriveJob(kind, title: title, driveName: notes[0].driveName,
-                    entries: notes.map { DriveJob.Entry(id: $0.notePath, title: $0.name, bytes: $0.size) }) { index, job in
+    private func runNoteJob(
+        _ kind: DriveJob.Kind, title: String, notes: [MovedNote],
+        work: @escaping @Sendable (MovedNote, DriveJob, Int) async -> DriveJob.Step
+    ) {
+        runDriveJob(
+            kind, title: title, driveName: notes[0].driveName,
+            entries: notes.map { DriveJob.Entry(id: $0.notePath, title: $0.name, bytes: $0.size) }
+        ) { index, job in
             await work(notes[index], job, index)
         } after: { job in
             // Something came back, or its record went: the map is read again for it.
@@ -827,8 +868,10 @@ extension AppModel {
     }
 
     /// Runs one piece of work per entry, one at a time, then reads the notes again, tidies up and says how it went.
-    private func runDriveJob(_ kind: DriveJob.Kind, title: String, driveName: String, entries: [DriveJob.Entry],
-                             work: @escaping @Sendable (Int, DriveJob) async -> DriveJob.Step, after: @escaping @MainActor (DriveJob) -> Void) {
+    private func runDriveJob(
+        _ kind: DriveJob.Kind, title: String, driveName: String, entries: [DriveJob.Entry],
+        work: @escaping @Sendable (Int, DriveJob) async -> DriveJob.Step, after: @escaping @MainActor (DriveJob) -> Void
+    ) {
         dropGhosts()
         let job = DriveJob(kind: kind, title: title, driveName: driveName, entries: entries)
         driveJob = job
@@ -842,11 +885,7 @@ extension AppModel {
                 job.finish(index, step)
             }
             job.end()
-            if quitAfterClean {
-                cleanStoppedForQuit = true
-                quitWhenNothingIsLeft()
-                return
-            }
+            if quitIfWaiting() { return }
             let gone = movedNotes.map(\.notePath).filter { !FileManager.default.fileExists(atPath: $0) }
             if !gone.isEmpty {
                 movedNotes.removeAll { gone.contains($0.notePath) }

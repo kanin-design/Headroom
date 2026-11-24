@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Headroom
 
 /// A screenshot taken with `--hide-names` can end up anywhere, so a path has to say what the ring says and nothing else.
@@ -42,7 +43,10 @@ final class HiddenNamesTests: XCTestCase {
 
     func testNoRealNameGetsThrough() {
         let disk = disk()
-        for path in ["/Volumes/Fake", "/Volumes/Fake/Media/Secret Show", "/Volumes/Fake/Media/Secret Show/Season 13", "/Volumes/Fake/Media/Secret Show/Season 13/secret.episode.mkv"] {
+        for path in [
+            "/Volumes/Fake", "/Volumes/Fake/Media/Secret Show", "/Volumes/Fake/Media/Secret Show/Season 13",
+            "/Volumes/Fake/Media/Secret Show/Season 13/secret.episode.mkv",
+        ] {
             let shown = HiddenNames.madeUp(path: path, in: disk.tree)
             for real in ["Fake", "Media", "Secret", "Season", "episode"] { XCTAssertFalse(shown.contains(real), shown) }
         }

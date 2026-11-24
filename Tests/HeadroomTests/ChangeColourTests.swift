@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Headroom
 
 /// Changes colours each piece by how much of it is new or changed.

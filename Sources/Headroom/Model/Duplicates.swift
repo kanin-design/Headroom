@@ -64,10 +64,12 @@ enum Duplicates {
     }
 
     static func isInsidePackage(_ node: UInt32, tree: DiskTree, rules: RuleBook) -> Bool {
-        tree.isInsidePackage(node, isPackage: { folder in
-            let n = tree.nodes[Int(folder)]
-            return rules.isPackage(UnsafePointer(tree.names + Int(n.nameOffset)), Int(n.nameLength))
-        })
+        tree.isInsidePackage(
+            node,
+            isPackage: { folder in
+                let n = tree.nodes[Int(folder)]
+                return rules.isPackage(UnsafePointer(tree.names + Int(n.nameOffset)), Int(n.nameLength))
+            })
     }
 
     /// How far a search has got, for the panel. Written by the reading threads, read by anyone.
@@ -172,8 +174,10 @@ enum Duplicates {
     }
 
     /// One piece of every file in a group, and the group split by what it says. Groups of one are dropped.
-    private static func splitOnce(_ group: [Int], _ piece: (offset: Int64, length: Int), _ handles: inout [Handle], keepOpen: Bool,
-                                  progress: Progress) -> [[Int]] {
+    private static func splitOnce(
+        _ group: [Int], _ piece: (offset: Int64, length: Int), _ handles: inout [Handle], keepOpen: Bool,
+        progress: Progress
+    ) -> [[Int]] {
         var kinds: [(bytes: UnsafeMutableRawPointer, members: [Int])] = []
         defer { for k in kinds { k.bytes.deallocate() } }
         var spare = UnsafeMutableRawPointer.allocate(byteCount: piece.length, alignment: 16)
@@ -228,7 +232,8 @@ enum Duplicates {
             guard fd >= 0 else { return false }
             var st = stat()
             guard fstat(fd, &st) == 0, st.st_ino == h.inode, st.st_dev == h.device, st.st_size == h.size, st.st_flags & dataless == 0,
-                  st.st_mtimespec.tv_sec == h.changed.tv_sec, st.st_mtimespec.tv_nsec == h.changed.tv_nsec else {
+                st.st_mtimespec.tv_sec == h.changed.tv_sec, st.st_mtimespec.tv_nsec == h.changed.tv_nsec
+            else {
                 close(fd)
                 return false
             }

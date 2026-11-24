@@ -29,7 +29,8 @@ public final class AgentSession {
     func take(_ line: Data, reply: @escaping (Data) -> Void) {
         let parsed = try? JSONSerialization.jsonObject(with: line)
         if let message = parsed as? [String: Any], message["method"] as? String == "initialize", message["jsonrpc"] as? String == "2.0",
-           let id = message["id"], !(id is NSNull) {
+            let id = message["id"], !(id is NSNull)
+        {
             if let answer = greet(id: id, parameters: message["params"] as? [String: Any] ?? [:]) { reply(answer) }
             return
         }
@@ -88,12 +89,14 @@ public final class AgentSession {
     /// The answer to an agent's hello: the protocol version to speak, and what the app is for.
     nonisolated static func greeting(id: Any, parameters: [String: Any], host: AgentHost) -> Data? {
         let asked = parameters["protocolVersion"] as? String
-        return result(id: id, [
-            "protocolVersion": asked.flatMap { versions.contains($0) ? $0 : nil } ?? versions[0],
-            "capabilities": ["tools": [String: Any]()],
-            "serverInfo": ["name": host.name, "version": host.version],
-            "instructions": host.instructions,
-        ])
+        return result(
+            id: id,
+            [
+                "protocolVersion": asked.flatMap { versions.contains($0) ? $0 : nil } ?? versions[0],
+                "capabilities": ["tools": [String: Any]()],
+                "serverInfo": ["name": host.name, "version": host.version],
+                "instructions": host.instructions,
+            ])
     }
 
     nonisolated static func toolList(id: Any, _ tools: [AgentTool]) -> Data? {

@@ -1,7 +1,6 @@
 import AppKit
 import Foundation
 import Metal
-import QuartzCore
 import simd
 
 /// How a change of picture moves.
@@ -31,6 +30,14 @@ public enum RingTransition: Sendable, Equatable {
     public var isInstant: Bool {
         if case .instant = self { return true }
         return false
+    }
+
+    /// The pieces fly to new places: a first picture, or a zoom.
+    var travels: Bool {
+        switch self {
+        case .appear, .zoomIn, .zoomOut: true
+        case .recolor, .live, .settle, .instant: false
+        }
     }
 }
 
@@ -171,8 +178,7 @@ public final class SunburstEngine: @unchecked Sendable {
         var enterMapping: ZoomMapping?
         var exitMapping: ZoomMapping?
         var appearing = false
-        var instant = false
-        if case .instant = transition { instant = true }
+        let instant = transition.isInstant
         switch transition {
         case .appear: appearing = true
         case .zoomIn(let m): exitMapping = m
@@ -180,13 +186,7 @@ public final class SunburstEngine: @unchecked Sendable {
         default: break
         }
         // With Reduce Motion nothing travels: the old picture fades out where it is, and the new one fades in where it ends up.
-        var dissolve = false
-        if reduceMotion {
-            switch transition {
-            case .appear, .zoomIn, .zoomOut: dissolve = true
-            default: break
-            }
-        }
+        let dissolve = reduceMotion && transition.travels
 
         var out: [SegmentGPU] = []
         out.reserveCapacity(new.pieces.count + keys.count / 2)
@@ -229,8 +229,10 @@ public final class SunburstEngine: @unchecked Sendable {
                 from = m.apply(to)
             }
             newIndex[p.key] = index
-            out.append(SegmentGPU(from: from, to: to, colorFrom: colorFrom, colorTo: colorTo, params: SIMD4(p.look, p.seed, p.calm, p.deeper),
-                                  plan: SIMD4(markedFrom, p.marked, p.isShared ? 1 : 0, 0)))
+            out.append(
+                SegmentGPU(
+                    from: from, to: to, colorFrom: colorFrom, colorTo: colorTo, params: SIMD4(p.look, p.seed, p.calm, p.deeper),
+                    plan: SIMD4(markedFrom, p.marked, p.isShared ? 1 : 0, 0)))
             outKeys.append(p.key)
             outParents.append(p.parent)
         }
@@ -263,15 +265,16 @@ public final class SunburstEngine: @unchecked Sendable {
                 }
                 if dissolve { to = g }
                 let leaving = instances[i].plan.x + (instances[i].plan.y - instances[i].plan.x) * colorT
-                out.append(SegmentGPU(from: g, to: to, colorFrom: nowColor, colorTo: SIMD4(nowColor.x, nowColor.y, nowColor.z, 0), params: instances[i].params,
-                                      plan: SIMD4(leaving, leaving, instances[i].plan.z, 0)))
+                out.append(
+                    SegmentGPU(
+                        from: g, to: to, colorFrom: nowColor, colorTo: SIMD4(nowColor.x, nowColor.y, nowColor.z, 0), params: instances[i].params,
+                        plan: SIMD4(leaving, leaving, instances[i].plan.z, 0)))
                 outKeys.append(keys[i])
                 outParents.append(-1)
             }
         }
 
-        var isLive = false
-        if case .live = transition { isLive = true }
+        let isLive = transition.isLive
         var nextNow = [Float](repeating: 0, count: out.count)
         var nextGoal = nextNow
         var nextShareNow = [Float](repeating: 1, count: out.count)
@@ -333,13 +336,16 @@ public final class SunburstEngine: @unchecked Sendable {
     /// across; with `tinted`, only those pieces take it, and the rest keep their own colours.
     @MainActor public func setEmphasis(_ emphasis: RingEmphasis?) {
         let emphasis = emphasis ?? RingEmphasis()
-        setEmphasis(primary: emphasis.primary, related: emphasis.light.full, ancestors: emphasis.light.holding, tint: emphasis.tint,
-                    tinted: emphasis.tinted)
+        setEmphasis(
+            primary: emphasis.primary, related: emphasis.light.full, ancestors: emphasis.light.holding, tint: emphasis.tint,
+            tinted: emphasis.tinted)
     }
 
     /// The same, piece by piece: `primary` lifted, `related` lit whole, `ancestors` lit less.
-    @MainActor public func setEmphasis(primary: Int?, related: [Range<Int>], ancestors: [Int] = [], tint: SIMD3<Float>? = nil,
-                                       tinted: [Range<Int>]? = nil) {
+    @MainActor public func setEmphasis(
+        primary: Int?, related: [Range<Int>], ancestors: [Int] = [], tint: SIMD3<Float>? = nil,
+        tinted: [Range<Int>]? = nil
+    ) {
         lock.lock()
         guard !emphasisGoal.isEmpty else { lock.unlock(); return }
         for i in emphasisGoal.indices { emphasisGoal[i] = 0 }
@@ -511,13 +517,16 @@ public final class SunburstEngine: @unchecked Sendable {
         var pixels = [UInt16](repeating: 0, count: width * height * 4)
         target.getBytes(&pixels, bytesPerRow: width * 8, from: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0)
         guard let linear = CGColorSpace(name: CGColorSpace.extendedLinearDisplayP3), let p3 = CGColorSpace(name: CGColorSpace.displayP3),
-              let provider = CGDataProvider(data: Data(bytes: pixels, count: pixels.count * 2) as CFData),
-              let wide = CGImage(width: width, height: height, bitsPerComponent: 16, bitsPerPixel: 64, bytesPerRow: width * 8, space: linear,
-                                 bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.floatComponents.rawValue
-                                                          | CGBitmapInfo.byteOrder16Little.rawValue),
-                                 provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent),
-              let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: p3,
-                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            let provider = CGDataProvider(data: Data(bytes: pixels, count: pixels.count * 2) as CFData),
+            let wide = CGImage(
+                width: width, height: height, bitsPerComponent: 16, bitsPerPixel: 64, bytesPerRow: width * 8, space: linear,
+                bitmapInfo: CGBitmapInfo(
+                    rawValue: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.floatComponents.rawValue
+                        | CGBitmapInfo.byteOrder16Little.rawValue),
+                provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent),
+            let context = CGContext(
+                data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: p3,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
         else { return nil }
         context.draw(wide, in: CGRect(x: 0, y: 0, width: width, height: height))
         return context.makeImage()
@@ -563,20 +572,12 @@ public final class SunburstEngine: @unchecked Sendable {
         let rise = 1 - exp(-dt * 34), fall = 1 - exp(-dt * 13)
         var emphasisChanged = false
         for i in emphasisNow.indices {
-            let goal = emphasisGoal[i], now = emphasisNow[i]
-            if abs(goal - now) > 0.002 {
-                emphasisNow[i] = now + (goal - now) * (goal > now ? rise : fall)
-                emphasisChanged = true
-            } else if now != goal {
-                emphasisNow[i] = goal
+            if let now = Self.eased(emphasisNow[i], toward: emphasisGoal[i], rise: rise, fall: fall) {
+                emphasisNow[i] = now
                 emphasisChanged = true
             }
-            let shareGoal = tintShareGoal[i], share = tintShareNow[i]
-            if abs(shareGoal - share) > 0.002 {
-                tintShareNow[i] = share + (shareGoal - share) * (shareGoal > share ? rise : fall)
-                emphasisChanged = true
-            } else if share != shareGoal {
-                tintShareNow[i] = shareGoal
+            if let now = Self.eased(tintShareNow[i], toward: tintShareGoal[i], rise: rise, fall: fall) {
+                tintShareNow[i] = now
                 emphasisChanged = true
             }
         }
@@ -585,19 +586,12 @@ public final class SunburstEngine: @unchecked Sendable {
             moving = true
         }
 
-        if abs(dimGoal - dimNow) > 0.002 {
-            dimNow += (dimGoal - dimNow) * (dimGoal > dimNow ? rise : fall)
-            moving = true
-        } else if dimNow != dimGoal {
-            dimNow = dimGoal
+        if let now = Self.eased(dimNow, toward: dimGoal, rise: rise, fall: fall) {
+            dimNow = now
             moving = true
         }
-
-        if abs(tintGoal - tintNow) > 0.002 {
-            tintNow += (tintGoal - tintNow) * (tintGoal > tintNow ? rise : fall)
-            moving = true
-        } else if tintNow != tintGoal {
-            tintNow = tintGoal
+        if let now = Self.eased(tintNow, toward: tintGoal, rise: rise, fall: fall) {
+            tintNow = now
             moving = true
         }
         // From one set to the next, the colour glides as the old set lets go and the new one lights.
@@ -617,23 +611,24 @@ public final class SunburstEngine: @unchecked Sendable {
         }
 
         let ease = 1 - exp(-dt * 13)
-        if abs(calmGoal - calmNow) > 0.002 {
-            calmNow += (calmGoal - calmNow) * ease
-            moving = true
-        } else if calmNow != calmGoal {
-            calmNow = calmGoal
+        if let now = Self.eased(calmNow, toward: calmGoal, rise: ease, fall: ease) {
+            calmNow = now
             moving = true
         }
-
-        if abs(glowGoal - glowNow) > 0.002 {
-            glowNow += (glowGoal - glowNow) * ease
-            moving = true
-        } else if glowNow != glowGoal {
-            glowNow = glowGoal
+        if let now = Self.eased(glowNow, toward: glowGoal, rise: ease, fall: ease) {
+            glowNow = now
             moving = true
         }
 
         return moving
+    }
+
+    /// One frame's step of a value easing toward its goal: `rise` of the way there while it climbs, `fall` while it drops,
+    /// and the goal itself once it's that close. Nil when it's there already.
+    @inline(__always)
+    private static func eased(_ now: Float, toward goal: Float, rise: Float, fall: Float) -> Float? {
+        if abs(goal - now) > 0.002 { return now + (goal - now) * (goal > now ? rise : fall) }
+        return now != goal ? goal : nil
     }
 
     private func uniforms(viewport: CGSize, scale: CGFloat, headroom: CGFloat) -> UniformsGPU {

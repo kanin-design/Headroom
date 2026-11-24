@@ -3,38 +3,38 @@ import Foundation
 
 enum NodeFlag {
     static let directory: UInt16 = 1 << 0
-    static let denied: UInt16 = 1 << 1       // the system refused to open it
-    static let locked: UInt16 = 1 << 2       // skipped until Full Disk Access is granted
-    static let anchor: UInt16 = 1 << 3       // its name is an absolute path, and its display name is stored apart
-    static let synthetic: UInt16 = 1 << 4    // has no path on disk: a group, a sealed volume, free space
-    static let ruleRoot: UInt16 = 1 << 5     // outermost node a rule applies to
-    static let mount: UInt16 = 1 << 6        // mount point, not crossed
-    static let alias: UInt16 = 1 << 7        // its bytes are counted at another path (hard link or clone)
-    static let free: UInt16 = 1 << 8         // the free space piece
-    static let hidden: UInt16 = 1 << 9       // space the scan can't account for
-    static let projects: UInt16 = 1 << 10    // your own folders, not an app, a tool's install or ~/Library
-    static let later: UInt16 = 1 << 11       // read after everything else: build folders and caches
-    static let unread: UInt16 = 1 << 12      // waiting to be read
+    static let denied: UInt16 = 1 << 1  // the system refused to open it
+    static let locked: UInt16 = 1 << 2  // skipped until Full Disk Access is granted
+    static let anchor: UInt16 = 1 << 3  // its name is an absolute path, and its display name is stored apart
+    static let synthetic: UInt16 = 1 << 4  // has no path on disk: a group, a sealed volume, free space
+    static let ruleRoot: UInt16 = 1 << 5  // outermost node a rule applies to
+    static let mount: UInt16 = 1 << 6  // mount point, not crossed
+    static let alias: UInt16 = 1 << 7  // its bytes are counted at another path (hard link or clone)
+    static let free: UInt16 = 1 << 8  // the free space piece
+    static let hidden: UInt16 = 1 << 9  // space the scan can't account for
+    static let projects: UInt16 = 1 << 10  // your own folders, not an app, a tool's install or ~/Library
+    static let later: UInt16 = 1 << 11  // read after everything else: build folders and caches
+    static let unread: UInt16 = 1 << 12  // waiting to be read
     static let incomplete: UInt16 = 1 << 13  // something inside it hasn't been read yet
-    static let shyLinks: UInt16 = 1 << 14    // a link found here doesn't claim the file's bytes
-    static let gone: UInt16 = 1 << 15        // moved to the Trash since this was read
+    static let shyLinks: UInt16 = 1 << 14  // a link found here doesn't claim the file's bytes
+    static let gone: UInt16 = 1 << 15  // moved to the Trash since this was read
 }
 
 /// One folder, or one file big enough to be worth naming. Small files are summed into their folder.
 struct Node {
     var parent: UInt32 = 0
-    var firstChild: UInt32 = 0              // 0 means none: the root is never anyone's child
+    var firstChild: UInt32 = 0  // 0 means none: the root is never anyone's child
     var nextSibling: UInt32 = 0
     var nameOffset: UInt32 = 0
     var nameLength: UInt16 = 0
-    var rule: UInt16 = 0                    // nearest rule at or above this node
-    var ruleState: UInt8 = 0                // position in the path rule table
-    var kind: UInt8 = 0                     // files only
+    var rule: UInt16 = 0  // nearest rule at or above this node
+    var ruleState: UInt8 = 0  // position in the path rule table
+    var kind: UInt8 = 0  // files only
     var flags: UInt16 = 0
-    var fileCount: UInt32 = 0               // files directly inside, big or small
-    var modTime: UInt32 = 0                 // newest file date directly inside, in seconds
-    var bytes: UInt64 = 0                   // small files directly inside, or the file itself
-    var aliasBytes: UInt64 = 0              // links and clones here that are counted elsewhere
+    var fileCount: UInt32 = 0  // files directly inside, big or small
+    var modTime: UInt32 = 0  // newest file date directly inside, in seconds
+    var bytes: UInt64 = 0  // small files directly inside, or the file itself
+    var aliasBytes: UInt64 = 0  // links and clones here that are counted elsewhere
 
     @inline(__always) func has(_ flag: UInt16) -> Bool { flags & flag != 0 }
 }
@@ -48,7 +48,7 @@ extension UInt32 {
 }
 
 /// A block of names. A scan and its pictures share one, and a picture can outlive the block's use by the scan.
-final class NameStore: @unchecked Sendable {
+private final class NameStore: @unchecked Sendable {
     let pointer: UnsafeMutablePointer<UInt8>
     private let capacity: Int
 
@@ -76,8 +76,10 @@ final class DiskTree: @unchecked Sendable {
     static let statRecent91 = Kind.count + 4, statRecent365 = Kind.count + 5
     static let statSymlinks = Kind.count + 6
     /// Each recency field, and how many days back it reaches.
-    static let recency: [(field: Int, days: UInt32)] = [(statRecent1, 1), (statRecent7, 7), (statRecent14, 14), (statRecent30, 30),
-                                                        (statRecent91, 91), (statRecent365, 365)]
+    static let recency: [(field: Int, days: UInt32)] = [
+        (statRecent1, 1), (statRecent7, 7), (statRecent14, 14), (statRecent30, 30),
+        (statRecent91, 91), (statRecent365, 365),
+    ]
 
     let nodes: UnsafeMutablePointer<Node>
     /// One row per node until `compactStats`, and only the different rows after it. Read it through `statRow`.
@@ -283,7 +285,8 @@ final class DiskTree: @unchecked Sendable {
         var placed: [(folder: UInt32, note: MovedNote)] = []
         for note in notes {
             let folder = (note.notePath as NSString).deletingLastPathComponent
-            guard let at = find(path: folder) ?? find(visible: folder), !nodes[Int(at)].has(NodeFlag.gone), nodes[Int(at)].has(NodeFlag.directory) else { continue }
+            guard let at = find(path: folder) ?? find(visible: folder), !nodes[Int(at)].has(NodeFlag.gone), nodes[Int(at)].has(NodeFlag.directory)
+            else { continue }
             placed.append((at, note))
         }
         guard !placed.isEmpty, count + placed.count < Self.capacity else { return nil }
@@ -303,6 +306,8 @@ final class DiskTree: @unchecked Sendable {
             var node = Node()
             node.parent = folder
             node.bytes = note.size
+            // An array's buffer has an address even when it's empty.
+            // swift-format-ignore: NeverForceUnwrap
             node.kind = Array(note.name.utf8).withUnsafeBufferPointer { ExtensionTable.shared.kind(name: $0.baseAddress!, length: $0.count) }
             node.modTime = UInt32(clamping: Int(note.moved.timeIntervalSince1970))
             node.nextSibling = picture.nodes[Int(folder)].firstChild
@@ -519,7 +524,9 @@ final class DiskTree: @unchecked Sendable {
         while true {
             let n = nodes[Int(i)]
             if n.has(NodeFlag.synthetic) { return nil }
-            let raw = i >= ghostBase && ghosts[i] != nil ? rawName(i) : String(decoding: UnsafeBufferPointer(start: names + Int(n.nameOffset), count: Int(n.nameLength)), as: UTF8.self)
+            let raw =
+                i >= ghostBase && ghosts[i] != nil
+                ? rawName(i) : String(decoding: UnsafeBufferPointer(start: names + Int(n.nameOffset), count: Int(n.nameLength)), as: UTF8.self)
             parts.append(raw)
             if n.has(NodeFlag.anchor) { break }
             i = n.parent
@@ -538,9 +545,13 @@ final class DiskTree: @unchecked Sendable {
         if let demo = Demo.home, p == demo || p.hasPrefix(demo + "/") { return "~" + p.dropFirst(demo.count) }
         let home = NSHomeDirectory()
         let dataHome = PathMath.dataVolume + home
-        if PathMath.isInside(p, dataHome) { p = "~" + p.dropFirst(dataHome.count) }
-        else if PathMath.isInside(p, home) { p = "~" + p.dropFirst(home.count) }
-        else { p = PathMath.visible(p) }
+        if PathMath.isInside(p, dataHome) {
+            p = "~" + p.dropFirst(dataHome.count)
+        } else if PathMath.isInside(p, home) {
+            p = "~" + p.dropFirst(home.count)
+        } else {
+            p = PathMath.visible(p)
+        }
         return p
     }
 
@@ -798,7 +809,7 @@ final class DiskTree: @unchecked Sendable {
         numberSubtrees()
     }
 
-    func sortChildren() {
+    private func sortChildren() {
         let n = count
         var scratch: [UInt32] = []
         scratch.reserveCapacity(4096)
@@ -884,7 +895,7 @@ struct LinkRecord {
     var key: UInt64
     var bytes: UInt64
     var dir: UInt32
-    var file: UInt32           // its own node if it was big enough to get one, otherwise 0
+    var file: UInt32  // its own node if it was big enough to get one, otherwise 0
     var when: UInt32
     var kind: UInt8
     var counted: Bool
@@ -927,7 +938,8 @@ final class Mapped<T> {
 func vmAlloc<T>(_ type: T.Type, _ capacity: Int) -> UnsafeMutablePointer<T> {
     let bytes = capacity * MemoryLayout<T>.stride
     guard let p = mmap(nil, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0),
-          p != UnsafeMutableRawPointer(bitPattern: -1) else { fatalError("out of address space") }
+        p != UnsafeMutableRawPointer(bitPattern: -1)
+    else { fatalError("out of address space") }
     return p.bindMemory(to: T.self, capacity: capacity)
 }
 

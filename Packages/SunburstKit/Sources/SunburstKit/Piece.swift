@@ -1,5 +1,3 @@
-import simd
-
 /// One drawn piece of the ring. Pieces are listed depth first: a piece's descendants follow it, up to `end`.
 public struct Piece: Sendable, Equatable {
     /// The node it stands for, or for a "smaller items" piece, the node that holds those items.
@@ -50,9 +48,11 @@ public struct Piece: Sendable, Equatable {
     @inlinable public var isSpace: Bool { !isSmaller && role.isSpace }
 
     @inlinable
-    init(node: UInt32, tail: UInt32, key: UInt64, a0: Float, a1: Float, r0: Float, r1: Float, ring: Int32, parent: Int32, end: Int32,
-         isSmaller: Bool, smallerCount: Int32, color: SIMD3<Float>, role: SunburstRole, isShared: Bool, seed: Float, size: UInt64,
-         marked: Float = 0, isStretch: Bool = false) {
+    init(
+        node: UInt32, tail: UInt32, key: UInt64, a0: Float, a1: Float, r0: Float, r1: Float, ring: Int32, parent: Int32, end: Int32,
+        isSmaller: Bool, smallerCount: Int32, color: SIMD3<Float>, role: SunburstRole, isShared: Bool, seed: Float, size: UInt64,
+        marked: Float = 0, isStretch: Bool = false
+    ) {
         self.node = node
         self.tail = tail
         self.key = key

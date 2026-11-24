@@ -1,14 +1,14 @@
-import AppKit
 import SwiftUI
 
 /// What the question and the list say about an agent.
-enum AgentText {
+private enum AgentText {
     /// The program behind an agent in a list, and who signed it.
     static func originLabel(_ identity: AgentIdentity) -> String {
         identity.programName + "  ·  " + (identity.signer ?? "Unsigned")
     }
 
-    static let whatAllowingMeans = "It can see the names and sizes of your files and folders, and select them for Free Up or Backup. Only you can clean or move them."
+    static let whatAllowingMeans =
+        "It can see the names and sizes of your files and folders, and select them for Free Up or Backup. Only you can clean or move them."
 }
 
 /// Asks about an agent that wants in, one at a time, with the question SunburstAgents asks. It has no size of its own: it
@@ -29,17 +29,19 @@ struct AgentsConnected: View {
     var body: some View {
         let names = Self.names(agents.connected.map(\.identity.name))
         if !names.isEmpty {
-            Button { openWindow(id: "agents") } label: {
+            Button {
+                openWindow(id: "agents")
+            } label: {
                 HStack(spacing: 7) {
                     Circle()
                         .fill(Kit.green)
                         .frame(width: 6, height: 6)
                     Text(names + " connected")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.85))
+                        .font(Kit.Font.name)
+                        .foregroundStyle(Kit.Text.primary)
                         .lineLimit(1)
                 }
-                .padding(.horizontal, 12)
+                .padding(.horizontal, Kit.Space.large)
                 .frame(height: 26)
                 .contentShape(Capsule())
             }
@@ -71,13 +73,13 @@ struct AgentsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             Text("Agents")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.95))
+                .font(Kit.Font.title)
+                .foregroundStyle(Kit.Text.primary)
                 .frame(maxWidth: .infinity)
             if agents.allowed.isEmpty && agents.connected.isEmpty {
                 Text("No agents")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.85))
+                    .font(Kit.Font.note)
+                    .foregroundStyle(Kit.Text.primary)
             }
             if !agents.connected.isEmpty {
                 section("Connected") {
@@ -90,9 +92,10 @@ struct AgentsView: View {
                 section("Allowed") {
                     ForEach(agents.allowed) { one in
                         row(one.identity, detail: one.lastUsed.map { "Last used \(LastUse.ago($0, now: Date()))" } ?? "Not used yet") {
-                            PillPicker(options: [true, false], selection: one.maySelect, title: { $0 ? "Look and select" : "Look only" },
-                                       help: { $0 ? "Let it select files for Free Up and Backup" : "Let it only look" },
-                                       fills: false, height: 22) { agents.setMaySelect(one, $0) }
+                            Segmented(
+                                name: "Access", options: [true, false], selection: one.maySelect, title: { $0 ? "Look and select" : "Look only" },
+                                help: { $0 ? "Let it select files for Free Up and Backup" : "Let it only look" }
+                            ) { agents.setMaySelect(one, $0) }
                             Button("Remove") { agents.remove(one) }
                                 .buttonStyle(.pill)
                                 .help("Take back its access")
@@ -101,18 +104,18 @@ struct AgentsView: View {
                 }
             }
             section("MCP server command") {
-                HStack(spacing: 8) {
+                HStack(spacing: Kit.Space.regular) {
                     Text(AgentDoor.command)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.85))
+                        .font(Kit.Font.detail)
+                        .fontDesign(.monospaced)
+                        .foregroundStyle(Kit.Text.primary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .textSelection(.enabled)
                         .padding(.horizontal, Kit.rowInset)
                         .frame(height: 28)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(RoundedRectangle(cornerRadius: Kit.rowRadius, style: .continuous).fill(Kit.cardFill))
-                        .overlay(RoundedRectangle(cornerRadius: Kit.rowRadius, style: .continuous).strokeBorder(Kit.cardStroke))
+                        .card(radius: Kit.Radius.row)
                     Button(copied ? "Copied" : "Copy") {
                         AppModel.clipboard.clearContents()
                         AppModel.clipboard.setString(AgentDoor.command, forType: .string)
@@ -127,19 +130,19 @@ struct AgentsView: View {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 3) {
                             ForEach(agents.activity.reversed()) { one in
-                                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                HStack(alignment: .firstTextBaseline, spacing: Kit.Space.regular) {
                                     Text(one.date, format: .dateTime.hour().minute().second())
-                                        .foregroundStyle(Kit.tertiary)
+                                        .foregroundStyle(Kit.Text.tertiary)
                                         .monospacedDigit()
                                     Text(one.agent)
-                                        .foregroundStyle(Kit.secondary)
+                                        .foregroundStyle(Kit.Text.tertiary)
                                     Text(one.what)
-                                        .foregroundStyle(.white.opacity(0.82))
+                                        .foregroundStyle(Kit.Text.secondary)
                                         .lineLimit(1)
                                         .truncationMode(.middle)
                                     Spacer(minLength: 0)
                                 }
-                                .font(.system(size: 11))
+                                .font(Kit.Font.detail)
                                 .frame(height: 14)
                             }
                         }
@@ -152,7 +155,7 @@ struct AgentsView: View {
         .padding(.horizontal, 24)
         .padding(.top, 14)
         .padding(.bottom, 24)
-        .frame(width: 460, alignment: .leading)
+        .frame(width: 480, alignment: .leading)
         .containerBackground(Palette.window, for: .window)
         .preferredColorScheme(.dark)
     }
@@ -165,31 +168,30 @@ struct AgentsView: View {
         }
     }
 
-    private func section<Content: View>(_ title: String, @ViewBuilder _ content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.5))
-            content()
-        }
+    private func section<Content: View>(_ title: String, @ViewBuilder _ content: @escaping () -> Content) -> some View {
+        PanelSection(title: title, inset: 0, spacing: Kit.Space.regular, content: content)
     }
 
+    /// Not a `ListRow`: an agent has three lines, its name, its program and when it was last used, and controls at the end.
     private func row<Trailing: View>(_ identity: AgentIdentity, detail: String, @ViewBuilder trailing: () -> Trailing) -> some View {
-        HStack(alignment: .center, spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
+        HStack(alignment: .center, spacing: Kit.rowInset) {
+            VStack(alignment: .leading, spacing: Kit.Space.tight) {
                 Text(identity.name)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.92))
+                    .font(Kit.Font.name)
+                    .foregroundStyle(Kit.Text.primary)
                 Text(AgentText.originLabel(identity))
-                    .font(.system(size: 11))
-                    .foregroundStyle(Kit.secondary)
+                    .font(Kit.Font.detail)
+                    .foregroundStyle(Kit.Text.tertiary)
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .help(identity.program)
                 Text(detail)
-                    .font(.system(size: 11))
-                    .foregroundStyle(Kit.tertiary)
+                    .font(Kit.Font.detail)
+                    .foregroundStyle(Kit.Text.tertiary)
             }
+            // Its words are laid out first; the controls take what's left.
+            .lineLimit(1)
+            .layoutPriority(1)
             Spacer(minLength: 0)
             trailing()
         }

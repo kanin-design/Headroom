@@ -1,6 +1,3 @@
-import AppKit
-import SwiftUI
-
 /// What lights on a chart's ring, and why. Who points is kept in `attention` (`RingAttention`): the pointer on the ring, a
 /// node a name or the app points at, or a node held. Light from outside the ring, a highlight, shows whenever none of them
 /// points at anything in view. Which pieces light for either is the layout's to say (`RingLayout.emphasis`); this hands
@@ -111,7 +108,7 @@ extension SunburstChart {
         hovered = p.node
         pointedEmphasis = emphasis
         labelLight = labelLightNow()
-        tellPointed(SunburstPointed(node: p.node, piece: index, isGathered: p.isSmaller), key: p.key)
+        tellPointed(SunburstPointed(p, at: index), key: p.key)
     }
 
     /// Which names light: the pointed-at piece's, and those of the pieces lit with it.
@@ -173,9 +170,9 @@ extension SunburstChart {
             let layout = engine.layout
             let emphasis: RingEmphasis
             switch highlight {
-            case let .nodes(nodes, primary, tint, gathered):
+            case .nodes(let nodes, let primary, let tint, let gathered):
                 emphasis = layout.emphasis(lighting: nodes, primary: primary, in: tree, gathered: gathered, tint: tint)
-            case let .workedOut(light, tint):
+            case .workedOut(let light, let tint):
                 emphasis = RingEmphasis(light: light(layout), tint: tint)
             }
             highlightShown = (version, emphasis)

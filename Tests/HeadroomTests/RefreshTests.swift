@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Headroom
 
 /// A refresh reads only what the change journal says changed since a map, and copies the rest from it. Whatever changed,
@@ -95,22 +96,31 @@ final class RefreshTests: XCTestCase {
             let n = tree.nodes[i]
             guard let path = tree.path(id) ?? (n.has(NodeFlag.synthetic) ? "piece: " + tree.name(id) : nil) else { continue }
             let row = tree.statRow(id)
-            out[path] = [tree.totals[i], UInt64(tree.totalFiles[i]), tree.aliasTotals[i], n.bytes, n.aliasBytes, UInt64(n.fileCount),
-                         UInt64(n.flags), UInt64(n.modTime), UInt64(n.rule)] + (0..<DiskTree.statStride).map { UInt64(row[$0]) }
+            out[path] =
+                [
+                    tree.totals[i], UInt64(tree.totalFiles[i]), tree.aliasTotals[i], n.bytes, n.aliasBytes, UInt64(n.fileCount),
+                    UInt64(n.flags), UInt64(n.modTime), UInt64(n.rule),
+                ] + (0..<DiskTree.statStride).map { UInt64(row[$0]) }
         }
         return out
     }
 
     private func linkSummary(_ tree: DiskTree) -> Set<String> {
-        Set((tree.links + tree.singleLinks).map { "\($0.key) \(tree.path($0.dir) ?? "?") \($0.file == 0 ? "" : tree.path($0.file) ?? "?") \($0.bytes) \($0.counted)" })
+        Set(
+            (tree.links + tree.singleLinks).map {
+                "\($0.key) \(tree.path($0.dir) ?? "?") \($0.file == 0 ? "" : tree.path($0.file) ?? "?") \($0.bytes) \($0.counted)"
+            })
     }
 
     private func assertSame(_ refreshed: DiskTree, _ read: DiskTree, line: UInt = #line) {
         let a = summary(refreshed), b = summary(read)
         let differences = Set(a.keys).union(b.keys).sorted().filter { a[$0] != b[$0] }
-        XCTAssertTrue(differences.isEmpty, "refreshed and read differ at " + differences.prefix(5).map {
-            "\($0.replacingOccurrences(of: root, with: "…")): \(a[$0].map(String.init(describing:)) ?? "missing") vs \(b[$0].map(String.init(describing:)) ?? "missing")"
-        }.joined(separator: "; "), line: line)
+        XCTAssertTrue(
+            differences.isEmpty,
+            "refreshed and read differ at "
+                + differences.prefix(5).map {
+                    "\($0.replacingOccurrences(of: root, with: "…")): \(a[$0].map(String.init(describing:)) ?? "missing") vs \(b[$0].map(String.init(describing:)) ?? "missing")"
+                }.joined(separator: "; "), line: line)
         XCTAssertEqual(linkSummary(refreshed), linkSummary(read), "the same linked files, counted in the same places", line: line)
         XCTAssertTrue(refreshed.isWhole)
     }

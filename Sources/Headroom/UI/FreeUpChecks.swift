@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 
 /// What the checks found that you should know before cleaning, one line per planned thing.
@@ -10,21 +9,22 @@ struct NeedsALook: View {
         let found = model.plan.items.map { (item: $0, problems: model.problemsToShow(for: $0)) }.filter { !$0.problems.isEmpty }
             .sorted { (model.checks[$0.item.id]?.canGo ?? true ? 1 : 0) < (model.checks[$1.item.id]?.canGo ?? true ? 1 : 0) }
         if !found.isEmpty {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: Kit.Space.tight) {
                 SectionHeading(text: "Needs attention", colour: Kit.amber)
-                    .padding(.top, 8)
+                    .padding(.top, Kit.Space.regular)
                 ForEach(found, id: \.item.id) { one in
                     LookRow(model: model, item: one.item, problems: one.problems)
                 }
             }
-            .padding(.bottom, 4)
-            .background(RoundedRectangle(cornerRadius: Kit.cardRadius, style: .continuous).fill(Kit.amber.opacity(0.08)))
-            .padding(.bottom, 6)
+            .padding(.bottom, Kit.Space.small)
+            .card(Kit.amber.opacity(0.08), hairline: false)
+            .padding(.bottom, Kit.Space.medium)
         }
     }
 }
 
-
+/// One planned thing that needs a look: what's wrong with it, what can be done, and its paths when it's opened. Not a
+/// `ListRow`: what can be done sits on its name's line, and every problem has a line of its own, wrapped, under it.
 private struct LookRow: View {
     let model: AppModel
     let item: PlanItem
@@ -33,29 +33,29 @@ private struct LookRow: View {
     @State private var isOpen = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
+        VStack(alignment: .leading, spacing: Kit.Space.tight) {
+            HStack(alignment: .firstTextBaseline, spacing: Kit.Space.medium) {
                 Text(item.title)
-                    .font(.system(size: 12.5, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.92))
+                    .font(Kit.Font.name)
+                    .foregroundStyle(Kit.Text.primary)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Spacer(minLength: 4)
+                Spacer(minLength: Kit.Space.small)
                 ForEach(Array(problems.enumerated()), id: \.offset) { _, problem in fix(problem) }
                 action("Keep") { model.keep(item: item) }
                     .help("Don't suggest this again")
             }
             ForEach(Array(problems.enumerated()), id: \.offset) { _, problem in
                 Text(problem.text)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(problem.holdsBack ? Kit.amber : .white.opacity(0.62))
+                    .font(Kit.Font.detail.weight(.medium))
+                    .foregroundStyle(problem.holdsBack ? Kit.amber : Kit.Text.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if isOpen { paths }
         }
         .padding(.horizontal, Kit.rowInset)
         .padding(.vertical, 5)
-        .background(RoundedRectangle(cornerRadius: Kit.rowRadius, style: .continuous).fill(.white.opacity(isHovered ? 0.05 : 0)))
+        .background(RoundedRectangle(cornerRadius: Kit.Radius.row, style: .continuous).fill(isHovered ? Kit.Fill.card : .clear))
         .contentShape(Rectangle())
         .onHover { inside in
             isHovered = inside
@@ -97,24 +97,23 @@ private struct LookRow: View {
     }
 
     private var paths: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: Kit.Space.tight) {
             ForEach(item.paths.prefix(30), id: \.self) { path in
                 Text(DiskTree.friendly(path))
-                    .font(.system(size: 10.5, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.6))
+                    .font(Kit.Font.caption)
+                    .fontDesign(.monospaced)
+                    .foregroundStyle(Kit.Text.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .textSelection(.enabled)
             }
             if item.paths.count > 30 {
-                Text("\(item.paths.count - 30) more")
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.white.opacity(0.45))
+                MoreLine(text: "\(item.paths.count - 30) more")
             }
             if !item.excluded.isEmpty {
                 Text("Excluded: \(item.excluded.map { ($0 as NSString).lastPathComponent }.joined(separator: ", "))")
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.white.opacity(0.55))
+                    .font(Kit.Font.caption)
+                    .foregroundStyle(Kit.Text.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }

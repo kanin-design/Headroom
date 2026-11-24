@@ -39,12 +39,12 @@ public struct SunburstParts: Sendable {
     }
 }
 
-public extension SunburstParts {
+extension SunburstParts {
     /// Several wholes that share the circle, such as two disks compared. The root's things are the sides (its room and
     /// what can't be read aren't drawn), each gets an equal share of the circle whatever it holds, and what's in a side
     /// is sized against that side alone. An empty side is still drawn: it says the thing isn't there. Zooming into a side
     /// shows it alone.
-    struct Split: Sendable, Equatable {
+    public struct Split: Sendable, Equatable {
         public enum Look: Sendable, Equatable {
             /// Thin, like a band: the sides frame the rings rather than being one.
             case band
@@ -71,7 +71,7 @@ public extension SunburstParts {
     ///
     /// Around the whole tree, room and what can't be read close the circle after everything else, as wedges that reach out
     /// as far as the rest does on average, so their area is their share.
-    struct Band: Sendable {
+    public struct Band: Sendable {
         /// The order of what's in the band, clockwise from 12 o'clock. Room and what can't be read come last either way.
         public enum Order: Sendable {
             /// Biggest first.
@@ -90,7 +90,7 @@ public extension SunburstParts {
 
     /// The rings of things: one level of the tree deeper each ring, a piece for everything big enough to see, and the rest
     /// gathered into "smaller items" at the end of what holds it.
-    struct Rings: Sendable {
+    public struct Rings: Sendable {
         /// The order of what's in a folder, clockwise.
         public enum Order: Sendable, Equatable {
             /// Biggest first.
@@ -124,8 +124,10 @@ public extension SunburstParts {
         /// in it.
         public var stretchColours: StretchColours
 
-        public init(_ sizes: RingSizes = RingSizes(), order: Order = .bySize, keep: (@Sendable (UInt32) -> Bool)? = nil,
-                    cuts: (@Sendable (UInt32) -> [SunburstStretch]?)? = nil, stretchColours: StretchColours = .folder) {
+        public init(
+            _ sizes: RingSizes = RingSizes(), order: Order = .bySize, keep: (@Sendable (UInt32) -> Bool)? = nil,
+            cuts: (@Sendable (UInt32) -> [SunburstStretch]?)? = nil, stretchColours: StretchColours = .folder
+        ) {
             self.sizes = sizes
             self.order = order
             self.keep = keep
@@ -135,7 +137,7 @@ public extension SunburstParts {
     }
 
     /// The scale just outside the rings: a mark for every 1% of the way round, a longer one for every 10%.
-    struct Dial: Sendable, Equatable {
+    public struct Dial: Sendable, Equatable {
         public enum Counts: Sendable, Equatable {
             /// Around the whole circle.
             case whole

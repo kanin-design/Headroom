@@ -1,5 +1,4 @@
 import AppKit
-import IOSurface
 import Metal
 import QuartzCore
 import SwiftUI
@@ -7,6 +6,13 @@ import SwiftUI
 /// A point on the ring: the angle clockwise from 12 o'clock in radians, and the distance from the middle as a share of the
 /// ring's radius.
 public typealias Polar = (angle: Float, radius: Float)
+
+/// A point `dx` across and `dy` down from the middle of a ring of this radius, in polar form.
+func polarPoint(dx: Float, dy: Float, radius: Float) -> Polar {
+    var angle = atan2(dx, -dy)
+    if angle < 0 { angle += 2 * .pi }
+    return (angle, (dx * dx + dy * dy).squareRoot() / radius)
+}
 
 /// The view that draws an engine's ring. It draws only while something is moving, and it draws on a thread of its own, so
 /// the ring keeps moving whatever the rest of the window is doing. What the pointer and the keys do is up to the host: the
@@ -17,7 +23,11 @@ public typealias Polar = (angle: Float, radius: Float)
 public final class SunburstView: NSView {
     /// What it draws.
     public let engine: SunburstEngine
+    // `makeBackingLayer` makes the layer, always a CAMetalLayer.
+    // swift-format-ignore: NeverForceUnwrap
     private var metalLayer: CAMetalLayer { layer as! CAMetalLayer }
+    // Set in init once the view has its layer, which is only after `super.init`, and never cleared.
+    // swift-format-ignore: NeverUseImplicitlyUnwrappedOptionals
     /// Everything about drawing the ring.
     @_spi(Diagnostics) public private(set) var drawer: RingDrawer!
     private var trackingArea: NSTrackingArea?
@@ -98,10 +108,7 @@ public final class SunburstView: NSView {
         super.init(frame: .zero)
         polar = { [weak engine] p in
             guard let place = engine?.placeNow, place.radius > 0 else { return nil }
-            let dx = Float(p.x) - place.center.x, dy = Float(p.y) - place.center.y
-            var angle = atan2(dx, -dy)
-            if angle < 0 { angle += 2 * .pi }
-            return (angle, (dx * dx + dy * dy).squareRoot() / place.radius)
+            return polarPoint(dx: Float(p.x) - place.center.x, dy: Float(p.y) - place.center.y, radius: place.radius)
         }
         wantsLayer = true
         layerContentsRedrawPolicy = .never
@@ -244,7 +251,8 @@ public final class SunburstView: NSView {
     public override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let trackingArea { removeTrackingArea(trackingArea) }
-        let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
+        let area = NSTrackingArea(
+            rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
         addTrackingArea(area)
         trackingArea = area
     }
@@ -259,7 +267,7 @@ public final class SunburstView: NSView {
             onHoverCovered()
             return
         }
-        onHover(polar(convert(event.locationInWindow, from: nil)))
+        onHover(pointInRing(event))
     }
 
     public override func mouseExited(with event: NSEvent) {
@@ -301,8 +309,9 @@ public final class SunburstView: NSView {
         guard doubleClickWatch == nil else { return }
         doubleClickWatch = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
             guard let self, event.clickCount == 2, let window, event.window === window,
-                  self.convert(event.locationInWindow, from: nil).y < self.titleBarHeight,
-                  window.contentView?.superview?.hitTest(event.locationInWindow) === self else { return event }
+                self.convert(event.locationInWindow, from: nil).y < self.titleBarHeight,
+                window.contentView?.superview?.hitTest(event.locationInWindow) === self
+            else { return event }
             // What you've chosen in System Settings for this. Fill and Zoom both end up filling the screen here.
             switch UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") {
             case "None": break
@@ -387,9 +396,11 @@ public final class SunburstView: NSView {
             // place in it can hold something else by then.
             let node = piece.node, smaller = piece.isSmaller
             element.press = { [weak self] in
-                guard let self, let now = self.engine.layout.pieces.firstIndex(where: {
-                    $0.node == node && $0.isSmaller == smaller && $0.ring == 0
-                }) else { return false }
+                guard let self,
+                    let now = self.engine.layout.pieces.firstIndex(where: {
+                        $0.node == node && $0.isSmaller == smaller && $0.ring == 0
+                    })
+                else { return false }
                 self.onPress(now)
                 return true
             }
@@ -436,7 +447,7 @@ public final class SunburstView: NSView {
 }
 
 /// One piece of the ring, to VoiceOver.
-final class RingPieceElement: NSAccessibilityElement {
+private final class RingPieceElement: NSAccessibilityElement {
     /// False when the piece isn't on the ring any more.
     var press: () -> Bool = { false }
 

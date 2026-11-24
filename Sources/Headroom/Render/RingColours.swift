@@ -20,7 +20,7 @@ final class ColourMemory {
     }
 
     /// Only a finished scan is saved. While a scan is still running, folders get colours in the order they turn up.
-    func saveIfNeeded() {
+    fileprivate func saveIfNeeded() {
         guard unsaved else { return }
         unsaved = false
         let copy = views, target = file
@@ -90,5 +90,5 @@ struct RingColours {
     func lab(_ node: UInt32) -> Lab { branches.lab(node) }
 
     /// A branch under this share of what's in the middle is drawn quiet rather than in a colour of its own.
-    static let quietShare = 0.015
+    private static let quietShare = 0.015
 }

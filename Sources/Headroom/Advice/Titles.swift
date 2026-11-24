@@ -88,14 +88,18 @@ enum Titles {
 
     /// Folders that hold many unrelated things, whatever's in them right now.
     static func isGeneralFolder(_ name: String) -> Bool {
-        ["downloads", "torrents", "complete", "completed", "incomplete", "transmission", "seeding", "media", "movies", "films", "tv", "shows", "series", "video", "videos"].contains(name.lowercased())
+        [
+            "downloads", "torrents", "complete", "completed", "incomplete", "transmission", "seeding", "media", "movies", "films", "tv", "shows",
+            "series", "video", "videos",
+        ].contains(name.lowercased())
     }
 
     /// Whether a file's name ends in a frame number: `shot_00123.png`. A camera numbers its photos the same way, and those
     /// are nothing like frames, so its names don't count.
     static func isNumberedFrame(_ fileName: String) -> Bool {
         let upper = fileName.uppercased()
-        for camera in ["IMG", "DSC", "DSCF", "DSCN", "PXL", "GOPR", "GX0", "MVI", "SAM", "P10", "_DSC", "_MG", "PHOTO", "SCREENSHOT", "SCREEN SHOT"] where upper.hasPrefix(camera) { return false }
+        for camera in ["IMG", "DSC", "DSCF", "DSCN", "PXL", "GOPR", "GX0", "MVI", "SAM", "P10", "_DSC", "_MG", "PHOTO", "SCREENSHOT", "SCREEN SHOT"]
+        where upper.hasPrefix(camera) { return false }
         let stem = (fileName as NSString).deletingPathExtension
         var digits = 0
         for ch in stem.reversed() {
@@ -129,7 +133,7 @@ enum Titles {
         return formatter
     }
 
-    nonisolated(unsafe) private static let thisYear = dayFormatter("MMM d"), anotherYear = dayFormatter("MMM yyyy")
+    private static let thisYear = dayFormatter("MMM d"), anotherYear = dayFormatter("MMM yyyy")
 
     static func dayText(_ date: Date, now: Date = Date()) -> String {
         let sameYear = Calendar.current.isDate(date, equalTo: now, toGranularity: .year)
@@ -169,14 +173,14 @@ enum Bencode {
     private static func value(_ b: [UInt8], _ at: inout Int, depth: Int) -> Value? {
         guard at < b.count, depth < 32 else { return nil }
         switch b[at] {
-        case 0x69: // i123e
+        case 0x69:  // i123e
             at += 1
             var end = at
             while end < b.count, b[end] != 0x65 { end += 1 }
             guard end < b.count, let v = Int(String(decoding: b[at..<end], as: UTF8.self)) else { return nil }
             at = end + 1
             return .int(v)
-        case 0x6C: // list
+        case 0x6C:  // list
             at += 1
             var out: [Value] = []
             while at < b.count, b[at] != 0x65 {
@@ -185,7 +189,7 @@ enum Bencode {
             }
             at += 1
             return .list(out)
-        case 0x64: // dict
+        case 0x64:  // dict
             at += 1
             var out: [String: Value] = [:]
             while at < b.count, b[at] != 0x65 {
@@ -194,10 +198,12 @@ enum Bencode {
             }
             at += 1
             return .dict(out)
-        default: // 4:name
+        default:  // 4:name
             var end = at
             while end < b.count, b[end] != 0x3A { end += 1 }
-            guard end < b.count, let count = Int(String(decoding: b[at..<end], as: UTF8.self)), count >= 0, count <= b.count - end - 1 else { return nil }
+            guard end < b.count, let count = Int(String(decoding: b[at..<end], as: UTF8.self)), count >= 0, count <= b.count - end - 1 else {
+                return nil
+            }
             let start = end + 1
             at = start + count
             return .bytes(Data(b[start..<at]))

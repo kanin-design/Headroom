@@ -20,3 +20,12 @@ of what the owner decided, when and why. The values live in code in one place ea
 Why: the middle of the ring was reworked again and again, each time undoing what was decided before (a share line the
 owner had removed came back; a line made as large as the name was shrunk), because the decisions were only in commit
 messages.
+
+## The code standard is Swift's own linter
+
+Before calling a code change done, run `swift format lint -r --configuration .swift-format Sources/Headroom
+Packages/SunburstKit/Sources Tests`: it must print nothing. `swift format format -i -r` with the same configuration and
+paths fixes the layout. `.swift-format` is the toolchain's defaults with 4-space indents, 150-character lines and no force
+unwraps or `try!`, and it keeps two of the project's habits: a short body on one line with semicolons, and related values
+in one `let`. Where a rule is set aside for one line, the comment above it says why. `.swift-format-ignore` leaves out
+`ShaderSource.swift`, which is generated.

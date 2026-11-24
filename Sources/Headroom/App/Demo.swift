@@ -10,14 +10,15 @@ enum Demo {
     static let home = disks?.first
 
     static func scale(in arguments: [String]) -> UInt64 {
-        guard arguments.contains("--script"), let at = arguments.firstIndex(of: "--demo-scale"), at + 1 < arguments.count,
-              let factor = UInt64(arguments[at + 1]), factor > 1 else { return 1 }
+        guard arguments.contains("--script"), let factor = arguments.value(after: "--demo-scale").flatMap({ UInt64($0) }), factor > 1 else {
+            return 1
+        }
         return factor
     }
 
     static func disks(in arguments: [String]) -> [String]? {
-        guard arguments.contains("--script"), let at = arguments.firstIndex(of: "--demo-disks"), at + 1 < arguments.count else { return nil }
-        let paths = arguments[at + 1].split(separator: ":").map(String.init).filter { !$0.isEmpty }
+        guard arguments.contains("--script"), let list = arguments.value(after: "--demo-disks") else { return nil }
+        let paths = list.split(separator: ":").map(String.init)
         return paths.isEmpty ? nil : paths
     }
 

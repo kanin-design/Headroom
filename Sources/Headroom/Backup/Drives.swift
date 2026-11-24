@@ -37,6 +37,12 @@ struct DriveInfo: Codable, Identifiable, Equatable, Hashable, Sendable {
         }
     }
 
+    /// The file system a path is on, as macOS names it. Nil when it can't be asked.
+    static func fileSystem(at path: String) -> String? {
+        var info = statfs()
+        return statfs(path, &info) == 0 ? info.typeName : nil
+    }
+
     /// On a server, shared over the network, rather than a disk of this Mac's.
     var isNetwork: Bool { ["smbfs", "afpfs", "nfs", "webdav", "cifs"].contains(fileSystem.lowercased()) }
 
@@ -49,9 +55,11 @@ struct DriveInfo: Codable, Identifiable, Equatable, Hashable, Sendable {
         return mountPath == other.mountPath && name == other.name
     }
 
-    private static let keys: [URLResourceKey] = [.volumeLocalizedNameKey, .volumeUUIDStringKey, .volumeTotalCapacityKey,
-                                                 .volumeAvailableCapacityForImportantUsageKey, .volumeAvailableCapacityKey, .volumeIsInternalKey,
-                                                 .volumeIsReadOnlyKey, .volumeIsRootFileSystemKey, .volumeIsBrowsableKey]
+    private static let keys: [URLResourceKey] = [
+        .volumeLocalizedNameKey, .volumeUUIDStringKey, .volumeTotalCapacityKey,
+        .volumeAvailableCapacityForImportantUsageKey, .volumeAvailableCapacityKey, .volumeIsInternalKey,
+        .volumeIsReadOnlyKey, .volumeIsRootFileSystemKey, .volumeIsBrowsableKey,
+    ]
 
     /// The drives connected now, the startup disk first: the ones the Finder lists, a server's shares included.
     static func connected() -> [DriveInfo] {
@@ -76,9 +84,7 @@ struct DriveInfo: Codable, Identifiable, Equatable, Hashable, Sendable {
         var list: UnsafeMutablePointer<statfs>?
         let count = Int(getmntinfo(&list, MNT_NOWAIT))
         guard count > 0, let list else { return nil }
-        let isMounted = (0..<count).contains { i in
-            withUnsafeBytes(of: list[i].f_mntonname) { String(cString: $0.bindMemory(to: CChar.self).baseAddress!) } == mountPath
-        }
+        let isMounted = (0..<count).contains { list[$0].mountedOn == mountPath }
         return isMounted ? info(at: URL(fileURLWithPath: mountPath, isDirectory: true), listedOnly: false) : nil
     }
 
@@ -87,17 +93,31 @@ struct DriveInfo: Codable, Identifiable, Equatable, Hashable, Sendable {
         guard let values = try? url.resourceValues(forKeys: Set(keys)), !listedOnly || values.volumeIsBrowsable != false else { return nil }
         var disk = statfs()
         guard statfs(url.path, &disk) == 0 else { return nil }
-        let type = withUnsafeBytes(of: disk.f_fstypename) { String(cString: $0.bindMemory(to: CChar.self).baseAddress!) }
+        let type = disk.typeName
         // Images and system parts macOS mounts for itself aren't drives anyone picks.
         if ["devfs", "autofs", "nullfs"].contains(type) { return nil }
         let isRoot = values.volumeIsRootFileSystem == true || url.path == "/"
         // What's free for something you want to keep. On APFS that counts space macOS would clear for it; other file systems
         // only say what's free, and some say nothing at all here, so the file system's own count is the floor.
-        let free = max(UInt64(max(values.volumeAvailableCapacityForImportantUsage ?? 0, 0)), UInt64(max(values.volumeAvailableCapacity ?? 0, 0)),
-                       UInt64(disk.f_bavail) * UInt64(disk.f_bsize))
-        return DriveInfo(name: values.volumeLocalizedName ?? url.lastPathComponent, mountPath: isRoot ? "/" : url.path, uuid: values.volumeUUIDString,
-                         fileSystem: type, capacity: UInt64(max(values.volumeTotalCapacity ?? 0, 0)), free: free,
-                         isInternal: values.volumeIsInternal ?? isRoot, isReadOnly: values.volumeIsReadOnly ?? false, isBoot: isRoot)
+        let free = max(
+            UInt64(max(values.volumeAvailableCapacityForImportantUsage ?? 0, 0)), UInt64(max(values.volumeAvailableCapacity ?? 0, 0)),
+            UInt64(disk.f_bavail) * UInt64(disk.f_bsize))
+        return DriveInfo(
+            name: values.volumeLocalizedName ?? url.lastPathComponent, mountPath: isRoot ? "/" : url.path, uuid: values.volumeUUIDString,
+            fileSystem: type, capacity: UInt64(max(values.volumeTotalCapacity ?? 0, 0)), free: free,
+            isInternal: values.volumeIsInternal ?? isRoot, isReadOnly: values.volumeIsReadOnly ?? false, isBoot: isRoot)
+    }
+}
+
+extension statfs {
+    /// The file system as macOS names it: apfs, exfat, hfs, msdos.
+    var typeName: String { Self.text(f_fstypename) }
+    /// Where it's mounted.
+    var mountedOn: String { Self.text(f_mntonname) }
+
+    /// A name in a field of fixed size: up to its first zero byte, or the field's end.
+    private static func text<Field>(_ field: Field) -> String {
+        withUnsafeBytes(of: field) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
     }
 }
 

@@ -66,7 +66,9 @@ struct UpdateView: View {
                     .help("Install and relaunch Headroom")
             }
         case .downloading(let release, let received):
-            heading("Downloading \(Updater.name(of: release))", "\(formatBytes(UInt64(max(received, 0)))) of \(formatBytes(UInt64(max(release.size, 0))))")
+            heading(
+                "Downloading \(Updater.name(of: release))", "\(formatBytes(UInt64(max(received, 0)))) of \(formatBytes(UInt64(max(release.size, 0))))"
+            )
             ProgressView(value: Double(received), total: Double(max(release.size, 1)))
                 .progressViewStyle(.linear)
                 .padding(.top, 18)
@@ -96,34 +98,32 @@ struct UpdateView: View {
     private func heading(_ title: String, _ detail: String) -> some View {
         VStack(spacing: 5) {
             Text(title)
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.95))
+                .font(Kit.Font.title)
+                .foregroundStyle(Kit.Text.primary)
             Text(detail)
-                .font(.system(size: 12).monospacedDigit())
-                .foregroundStyle(.white.opacity(0.6))
+                .font(Kit.Font.body.monospacedDigit())
+                .foregroundStyle(Kit.Text.secondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.top, 12)
+        .padding(.top, Kit.Space.large)
     }
 
     /// The notes' list of what's new, on glass. A long list scrolls rather than stretching the window.
     private func whatsNew(_ release: Updater.Release) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("What's new")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.5))
+            VStack(alignment: .leading, spacing: Kit.rowInset) {
+                SectionHeading(text: "What's new", inset: 0)
                 ForEach(Array(release.whatsNew.enumerated()), id: \.offset) { _, thing in
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    HStack(alignment: .firstTextBaseline, spacing: Kit.Space.regular) {
                         Text("•")
-                            .foregroundStyle(.white.opacity(0.4))
+                            .foregroundStyle(Kit.Text.quaternary)
                         Text(Self.markdown(thing))
-                            .foregroundStyle(.white.opacity(0.82))
+                            .foregroundStyle(Kit.Text.primary)
                             .lineSpacing(2.5)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    .font(.system(size: 12.5))
+                    .font(Kit.Font.body)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -131,12 +131,12 @@ struct UpdateView: View {
         }
         .frame(maxHeight: 230)
         .fixedSize(horizontal: false, vertical: true)
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: Kit.Radius.pane, style: .continuous))
         .padding(.top, 20)
     }
 
     private func buttons<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-        HStack(spacing: 10) { content() }
+        HStack(spacing: Kit.rowInset) { content() }
             .controlSize(.large)
             .padding(.top, 22)
     }

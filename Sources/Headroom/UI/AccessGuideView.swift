@@ -12,26 +12,26 @@ struct AccessGuideView: View {
             Image(nsImage: NSApp.applicationIconImage)
                 .resizable()
                 .frame(width: 84, height: 84)
-            VStack(spacing: 6) {
+            VStack(spacing: Kit.Space.medium) {
                 Text("Allow Full Disk Access")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.95))
+                    .font(Kit.Font.title)
+                    .foregroundStyle(Kit.Text.primary)
                 Text(why)
-                    .font(.system(size: 12).monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.62))
+                    .font(Kit.Font.body)
+                    .foregroundStyle(Kit.Text.secondary)
                     .multilineTextAlignment(.center)
                     .lineSpacing(2)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(.top, 12)
+            .padding(.top, Kit.Space.large)
             steps
             Text("Nothing about your disk leaves your Mac.")
-                .font(.system(size: 11))
-                .foregroundStyle(.white.opacity(0.45))
+                .font(Kit.Font.detail)
+                .foregroundStyle(Kit.Text.tertiary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 14)
-            HStack(spacing: 10) {
+                .padding(.top, Kit.Space.section)
+            HStack(spacing: Kit.rowInset) {
                 Button("Not now") { notNow() }
                     .buttonStyle(.glass)
                     .help("Hide until the next version")
@@ -61,27 +61,27 @@ struct AccessGuideView: View {
     private let why = "Required to scan Desktop, Documents, Downloads, Mail, Messages and other app data. Without it, Headroom reads nothing."
 
     private var steps: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: Kit.Space.large) {
             step(1, "Open System Settings › Privacy & Security › Full Disk Access.")
             step(2, "Turn on Headroom. If it's already on, turn it off and on again. If it's not listed, click + and add it.")
             step(3, "If asked, click Quit & Reopen. The scan starts by itself.")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: Kit.Radius.pane, style: .continuous))
         .padding(.top, 20)
     }
 
     private func step(_ number: Int, _ text: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
+        HStack(alignment: .firstTextBaseline, spacing: Kit.rowInset) {
             Text("\(number)")
-                .font(.system(size: 11, weight: .semibold).monospacedDigit())
-                .foregroundStyle(.white.opacity(0.85))
+                .font(Kit.Font.label.monospacedDigit())
+                .foregroundStyle(Kit.Text.primary)
                 .frame(width: 20, height: 20)
-                .background(.white.opacity(0.12), in: Circle())
+                .background(Kit.Fill.control, in: Circle())
             Text(text)
-                .font(.system(size: 12.5))
-                .foregroundStyle(.white.opacity(0.82))
+                .font(Kit.Font.body)
+                .foregroundStyle(Kit.Text.primary)
                 .lineSpacing(2.5)
                 .fixedSize(horizontal: false, vertical: true)
         }

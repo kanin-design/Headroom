@@ -5,14 +5,14 @@
 /// (`pointedPiece(in:tree:)`), so what's pointed at stays lit while the pieces move under it.
 struct RingAttention {
     /// Where the pointer is over the ring, if it is.
-    private(set) var pointer: Polar?
+    private var pointer: Polar?
     /// A node pointed at from outside the ring: by a name, or by the app for a row in a list.
-    private(set) var pointed: UInt32?
+    private var pointed: UInt32?
     /// A node kept lit whenever nothing else is pointed at.
-    private(set) var held: UInt32?
+    private var held: UInt32?
     /// Whether the pointer on the ring was the last to point. Then something drawn over the ring taking the pointer puts the
     /// light out; what a name or the app lit stays.
-    private(set) var isThePointers = true
+    private var isThePointers = true
 
     /// The pointer moved over the ring, or left it (nil). It takes over from whatever else pointed.
     mutating func pointerMoved(to point: Polar?) {

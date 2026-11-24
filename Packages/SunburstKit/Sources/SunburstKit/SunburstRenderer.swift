@@ -1,8 +1,6 @@
 import Foundation
-import ImageIO
 import Metal
 import os
-import simd
 
 struct SegmentGPU {
     var from: SIMD4<Float>
@@ -10,7 +8,7 @@ struct SegmentGPU {
     var colorFrom: SIMD4<Float>
     var colorTo: SIMD4<Float>
     var params: SIMD4<Float>
-    var plan: SIMD4<Float> = .zero      // marked at the start of the transition, marked at the end, and whether it's shared
+    var plan: SIMD4<Float> = .zero  // marked at the start of the transition, marked at the end, and whether it's shared
 }
 
 struct UniformsGPU {
@@ -23,15 +21,15 @@ struct UniformsGPU {
     var liftPixels: Float = 0
     var bloom: Float = 1
     var headroom: Float = 1
-    var hideScale: Float = 0        // 1 leaves out the scale around the ring
+    var hideScale: Float = 0  // 1 leaves out the scale around the ring
     var restSaturation: Float = 1
     var glowAtRest: Float = 1
-    var minLit: Float = 0           // points: the least a lit piece is drawn across while a tint shows
-    var layer: Float = 0            // which pieces this pass draws: 0 the ones at rest, 1 the lit, 2 the lifted, 3 the one on top
-    var litAbove: Float = 1         // how lit a piece has to be to count as lit, for that
-    var top: Float = -1             // the piece pointed at, which lies over all the others; -1 when there's none
-    var dither: Float = 1           // 1 adds the pixel of noise that keeps dark gradients smooth, 0 leaves it out
-    var dialSides: Float = 1        // how many wholes the scale counts across: 1 for the circle, 2 for two sides each 0...100%
+    var minLit: Float = 0  // points: the least a lit piece is drawn across while a tint shows
+    var layer: Float = 0  // which pieces this pass draws: 0 the ones at rest, 1 the lit, 2 the lifted, 3 the one on top
+    var litAbove: Float = 1  // how lit a piece has to be to count as lit, for that
+    var top: Float = -1  // the piece pointed at, which lies over all the others; -1 when there's none
+    var dither: Float = 1  // 1 adds the pixel of noise that keeps dark gradients smooth, 0 leaves it out
+    var dialSides: Float = 1  // how many wholes the scale counts across: 1 for the circle, 2 for two sides each 0...100%
     var tint: SIMD4<Float> = .zero  // the colour lit pieces take on, and in w how much
 }
 
@@ -39,14 +37,14 @@ struct UniformsGPU {
 /// how many there are, and a transition only updates one number per frame.
 @_spi(Diagnostics) public final class SunburstRenderer {
     let device: MTLDevice
-    private let queue: MTLCommandQueue
+    let commandQueue: MTLCommandQueue
     private let segmentPipeline: MTLRenderPipelineState
     private let downPipeline: MTLRenderPipelineState
     private let upPipeline: MTLRenderPipelineState
     private let compositePipeline: MTLRenderPipelineState
     private let narrowCompositePipeline: MTLRenderPipelineState?
 
-    static let hdrFormat: MTLPixelFormat = .rgba16Float
+    private static let hdrFormat: MTLPixelFormat = .rgba16Float
     /// The picture on screen, when the screen can show more than white: the glow goes up to whatever the screen allows.
     public static let outputFormat: MTLPixelFormat = .rgba16Float
     /// The same picture in half the memory, for a screen that can go little or not at all past white. The ring never draws
@@ -62,7 +60,7 @@ struct UniformsGPU {
 
     private var instanceBuffer: MTLBuffer
     private var emphasisBuffer: MTLBuffer
-    private(set) var instanceCount = 0
+    private var instanceCount = 0
     private var emphasisSlot = 0
     private var emphasisOffset = 0
     private var tintSharesOffset = 0
@@ -78,7 +76,7 @@ struct UniformsGPU {
     init?(device: MTLDevice? = nil, shaders url: URL? = nil) {
         guard let device = device ?? MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else { return nil }
         self.device = device
-        self.queue = queue
+        commandQueue = queue
         queue.label = "ring"
         let given = url.flatMap { try? String(contentsOf: $0, encoding: .utf8) }
         if url != nil, given == nil { return nil }
@@ -89,6 +87,8 @@ struct UniformsGPU {
             d.vertexFunction = library.makeFunction(name: vertex)
             d.fragmentFunction = library.makeFunction(name: fragment)
             for target in 0..<targets {
+                // Metal has a descriptor for each of a pipeline's colour targets, and this draws to at most two.
+                // swift-format-ignore: NeverForceUnwrap
                 let a = d.colorAttachments[target]!
                 a.pixelFormat = format
                 if blended {
@@ -104,12 +104,12 @@ struct UniformsGPU {
             return try? device.makeRenderPipelineState(descriptor: d)
         }
         guard let seg = pipeline("segment_vertex", "segment_fragment", format: Self.hdrFormat, blended: true, targets: 2),
-              let down = pipeline("quad_vertex", "blur_down", format: Self.hdrFormat, blended: false),
-              let up = pipeline("quad_vertex", "blur_up", format: Self.hdrFormat, blended: false),
-              let comp = pipeline("quad_vertex", "composite", format: Self.outputFormat, blended: false),
-              // Both are replaced by ones of the right size as soon as there's something to draw.
-              let instances = device.makeBuffer(length: MemoryLayout<SegmentGPU>.stride, options: .storageModeShared),
-              let emphasis = device.makeBuffer(length: 3 * 2 * MemoryLayout<Float>.stride, options: .storageModeShared)
+            let down = pipeline("quad_vertex", "blur_down", format: Self.hdrFormat, blended: false),
+            let up = pipeline("quad_vertex", "blur_up", format: Self.hdrFormat, blended: false),
+            let comp = pipeline("quad_vertex", "composite", format: Self.outputFormat, blended: false),
+            // Both are replaced by ones of the right size as soon as there's something to draw.
+            let instances = device.makeBuffer(length: MemoryLayout<SegmentGPU>.stride, options: .storageModeShared),
+            let emphasis = device.makeBuffer(length: 3 * 2 * MemoryLayout<Float>.stride, options: .storageModeShared)
         else { return nil }
         segmentPipeline = seg
         downPipeline = down
@@ -153,6 +153,8 @@ struct UniformsGPU {
             guard let bigger = device.makeBuffer(length: needed * 2, options: .storageModeShared) else { return }
             emphasisBuffer = bigger
         }
+        // Not empty: the guard at the top.
+        // swift-format-ignore: NeverForceUnwrap
         let made = instances.withUnsafeBytes { raw in device.makeBuffer(bytes: raw.baseAddress!, length: raw.count, options: .storageModeShared) }
         guard let made else { return }
         instanceBuffer = made
@@ -172,9 +174,12 @@ struct UniformsGPU {
         emphasisSlot = (emphasisSlot + 1) % 3
         emphasisOffset = emphasisSlot * place
         tintSharesOffset = emphasisOffset + bytes
+        // Neither is empty: the guard at the top.
+        // swift-format-ignore: NeverForceUnwrap
         values.withUnsafeBytes { raw in
             (emphasisBuffer.contents() + emphasisOffset).copyMemory(from: raw.baseAddress!, byteCount: bytes)
         }
+        // swift-format-ignore: NeverForceUnwrap
         tintShares.withUnsafeBytes { raw in
             (emphasisBuffer.contents() + tintSharesOffset).copyMemory(from: raw.baseAddress!, byteCount: bytes)
         }
@@ -222,7 +227,8 @@ struct UniformsGPU {
 
     /// For a check: what each texture takes, and what the GPU holds for this app in all.
     func allocations() -> String {
-        let named = [("pieces", piecesTexture), ("glow", glowTexture)] + levels.enumerated().map { ("level \($0.offset + 1)", $0.element as MTLTexture?) }
+        let named =
+            [("pieces", piecesTexture), ("glow", glowTexture)] + levels.enumerated().map { ("level \($0.offset + 1)", $0.element as MTLTexture?) }
         let each = named.compactMap { name, texture in
             texture.map { "\(name) \($0.width)x\($0.height) \(String(format: "%.1f", Double($0.allocatedSize) / 1_048_576)) MB" }
         }
@@ -237,12 +243,17 @@ struct UniformsGPU {
         guard isResting else { return }
         isResting = false
         var lost = false
-        for texture in [piecesTexture, glowTexture].compactMap({ $0 }) + levels where texture.setPurgeableState(.nonVolatile) == .empty { lost = true }
+        for texture in [piecesTexture, glowTexture].compactMap({ $0 }) + levels where texture.setPurgeableState(.nonVolatile) == .empty {
+            lost = true
+        }
         // Their memory was taken, so they're made again. That only happens when the Mac is short of it.
         if lost { piecesTexture = nil }
     }
 
-    private func pass(_ commands: MTLCommandBuffer, target: MTLTexture, also second: MTLTexture? = nil, clear: Bool = false, _ body: (MTLRenderCommandEncoder) -> Void) {
+    private func pass(
+        _ commands: MTLCommandBuffer, target: MTLTexture, also second: MTLTexture? = nil, clear: Bool = false,
+        _ body: (MTLRenderCommandEncoder) -> Void
+    ) {
         let d = MTLRenderPassDescriptor()
         for (index, texture) in [target, second].compactMap({ $0 }).enumerated() {
             d.colorAttachments[index].texture = texture
@@ -330,6 +341,4 @@ struct UniformsGPU {
             e.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         }
     }
-
-    var commandQueue: MTLCommandQueue { queue }
 }

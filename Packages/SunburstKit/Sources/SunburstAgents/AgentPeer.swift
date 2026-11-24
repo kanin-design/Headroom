@@ -87,13 +87,15 @@ enum AgentPeer {
         var code: SecCode?
         let attributes = [kSecGuestAttributePid: pid] as CFDictionary
         guard SecCodeCopyGuestWithAttributes(nil, attributes, [], &code) == errSecSuccess, let code,
-              SecCodeCheckValidity(code, [], nil) == errSecSuccess else { return nil }
+            SecCodeCheckValidity(code, [], nil) == errSecSuccess
+        else { return nil }
         var onDisk: SecStaticCode?
         guard SecCodeCopyStaticCode(code, [], &onDisk) == errSecSuccess, let onDisk else { return nil }
         var info: CFDictionary?
         guard SecCodeCopySigningInformation(onDisk, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
-              let facts = info as? [String: Any],
-              let certificates = facts[kSecCodeInfoCertificates as String] as? [SecCertificate], let leaf = certificates.first else { return nil }
+            let facts = info as? [String: Any],
+            let certificates = facts[kSecCodeInfoCertificates as String] as? [SecCertificate], let leaf = certificates.first
+        else { return nil }
         return SecCertificateCopySubjectSummary(leaf) as String?
     }
 

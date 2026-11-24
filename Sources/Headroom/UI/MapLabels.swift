@@ -51,7 +51,8 @@ struct HeadroomNames: SunburstNamer {
                 if let i = layout.nearestPiece(to: row.node, tree: tree), !candidates.contains(where: { $0.index == i }) {
                     // What grew has a plus. What's gone untouched is just how much.
                     let sign = model.changeWindow.isUntouched ? "" : "+"
-                    candidates.append(Candidate(index: i, title: row.title, value: sign + formatBytes(UInt64(max(row.delta, 0))), score: Double(row.delta)))
+                    candidates.append(
+                        Candidate(index: i, title: row.title, value: sign + formatBytes(UInt64(max(row.delta, 0))), score: Double(row.delta)))
                 }
             }
         case .copies:
@@ -59,11 +60,15 @@ struct HeadroomNames: SunburstNamer {
                 // Pointing at a set: where each of its copies is, and which one stays, as pointing at a box names its things. A row
                 // of many files in the same folders names the folders.
                 let byFolder = group.files > 1 || (group.kind != .duplicate && group.keepers.count > 1)
-                let nodes = byFolder ? (group.homes.isEmpty ? [group.home] : group.homes) + group.others : (group.kind == .duplicate ? group.keepers + group.extras : group.nodes)
+                let nodes =
+                    byFolder
+                    ? (group.homes.isEmpty ? [group.home] : group.homes) + group.others
+                    : (group.kind == .duplicate ? group.keepers + group.extras : group.nodes)
                 let parents = nodes.map { tree.nodes[Int($0)].parent }
                 let shown = Array(nodes.prefix(10))
                 // Where each one is, said so that no two read the same.
-                let places = CopiesMap.places(shown.map { tree.nodes[Int($0)].has(NodeFlag.directory) ? $0 : tree.nodes[Int($0)].parent }, in: tree, short: true)
+                let places = CopiesMap.places(
+                    shown.map { tree.nodes[Int($0)].has(NodeFlag.directory) ? $0 : tree.nodes[Int($0)].parent }, in: tree, short: true)
                 for (at, node) in shown.enumerated() where node != 0 {
                     // Copies too small to show apart, or side by side, can share a piece of the ring: each still gets its own name.
                     guard let i = layout.nearestPiece(to: node, tree: tree) else { continue }
@@ -74,15 +79,20 @@ struct HeadroomNames: SunburstNamer {
                     let beside = !isFolder && parents.filter { $0 == n.parent }.count > 1
                     let title = beside ? model.displayName(node) : places[at]
                     let stays = node == group.home || group.homes.contains(node) || group.keepers.contains(node)
-                    let bytes = byFolder ? group.extras.filter { tree.nodes[Int($0)].parent == node }.reduce(UInt64(0)) { $0 &+ tree.nodes[Int($1)].bytes } : n.bytes
-                    let value = switch group.kind {
-                    case .duplicate: stays ? "keep" : formatBytes(bytes)
-                    case .sameFile: "hardlink"
-                    case .sharedCopy: "clone"
-                    case .alias, .broken: stays ? "target" : "symlink"
-                    }
-                    candidates.append(Candidate(index: i, title: title, value: value, score: Double(bytes) + (stays ? 1e15 : 0),
-                                                salt: UInt64(node) &* 0x9E37_79B9_7F4A_7C15))
+                    let bytes =
+                        byFolder
+                        ? group.extras.filter { tree.nodes[Int($0)].parent == node }.reduce(UInt64(0)) { $0 &+ tree.nodes[Int($1)].bytes } : n.bytes
+                    let value =
+                        switch group.kind {
+                        case .duplicate: stays ? "keep" : formatBytes(bytes)
+                        case .sameFile: "hardlink"
+                        case .sharedCopy: "clone"
+                        case .alias, .broken: stays ? "target" : "symlink"
+                        }
+                    candidates.append(
+                        Candidate(
+                            index: i, title: title, value: value, score: Double(bytes) + (stays ? 1e15 : 0),
+                            salt: UInt64(node) &* 0x9E37_79B9_7F4A_7C15))
                 }
             } else {
                 // The biggest sets, named at the copy to keep. Hardlinks, clones and symlinks take no extra space, so they're
@@ -97,15 +107,19 @@ struct HeadroomNames: SunburstNamer {
             // Things spread over many places are lit up from the panel. A line to just one of them would mislead.
             let bar = Double(max(tree.capacityBytes, 1)) * 0.002
             // What's in use lately is folded away in the list, so it doesn't take up a name here unless it's planned.
-            for row in model.shownRows.sorted(by: { $0.gain > $1.gain }).prefix(40) where row.action != .restart && row.action != .softwareUpdate && row.nodes.count <= 3 && Double(row.gain) >= bar
-                && !(row.inUse != nil && row.tier <= .rebuilds && model.rowStates[row.id] == TickState.none) {
+            for row in model.shownRows.sorted(by: { $0.gain > $1.gain }).prefix(40)
+            where row.action != .restart && row.action != .softwareUpdate && row.nodes.count <= 3 && Double(row.gain) >= bar
+                && !(row.inUse != nil && row.tier <= .rebuilds && model.rowStates[row.id] == TickState.none)
+            {
                 let biggest = row.nodes.max { tree.totals[Int($0)] < tree.totals[Int($1)] }
                 if let biggest, let i = layout.nearestPiece(to: biggest, tree: tree), !candidates.contains(where: { $0.index == i }) {
                     candidates.append(Candidate(index: i, title: row.title, value: formatBytes(row.gain), score: Double(row.gain)))
                 }
             }
             // What's been moved is on its way out through here.
-            if let after = model.afterClean, after.state == .waiting, let trash = model.trashNode(in: tree), let i = layout.nearestPiece(to: trash, tree: tree) {
+            if let after = model.afterClean, after.state == .waiting, let trash = model.trashNode(in: tree),
+                let i = layout.nearestPiece(to: trash, tree: tree)
+            {
                 candidates.removeAll { $0.index == i }
                 candidates.insert(Candidate(index: i, title: "In the Trash", value: tree.sizeText(trash), score: .greatestFiniteMagnitude), at: 0)
             }
@@ -116,7 +130,6 @@ struct HeadroomNames: SunburstNamer {
     /// A name just outside a piece that's already named would say nearly the same thing. Not a copy's: each is a place of
     /// its own, however near the others it is.
     var leavesOutRepeats: Bool { !(lens == .copies && model.pointedCopyGroup != nil) }
-
 }
 
 /// The names around the ring, from the chart, each at the side with the menu of what it names.
@@ -186,7 +199,7 @@ final class Island: NSView {
 }
 
 /// The middle of the ring: the one number that matters, until you point at something else. It fills the room it's given.
-struct CenterReadout: View {
+private struct CenterReadout: View {
     let model: AppModel
 
     var body: some View {
@@ -218,8 +231,10 @@ struct CenterReadout: View {
 
     /// Every state puts its parts in the same places (`CentreGrid`), so nothing moves with the pointer or with what's
     /// written: the icon, the name's room, the number and the lines under it are each placed on their own.
-    private func slots<Above: View, Below: View>(_ size: CGFloat, icon: CentreIcon? = nil, number: some View,
-                                                 @ViewBuilder above: () -> Above, @ViewBuilder below: () -> Below) -> some View {
+    private func slots<Above: View, Below: View>(
+        _ size: CGFloat, icon: CentreIcon? = nil, number: some View,
+        @ViewBuilder above: () -> Above, @ViewBuilder below: () -> Below
+    ) -> some View {
         let g = CentreGrid(u: size), mid = size / 2
         return ZStack {
             if let icon {
@@ -246,8 +261,9 @@ struct CenterReadout: View {
     /// number is about something else.
     private func bigNumber(_ bytes: UInt64, size: CGFloat, color: Color = .white, sign: String = "", about: AnyHashable) -> some View {
         // Changes has a sign in front, so its number keeps room for one whatever it shows.
-        SunburstNumber(sign + formatBytes(bytes), size: bytes, diameter: size, color: color,
-                       widest: model.view == .changes ? "−8.88 MB" : "8.88 MB", about: about)
+        SunburstNumber(
+            sign + formatBytes(bytes), size: bytes, diameter: size, color: color,
+            widest: model.view == .changes ? "−8.88 MB" : "8.88 MB", about: about)
     }
 
     /// Free space is on screen from the first frame, because the disk itself reports it.
@@ -293,8 +309,12 @@ struct CenterReadout: View {
         let picked = model.backup.items.count + model.driveSelection.count
         let pickedBytes = model.backupBytes &+ model.driveSelection.reduce(UInt64(0)) { $0 &+ $1.bytes }
         let blue = Kit.blue
-        return slots(size, number: bigNumber(picked > 0 ? pickedBytes : pair.macBytes, size: size, color: picked > 0 ? blue : .white,
-                                             about: picked > 0 ? "picked" : "on this Mac")) {
+        return slots(
+            size,
+            number: bigNumber(
+                picked > 0 ? pickedBytes : pair.macBytes, size: size, color: picked > 0 ? blue : .white,
+                about: picked > 0 ? "picked" : "on this Mac")
+        ) {
             // At the top of the disk, no name: the disk selector names it, as on the Map.
             if pair.realFolder != 0 {
                 Text(pair.folderName)
@@ -315,8 +335,7 @@ struct CenterReadout: View {
         }
     }
 
-    /// In Changes the middle says how much free space changed, from the scan it compares with, or else how much was
-    /// touched, going by file dates.
+    /// What changed, in the Changes view's colours: grown, shrunk, or gone untouched.
     private func changeColour(shrank: Bool) -> Color {
         if model.changeWindow.isUntouched { return Palette.untouched.swiftUI }
         return shrank ? Palette.cool.swiftUI : Palette.grew.swiftUI
@@ -348,6 +367,8 @@ struct CenterReadout: View {
         }
     }
 
+    /// In Changes the middle says how much free space changed, from the scan it compares with, or else how much was
+    /// touched, going by file dates.
     private func changesContent(size: CGFloat) -> some View {
         let window = model.changeWindow
         let when = window == .lastScan ? "since the last scan" : "in the last \(window.title)"

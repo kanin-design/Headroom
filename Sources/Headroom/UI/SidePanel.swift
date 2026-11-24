@@ -1,5 +1,3 @@
-import AppKit
-import Charts
 import SwiftUI
 
 /// The inspector beside the map: the mode's panel, or what a search found. In Changes, the time to compare with sits on
@@ -49,84 +47,19 @@ struct PanelTitle: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title)
-                .font(.system(size: 19, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.96))
+                .font(Kit.Font.title)
+                .foregroundStyle(Kit.Text.primary)
                 .lineLimit(2)
                 .truncationMode(.middle)
                 .clickToCopy(copyTitle, help: "Click to copy the name")
             if let subtitle {
                 Text(subtitle)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(.white.opacity(0.5))
+                    .font(Kit.Font.detail)
+                    .foregroundStyle(Kit.Text.tertiary)
                     .lineLimit(2)
                     .truncationMode(.middle)
                     .clickToCopy(copySubtitle, help: "Click to copy the path")
             }
-        }
-    }
-}
-
-/// A row in any list: name, where it is, how big, and a hairline showing its share.
-struct NodeRow: View {
-    let title: String
-    let subtitle: String?
-    let value: String
-    let share: Double
-    let color: Color
-    var valueColor: Color = .white.opacity(0.82)
-    /// Where the keyboard is, in a list you can walk through.
-    var isLit = false
-    /// A list with no sizes to compare, such as aliases, has no bar.
-    var showsBar = true
-    let onHover: (Bool) -> Void
-    let onTap: () -> Void
-    @State private var isHovered = false
-
-    var body: some View {
-        Button(action: onTap) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 9) {
-                    Circle()
-                        .fill(color)
-                        .frame(width: 7, height: 7)
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text(title)
-                            .font(.system(size: 12.5, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.92))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        if let subtitle, !subtitle.isEmpty {
-                            Text(subtitle)
-                                .font(.system(size: 10.5))
-                                .foregroundStyle(.white.opacity(0.45))
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        }
-                    }
-                    Spacer(minLength: 6)
-                    Text(value)
-                        .font(.system(size: 12, weight: .medium).monospacedDigit())
-                        .foregroundStyle(valueColor)
-                }
-                if showsBar {
-                    GeometryReader { g in
-                        Capsule()
-                            .fill(color.opacity(0.75))
-                            .frame(width: max(g.size.width * min(share, 1), 2), height: 2)
-                    }
-                    .frame(height: 2)
-                    .padding(.leading, 16)
-                }
-            }
-            .padding(.horizontal, Kit.rowInset)
-            .padding(.vertical, 6)
-            .background(RoundedRectangle(cornerRadius: Kit.rowRadius, style: .continuous).fill(.white.opacity(isHovered || isLit ? 0.075 : 0)))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { inside in
-            isHovered = inside
-            onHover(inside)
         }
     }
 }
@@ -152,7 +85,7 @@ struct DeleteMenu: View {
 
 // MARK: Changes
 
-struct ChangesWindow: View {
+private struct ChangesWindow: View {
     let model: AppModel
 
     private var windows: [ChangeWindow] { [.lastScan, .days(1), .days(7), .days(30)] }
@@ -160,32 +93,34 @@ struct ChangesWindow: View {
     private var untouched: Bool { model.changeWindow.isUntouched }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            picker(windows)
-            HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: Kit.Space.medium) {
+            picker(windows, name: "Changed in")
+            HStack(spacing: Kit.Space.regular) {
                 PickerLabel(text: "Untouched")
                     .padding(.leading, Kit.rowInset)
-                picker(ChangeWindow.untouchedWindows)
+                picker(ChangeWindow.untouchedWindows, name: "Untouched for")
             }
             scale
                 .padding(.leading, Kit.rowInset)
-                .padding(.top, 2)
+                .padding(.top, Kit.Space.tight)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, Kit.panelInset)
         .padding(.top, 12)
         .padding(.bottom, 10)
     }
 
     /// Both rows choose the one window: each lights only when it's one of its own.
-    private func picker(_ windows: [ChangeWindow]) -> some View {
-        PillPicker(options: windows, selection: model.changeWindow, title: \.title) { model.setChangeWindow($0) }
+    private func picker(_ windows: [ChangeWindow], name: String) -> some View {
+        Segmented(name: name, options: windows, selection: model.changeWindow, title: \.title) { model.setChangeWindow($0) }
     }
 
     /// The ring's colours as a scale, taken from the ring itself: how much of each piece is new or changed, or untouched. None
     /// of it stays quiet, as on the ring, and the first sliver fades in from there; the bar gives that its own short stretch
     /// at the start, because on the ring it all happens in the first percent.
     private var scale: some View {
-        let colour: (Double) -> Color = untouched
+        let colour: (Double) -> Color =
+            untouched
             ? { Lenses.untouchedLab(untouched: UInt64($0 * 1e9), bytes: 1_000_000_000).swiftUI }
             : { Lenses.changeLab(delta: Int64($0 * 1e9), bytes: 1_000_000_000).swiftUI }
         let fade = 0.08
@@ -203,38 +138,58 @@ struct ChangesWindow: View {
                 .shadow(color: colour(0.8).opacity(0.4), radius: 3)
             Text("100%")
         }
-        .font(.system(size: 10.5, weight: .medium).monospacedDigit())
-        .foregroundStyle(.white.opacity(0.5))
+        .font(Kit.Font.caption.weight(.medium).monospacedDigit())
+        .foregroundStyle(Kit.Text.tertiary)
     }
 }
 
 // MARK: Search
 
-struct SearchPanel: View {
+private struct SearchPanel: View {
     let model: AppModel
 
     private func open(_ node: UInt32) { model.openFromList(node) }
 
+    /// How many, and where: in the folder in view, or on the map when small files are listed under it too.
+    private static func title(_ model: AppModel) -> String {
+        let count = model.searchResults.count.formatted()
+        if let folder = model.searchFolderName { return "\(count) in \(folder)" }
+        return "\(count) \(model.searchesSmallFiles ? "on the map" : "found")"
+    }
+
     var body: some View {
         if let tree = model.tree {
             ScrollView {
-                VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: Kit.rowInset) {
                     // Like the list on the Map, it says when there's more than it shows.
-                    PanelTitle(title: "\(model.searchResults.count.formatted()) found",
-                               subtitle: model.searchResults.count > 120 ? "Top 120 shown" : nil)
-                        .padding(.horizontal, Kit.rowInset)
+                    PanelTitle(
+                        title: Self.title(model),
+                        subtitle: model.searchResults.count > 120 ? "Top 120 shown" : nil
+                    )
+                    .padding(.horizontal, Kit.rowInset)
                     let top = model.searchResults.prefix(120)
                     let biggest = Double(max(top.first.map { tree.totals[Int($0)] } ?? 1, 1))
                     LazyVStack(spacing: 0) {
                         ForEach(top, id: \.self) { node in
                             let n = tree.nodes[Int(node)]
-                            NodeRow(title: tree.name(node), subtitle: tree.path(n.parent).map(DiskTree.friendly), value: formatBytes(tree.totals[Int(node)]),
-                                    share: Double(tree.totals[Int(node)]) / biggest,
-                                    color: Palette.color(tree.dominantKind(node)).swiftUI,
-                                    onHover: { inside in if inside { model.highlight(node: node) } else { model.highlight(nodes: Array(model.searchResults.prefix(400))) } },
-                                    onTap: { open(node) })
-                                .named(NamedThing(node), in: model)
+                            let colour = Palette.color(tree.dominantKind(node)).swiftUI
+                            ListRow(
+                                title: tree.name(node), detail: tree.path(n.parent).map(DiskTree.friendly).flatMap { $0.isEmpty ? nil : $0 },
+                                trailing: formatBytes(tree.totals[Int(node)]),
+                                markWidth: ListDot.size, share: (Double(tree.totals[Int(node)]) / biggest, colour),
+                                onHover: { inside in
+                                    if inside { model.highlight(node: node) } else { model.highlight(nodes: Array(model.searchResults.prefix(400))) }
+                                },
+                                onTap: { open(node) }
+                            ) {
+                                ListDot(colour: colour)
+                            }
+                            .named(NamedThing(node), in: model)
                         }
+                    }
+                    if model.searchesSmallFiles {
+                        SmallFilesFound(model: model, tree: tree)
+                            .padding(.top, Kit.Space.large)
                     }
                 }
                 .padding(Kit.panelInset)
@@ -242,5 +197,62 @@ struct SearchPanel: View {
             .scrollEdgeEffectStyle(.soft, for: .all)
             .scrollIndicators(.never)
         }
+    }
+}
+
+/// What the search found among the small files, apart from what's on the map. They aren't on it, so each row lights and
+/// opens its folder.
+private struct SmallFilesFound: View {
+    let model: AppModel
+    let tree: DiskTree
+
+    var body: some View {
+        let found = model.smallFound
+        // None found says so under the heading, so it has no count.
+        let trailing = model.smallFilesGap == nil ? found.flatMap { $0.count == 0 ? nil : Self.counted($0) } : nil
+        PanelSection(title: "Small Files", trailing: trailing, help: "Files under 1 MiB, too small to be on the map") {
+            switch model.smallFilesGap {
+            case .onDrive:
+                EmptyNote(title: "Only on the Mac", detail: "Small files on the drive aren't searched")
+            case .notRead:
+                EmptyNote(title: model.isScanning ? "Waiting for the scan" : "Not read yet", detail: model.isScanning ? nil : "Scan Again reads them")
+            case nil:
+                if let found { rows(found) }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func rows(_ found: SmallFileResults) -> some View {
+        if found.count == 0 { EmptyNote(title: "None found") }
+        let biggest = Double(max(found.top.first?.bytes ?? 1, 1))
+        LazyVStack(spacing: 0) {
+            ForEach(found.top, id: \.self) { file in
+                let colour = Palette.color(file.kind).swiftUI
+                ListRow(
+                    title: file.name, detail: DiskTree.friendly(file.folderPath), trailing: formatBytes(file.bytes),
+                    markWidth: ListDot.size, share: (Double(file.bytes) / biggest, colour),
+                    onHover: { inside in
+                        if inside {
+                            model.highlight(node: file.onScreen)
+                        } else {
+                            model.highlight(nodes: Array(model.searchResults.prefix(400)))
+                        }
+                    },
+                    onTap: { model.openFromList(file.onScreen) }
+                ) {
+                    ListDot(colour: colour)
+                }
+                .contextMenu {
+                    Button("Open") { model.open(file) }
+                    Button("Show in Finder") { model.reveal(file) }
+                    Button("Copy Path") { model.copyPath(of: file) }
+                }
+            }
+        }
+    }
+
+    private static func counted(_ found: SmallFileResults) -> String {
+        found.count > SmallFiles.shown ? "\(found.count.formatted()) found · top \(SmallFiles.shown)" : "\(found.count.formatted()) found"
     }
 }

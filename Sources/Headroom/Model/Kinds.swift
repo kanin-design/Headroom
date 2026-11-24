@@ -2,7 +2,8 @@ import Foundation
 
 /// What a byte is. In the Map view, this is what colour means.
 enum Kind: UInt8, CaseIterable {
-    case other = 0, video, audio, image, document, code, app, archive, model, cache, system
+    case other = 0
+    case video, audio, image, document, code, app, archive, model, cache, system
 
     static let count = Kind.allCases.count
 
@@ -40,7 +41,10 @@ struct ExtensionTable {
             (.audio, "mp3 wav aiff aif flac m4a aac ogg opus caf alac wma mid midi"),
             (.image, "jpg jpeg png gif heic heif webp tiff tif bmp raw cr2 cr3 nef arw dng psd ai svg exr hdr tga icns ico"),
             (.document, "pdf doc docx ppt pptx xls xlsx pages numbers key txt md rtf csv tsv epub mobi tex log jsonl ndjson parquet"),
-            (.code, "swift c h cc cpp hpp m mm py js jsx ts tsx mjs cjs rs go java kt kts rb php html css scss json yaml yml toml xml sh zsh metal glsl wgsl sql lock map pyc o a class"),
+            (
+                .code,
+                "swift c h cc cpp hpp m mm py js jsx ts tsx mjs cjs rs go java kt kts rb php html css scss json yaml yml toml xml sh zsh metal glsl wgsl sql lock map pyc o a class"
+            ),
             (.app, "dylib so dll framework app exe appex kext bundle wasm jar aab apk ipa pak asar car nib"),
             (.archive, "zip tar gz tgz bz2 xz 7z rar dmg pkg iso img sparsebundle sparseimage qcow2 vdi vmdk zst"),
             (.model, "safetensors gguf ggml ckpt pt pth onnx mlmodel mlpackage mlmodelc tflite npz h5 pb"),
@@ -71,7 +75,7 @@ struct ExtensionTable {
         var shift: UInt64 = 0
         while i >= stop {
             let c = name[i]
-            if c == 0x2E {                                      // '.'
+            if c == 0x2E {  // '.'
                 if key == 0 || i == 0 { return 0 }
                 var slot = Self.hash(key)
                 while keys[slot] != 0 {

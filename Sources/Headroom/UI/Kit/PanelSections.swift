@@ -1,36 +1,44 @@
 import SwiftUI
 
-/// A section's name over what's in it, and on the right, how many or how much. Its text starts where rows' text does.
+/// A section's name over what's in it, and on the right, how many or how much. In the inspector its text starts where rows'
+/// text does; in a small window, at the window's edge.
 struct SectionHeading: View {
     let text: String
     var trailing: String? = nil
-    var colour: Color = .white.opacity(0.5)
+    var colour: Color = Kit.Text.tertiary
+    var inset: CGFloat = Kit.rowInset
+    /// What the name means, where it needs saying, for pointing at it.
+    var help: String? = nil
 
     var body: some View {
         HStack {
             Text(text)
-                .font(.system(size: 11, weight: .semibold))
+                .font(Kit.Font.label)
                 .foregroundStyle(colour)
+                .help(help ?? "")
             Spacer()
             if let trailing {
                 Text(trailing)
-                    .font(.system(size: 11).monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.5))
+                    .font(Kit.Font.detail.monospacedDigit())
+                    .foregroundStyle(Kit.Text.tertiary)
             }
         }
-        .padding(.horizontal, Kit.rowInset)
+        .padding(.horizontal, inset)
     }
 }
 
-/// A titled group in a panel: the heading, then what's in it.
+/// A titled group in a panel or a small window: the heading, then what's in it.
 struct PanelSection<Content: View>: View {
     let title: String
     var trailing: String? = nil
+    var inset: CGFloat = Kit.rowInset
+    var spacing: CGFloat = Kit.Space.small
+    var help: String? = nil
     @ViewBuilder let content: () -> Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            SectionHeading(text: title, trailing: trailing)
+        VStack(alignment: .leading, spacing: spacing) {
+            SectionHeading(text: title, trailing: trailing, inset: inset, help: help)
             content()
         }
     }
@@ -44,19 +52,19 @@ struct EmptyNote: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.white.opacity(0.85))
+                .font(Kit.Font.note)
+                .foregroundStyle(Kit.Text.primary)
                 .fixedSize(horizontal: false, vertical: true)
             if let detail {
                 Text(detail)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(.white.opacity(0.5))
+                    .font(Kit.Font.detail)
+                    .foregroundStyle(Kit.Text.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, Kit.rowInset)
-        .padding(.vertical, 6)
+        .padding(.vertical, Kit.Space.medium)
     }
 }
 
@@ -75,29 +83,29 @@ struct Fold<Content: View>: View {
     private var open: Bool { isOpen?.wrappedValue ?? openHere }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: Kit.Space.small) {
             Button {
                 Motion.animate(.snappy(duration: 0.22)) {
                     if let isOpen { isOpen.wrappedValue.toggle() } else { openHere.toggle() }
                 }
             } label: {
-                HStack(spacing: 6) {
-                    DisclosureChevron(isOpen: open, size: 9)
-                        .foregroundStyle(.white.opacity(0.5))
+                HStack(spacing: Kit.Space.medium) {
+                    DisclosureChevron(isOpen: open)
+                        .foregroundStyle(Kit.Text.tertiary)
                         .frame(width: 10)
                     Text(title)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.7))
+                        .font(Kit.Font.strong)
+                        .foregroundStyle(Kit.Text.secondary)
                     if let count {
                         Text(count)
-                            .font(.system(size: 11).monospacedDigit())
-                            .foregroundStyle(.white.opacity(0.45))
+                            .font(Kit.Font.detail.monospacedDigit())
+                            .foregroundStyle(Kit.Text.tertiary)
                     }
                     Spacer()
                     if let trailing {
                         Text(trailing)
-                            .font(.system(size: 11.5, weight: .medium).monospacedDigit())
-                            .foregroundStyle(.white.opacity(0.5))
+                            .font(Kit.Font.detail.monospacedDigit())
+                            .foregroundStyle(Kit.Text.tertiary)
                     }
                 }
                 .contentShape(Rectangle())
@@ -110,25 +118,37 @@ struct Fold<Content: View>: View {
     }
 }
 
-/// One line in a fold of kept things: what it is, and the way to have it suggested again.
+/// The line under a list that was cut short: how many more there are.
+struct MoreLine: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(Kit.Font.caption)
+            .foregroundStyle(Kit.Text.tertiary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 3)
+    }
+}
+
+/// One line in a fold of kept things: what it is, and the way to have it suggested again. Not a `ListRow`: it has no mark
+/// and no value, only a path and a button.
 struct KeptLine: View {
     let title: String
     let again: () -> Void
 
-    private static let font = NSFont.systemFont(ofSize: 11.5)
-
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: Kit.Space.regular) {
             // Often a path: cut between its folders, never inside a name.
-            FittedText(forms: ListNames.folderForms(title), font: Self.font)
-                .foregroundStyle(.white.opacity(0.65))
-                .padding(.trailing, 12)
+            FittedText(forms: ListNames.folderForms(title), font: FittedText.detail)
+                .foregroundStyle(Kit.Text.secondary)
+                .padding(.trailing, Kit.Space.large)
             Button("Suggest again", action: again)
                 .buttonStyle(.pill(nil, size: .small))
         }
-        .padding(.leading, Kit.rowInset + 16)
+        .padding(.leading, Kit.rowInset + Kit.markSlot)
         .padding(.trailing, Kit.rowInset)
-        .padding(.vertical, 1)
+        .padding(.vertical, Kit.Space.hairline)
     }
 }
 
@@ -137,8 +157,8 @@ struct BarChrome: ViewModifier {
     func body(content: Content) -> some View {
         content
             .padding(.horizontal, Kit.panelInset)
-            .padding(.vertical, 14)
+            .padding(.vertical, Kit.Space.section)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.white.opacity(0.03))
+            .background(Kit.Fill.bar)
     }
 }

@@ -1,6 +1,7 @@
 import Darwin
-import XCTest
 @_spi(Diagnostics) import SunburstAgents
+import XCTest
+
 @testable import Headroom
 
 /// Headroom's side of the agents' way in: what Headroom tells them, its tools and what they read, and that none of it can
@@ -28,8 +29,12 @@ final class AgentTests: XCTestCase {
         XCTAssertEqual(host.tools.map(\.name), AgentLook.tools.map(\.name))
         XCTAssertEqual(host.tools.map(\.selects), AgentLook.tools.map(\.selects))
 
-        let reply = try await ask(session(), ["jsonrpc": "2.0", "id": 1, "method": "initialize",
-                                              "params": ["protocolVersion": "2025-03-26", "clientInfo": ["name": "test-agent", "version": "9"]]])
+        let reply = try await ask(
+            session(),
+            [
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": ["protocolVersion": "2025-03-26", "clientInfo": ["name": "test-agent", "version": "9"]],
+            ])
         let result = try XCTUnwrap(reply?["result"] as? [String: Any])
         XCTAssertEqual((result["serverInfo"] as? [String: Any])?["name"] as? String, "Headroom")
         XCTAssertEqual((result["serverInfo"] as? [String: Any])?["version"] as? String, "1.2.3")
@@ -50,15 +55,20 @@ final class AgentTests: XCTestCase {
         host.folder = folder
         let door = AgentServer.makeDoor(host) { call in .json(["answered": call.tool]) }
         door.patience = .milliseconds(50)
-        func call(_ session: AgentSession, _ id: Int, _ tool: String, _ arguments: [String: Any] = [:]) async throws -> (text: String?, isError: Bool?) {
-            let result = try await ask(session, ["jsonrpc": "2.0", "id": id, "method": "tools/call", "params": ["name": tool, "arguments": arguments]])?["result"] as? [String: Any]
+        func call(
+            _ session: AgentSession, _ id: Int, _ tool: String, _ arguments: [String: Any] = [:]
+        ) async throws -> (text: String?, isError: Bool?) {
+            let result =
+                try await ask(session, ["jsonrpc": "2.0", "id": id, "method": "tools/call", "params": ["name": tool, "arguments": arguments]])?[
+                    "result"] as? [String: Any]
             return ((result?["content"] as? [[String: Any]])?.first?["text"] as? String, result?["isError"] as? Bool)
         }
         let agent = door.session(program: "/Applications/Test.app", signer: nil)
         _ = try await ask(agent, ["jsonrpc": "2.0", "id": 0, "method": "initialize", "params": ["clientInfo": ["name": "Test Agent"]]])
 
         let waiting = try await call(agent, 1, "overview")
-        XCTAssertEqual(waiting.text, "Waiting for the user to allow this agent. Headroom is asking in its window: ask the user to answer there, then try again.")
+        XCTAssertEqual(
+            waiting.text, "Waiting for the user to allow this agent. Headroom is asking in its window: ask the user to answer there, then try again.")
         XCTAssertEqual(waiting.isError, true)
 
         door.agents.answer(try XCTUnwrap(door.agents.requests.first), .lookOnly)
@@ -67,7 +77,8 @@ final class AgentTests: XCTestCase {
         XCTAssertEqual(looked.isError, false)
         for tool in AgentLook.tools.filter(\.selects).map(\.name) {
             let refused = try await call(agent, 3, tool, ["paths": ["/x"], "reason": "test"])
-            XCTAssertEqual(refused.text, "The user allowed this agent to look only. They can change that in Headroom, under Agents in the app menu.", tool)
+            XCTAssertEqual(
+                refused.text, "The user allowed this agent to look only. They can change that in Headroom, under Agents in the app menu.", tool)
         }
 
         door.agents.setMaySelect(door.agents.allowed[0], true)
@@ -84,12 +95,20 @@ final class AgentTests: XCTestCase {
     func testEveryToolIsListedAndNoneOfThemRemovesAnything() async throws {
         let reply = try await ask(session(), ["jsonrpc": "2.0", "id": 1, "method": "tools/list"])
         let tools = try XCTUnwrap((reply?["result"] as? [String: Any])?["tools"] as? [[String: Any]])
-        XCTAssertEqual(tools.compactMap { $0["name"] as? String },
-                       ["overview", "check", "list_suggestions", "list_duplicates", "get_plan", "select", "select_suggestions", "deselect", "show", "switch_disk",
-                        "get_backup", "select_for_backup", "deselect_for_backup", "set_backup_drive", "verify_moved", "wait_for_backup", "wait_for_clean"])
-        XCTAssertEqual(AgentLook.tools.filter(\.selects).map(\.name),
-                       ["select", "select_suggestions", "deselect", "show", "switch_disk", "select_for_backup", "deselect_for_backup", "set_backup_drive", "verify_moved"],
-                       "these need more than looking")
+        XCTAssertEqual(
+            tools.compactMap { $0["name"] as? String },
+            [
+                "overview", "check", "list_suggestions", "list_duplicates", "get_plan", "select", "select_suggestions", "deselect", "show",
+                "switch_disk",
+                "get_backup", "select_for_backup", "deselect_for_backup", "set_backup_drive", "verify_moved", "wait_for_backup", "wait_for_clean",
+            ])
+        XCTAssertEqual(
+            AgentLook.tools.filter(\.selects).map(\.name),
+            [
+                "select", "select_suggestions", "deselect", "show", "switch_disk", "select_for_backup", "deselect_for_backup", "set_backup_drive",
+                "verify_moved",
+            ],
+            "these need more than looking")
         // An agent looks at the disk with its own tools. Headroom is where it marks, not where it browses.
         for word in ["list_folder", "search", "find"] { XCTAssertFalse(tools.contains { $0["name"] as? String == word }) }
         for tool in tools {
@@ -108,7 +127,8 @@ final class AgentTests: XCTestCase {
     func testNothingAnAgentCanReachCanRemoveAnything() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let sources = root.appendingPathComponent("Sources/Headroom")
-        let headroom = try FileManager.default.contentsOfDirectory(at: sources.appendingPathComponent("Agents"), includingPropertiesForKeys: nil)
+        let headroom =
+            try FileManager.default.contentsOfDirectory(at: sources.appendingPathComponent("Agents"), includingPropertiesForKeys: nil)
             + [sources.appendingPathComponent("Model/AppModel+Agents.swift"), sources.appendingPathComponent("UI/AgentsView.swift")]
         // Every Swift file in the door's folder and any folder in it: its documentation is beside the code, and isn't code.
         let doorFolder = root.appendingPathComponent("Packages/SunburstKit/Sources/SunburstAgents")
@@ -119,12 +139,14 @@ final class AgentTests: XCTestCase {
         XCTAssertTrue(door.contains { $0.lastPathComponent == "AgentSocket.swift" })
         XCTAssertTrue(door.contains { $0.lastPathComponent == "AgentDoor.swift" })
         // Every way the app has of taking something off the disk, out of the Trash, or back again.
-        let removes = ["cleanNow(", "emptyNow(", "sendToTrash(", "sendAnyway(", "undoClean(", "undoCommand(", "putBack(", "takeCopies(", "leaveInTrash(",
-                       "deleteForGood(", "deleteFromTrash(", "replaceCopy(", "copyAndVerify(", "Cleaner.trash(", "Cleaner.run", "trashContents(",
-                       "removeItem(", "trashItem(", "moveItem(", "performClick", "cleanAnyway",
-                       // Backup's: moving, copying, bringing back and deleting from a drive are the user's clicks too.
-                       "runBackup(", "bringBack(", "deleteLastCopy(", "copyToMac(", "deleteFromDrive(", "DriveMover.send(", "DriveMover.copy(",
-                       "unlink(", "rename("]
+        let removes = [
+            "cleanNow(", "emptyNow(", "sendToTrash(", "sendAnyway(", "undoClean(", "undoCommand(", "putBack(", "takeCopies(", "leaveInTrash(",
+            "deleteForGood(", "deleteFromTrash(", "replaceCopy(", "copyAndVerify(", "Cleaner.trash(", "Cleaner.run", "trashContents(",
+            "removeItem(", "trashItem(", "moveItem(", "performClick", "cleanAnyway",
+            // Backup's: moving, copying, bringing back and deleting from a drive are the user's clicks too.
+            "runBackup(", "bringBack(", "deleteLastCopy(", "copyToMac(", "deleteFromDrive(", "DriveMover.send(", "DriveMover.copy(",
+            "unlink(", "rename(",
+        ]
         for file in headroom + door {
             let code = try String(contentsOf: file, encoding: .utf8)
             // The socket's own file is the one thing the door's code may take away, and only when it is a socket.
@@ -139,9 +161,13 @@ final class AgentTests: XCTestCase {
             }
         }
         // And the tools an agent is given are exactly these. A new one has to be added here, where this is read.
-        XCTAssertEqual(AgentLook.tools.map(\.name),
-                       ["overview", "check", "list_suggestions", "list_duplicates", "get_plan", "select", "select_suggestions", "deselect", "show", "switch_disk",
-                        "get_backup", "select_for_backup", "deselect_for_backup", "set_backup_drive", "verify_moved", "wait_for_backup", "wait_for_clean"])
+        XCTAssertEqual(
+            AgentLook.tools.map(\.name),
+            [
+                "overview", "check", "list_suggestions", "list_duplicates", "get_plan", "select", "select_suggestions", "deselect", "show",
+                "switch_disk",
+                "get_backup", "select_for_backup", "deselect_for_backup", "set_backup_drive", "verify_moved", "wait_for_backup", "wait_for_clean",
+            ])
         XCTAssertEqual(AgentServer.host(version: "").tools.map(\.name), AgentLook.tools.map(\.name), "and they're all the door offers")
     }
 
@@ -166,7 +192,8 @@ final class AgentTests: XCTestCase {
         XCTAssertThrowsError(try AgentLook.node("/etc/passwd", in: tree), "a path the scan never saw is not something to answer about")
         XCTAssertThrowsError(try AgentLook.node("node:\(tree.free)@00000000", in: tree), "a reference from another scan is refused, not guessed at")
         XCTAssertThrowsError(try AgentLook.node("node:99999999@\(tree.scanID.uuidString.prefix(8))", in: tree))
-        XCTAssertEqual(try AgentLook.node("/Volumes/Fake/Films/", in: tree), disk().node("/Volumes/Fake/Films"), "a slash at the end is the same folder")
+        XCTAssertEqual(
+            try AgentLook.node("/Volumes/Fake/Films/", in: tree), disk().node("/Volumes/Fake/Films"), "a slash at the end is the same folder")
         XCTAssertEqual(AgentLook.written("~/x/"), NSHomeDirectory() + "/x")
         XCTAssertEqual(AgentLook.real("/tmp/x"), "/private/tmp/x", "a link on the way is followed, so the map's own path is found")
         XCTAssertNil(AgentLook.real("/no/such/folder/x"))
@@ -177,12 +204,15 @@ final class AgentTests: XCTestCase {
         let work = AgentLook.check("/Volumes/Fake/Work", in: tree, rules: rules, plan: PlanList())
         XCTAssertEqual(work["on_the_map"] as? Bool, true)
         XCTAssertEqual(work["inside"] as? String, "/Volumes/Fake")
-        XCTAssertEqual((work["holds"] as? [[String: Any]])?.compactMap { $0["kind"] as? String }, ["Archives", "Documents"], "the kinds in it, most first")
+        XCTAssertEqual(
+            (work["holds"] as? [[String: Any]])?.compactMap { $0["kind"] as? String }, ["Archives", "Documents"], "the kinds in it, most first")
         XCTAssertEqual(work["headroom_would_remove_it"] as? Bool, true)
         XCTAssertEqual(work["frees"] as? UInt64, 2_300_000_000)
         XCTAssertNil(work["shared_with_other_copies"])
         XCTAssertEqual(work["selected_for_removal"] as? Bool, false)
-        XCTAssertEqual(AgentLook.check("/Volumes/Fake", in: tree, rules: rules, plan: PlanList())["headroom_would_remove_it"] as? Bool, false, "a whole disk never goes")
+        XCTAssertEqual(
+            AgentLook.check("/Volumes/Fake", in: tree, rules: rules, plan: PlanList())["headroom_would_remove_it"] as? Bool, false,
+            "a whole disk never goes")
         XCTAssertEqual(AgentLook.check("/Volumes/Fake/Nowhere", in: tree, rules: rules, plan: PlanList())["exists"] as? Bool, false)
     }
 
@@ -211,13 +241,16 @@ final class AgentTests: XCTestCase {
             XCTAssertNil(together["shared_with_other_copies"])
         }
         let other = disk.node("/Volumes/Fake/Media/Other.mkv")
-        XCTAssertEqual(AgentLook.gain(of: other, with: [film, download, other], in: tree)["frees"] as? UInt64, 1_000_000_000, "what it adds, not what everything frees")
+        XCTAssertEqual(
+            AgentLook.gain(of: other, with: [film, download, other], in: tree)["frees"] as? UInt64, 1_000_000_000,
+            "what it adds, not what everything frees")
         XCTAssertNil(AgentLook.gain(of: disk.node("/Volumes/Fake/Media/Other.mkv"), in: tree)["shared_with_other_copies"])
     }
 
     func testThePlanIsReadWithItsChecks() {
         var list = PlanList()
-        list.add(PlanItem(id: "path:/Volumes/Fake/Work/Old", title: "Old", note: "", tierRaw: Tier.yourCall.rawValue, paths: ["/Volumes/Fake/Work/Old"]))
+        list.add(
+            PlanItem(id: "path:/Volumes/Fake/Work/Old", title: "Old", note: "", tierRaw: Tier.yourCall.rawValue, paths: ["/Volumes/Fake/Work/Old"]))
         var numbers = PlanNumbers()
         numbers.total = 2_000_000_000
         numbers.byItem = ["path:/Volumes/Fake/Work/Old": 2_000_000_000]
@@ -236,12 +269,17 @@ final class AgentTests: XCTestCase {
     func testThePlanSaysWhatCleanTakesNowAndWhatWaits() {
         var list = PlanList()
         for (name, bytes) in [("Spotify", UInt64(6_000_000_000)), ("Gradle", UInt64(4_000_000_000)), ("Fresh", UInt64(1_000_000_000))] {
-            list.add(PlanItem(id: "path:/Volumes/Fake/\(name)", title: name, note: "", tierRaw: Tier.rebuilds.rawValue, paths: ["/Volumes/Fake/\(name)"], lastKnownBytes: bytes))
+            list.add(
+                PlanItem(
+                    id: "path:/Volumes/Fake/\(name)", title: name, note: "", tierRaw: Tier.rebuilds.rawValue, paths: ["/Volumes/Fake/\(name)"],
+                    lastKnownBytes: bytes))
         }
         var numbers = PlanNumbers()
         numbers.total = 11_000_000_000
         numbers.byItem = ["path:/Volumes/Fake/Spotify": 6_000_000_000, "path:/Volumes/Fake/Gradle": 4_000_000_000]
-        let checks = ["path:/Volumes/Fake/Spotify": ItemCheck(problems: [.inUse(process: "Spotify", pid: 1)]), "path:/Volumes/Fake/Gradle": ItemCheck()]
+        let checks = [
+            "path:/Volumes/Fake/Spotify": ItemCheck(problems: [.inUse(process: "Spotify", pid: 1)]), "path:/Volumes/Fake/Gradle": ItemCheck(),
+        ]
         let plan = AgentLook.plan(list, numbers: numbers, checks: checks, isChecking: false, isCleaning: false)
         XCTAssertEqual(plan["frees"] as? UInt64, 11_000_000_000)
         XCTAssertEqual(plan["clean_now_frees"] as? UInt64, 5_000_000_000, "what's in use waits: Clean takes the rest")
@@ -271,18 +309,24 @@ final class AgentTests: XCTestCase {
         }
         XCTAssertTrue(said?.hasPrefix("tail has files open here") ?? false, said ?? "nothing said")
         XCTAssertTrue(said?.contains("Clean anyway") ?? false, "and what that means when the user cleans")
-        XCTAssertNil(AgentLook.inUse(file.deletingLastPathComponent().appendingPathComponent("nobody-\(UUID().uuidString)").path, open: OpenFiles.snapshot()))
+        XCTAssertNil(
+            AgentLook.inUse(file.deletingLastPathComponent().appendingPathComponent("nobody-\(UUID().uuidString)").path, open: OpenFiles.snapshot()))
         XCTAssertNil(AgentLook.inUse(file.path, open: nil))
     }
 
     func testSuggestionsAreShortUntilOneGroupIsAskedFor() throws {
         let disk = disk()
         let tree = disk.tree
-        var row = WinRow(id: "cache:x", title: "Xcode cache", subtitle: "Build output", detail: "Made again when needed.", tier: .rebuilds,
-                         nodes: [disk.node("/Volumes/Fake/Work/Old"), disk.node("/Volumes/Fake/Work/report.pdf"), disk.node("/Volumes/Fake/Films/Big.mkv"), disk.node("/Volumes/Fake/Films/Small.mkv")],
-                         bytes: 2_000_000_000, paperBytes: 2_000_000_000, action: .trash, command: nil, bundleID: nil)
+        var row = WinRow(
+            id: "cache:x", title: "Xcode cache", subtitle: "Build output", detail: "Made again when needed.", tier: .rebuilds,
+            nodes: [
+                disk.node("/Volumes/Fake/Work/Old"), disk.node("/Volumes/Fake/Work/report.pdf"), disk.node("/Volumes/Fake/Films/Big.mkv"),
+                disk.node("/Volumes/Fake/Films/Small.mkv"),
+            ],
+            bytes: 2_000_000_000, paperBytes: 2_000_000_000, action: .trash, command: nil, bundleID: nil)
         row.isQuick = true
-        let all = Suggestions(sections: [Section(id: "caches", title: "Caches", detail: "Made again when needed.", color: Palette.Box.other, rows: [row])], others: [])
+        let all = Suggestions(
+            sections: [Section(id: "caches", title: "Caches", detail: "Made again when needed.", color: Palette.Box.other, rows: [row])], others: [])
         let short = try AgentLook.suggestions(all, in: tree)
         let first = ((short["groups"] as? [[String: Any]])?.first?["suggestions"] as? [[String: Any]])?.first
         XCTAssertEqual(first?["id"] as? String, "cache:x", "the id it's selected by")
@@ -302,7 +346,9 @@ final class AgentTests: XCTestCase {
     }
 
     func testAFinishedCleanSaysWhatWentAndThatItCanStillBeUndone() {
-        let thing = CleanedThing(itemID: "path:/Volumes/Fake/Work/Old", title: "Old", original: "/Volumes/Fake/Work/Old", inTrash: "/Volumes/Fake/.Trashes/501/Old", bytes: 2_000_000_000)
+        let thing = CleanedThing(
+            itemID: "path:/Volumes/Fake/Work/Old", title: "Old", original: "/Volumes/Fake/Work/Old", inTrash: "/Volumes/Fake/.Trashes/501/Old",
+            bytes: 2_000_000_000)
         var after = AfterClean(things: [thing], bytes: 2_000_000_000, includesOldTrash: false)
         after.failed = 1
         let said = AgentLook.cleaned(after, free: 60_000_000_000)
@@ -314,7 +360,9 @@ final class AgentTests: XCTestCase {
         var withOldTrash = after
         withOldTrash.bytes = 25_000_000_000
         XCTAssertEqual(AgentLook.cleaned(withOldTrash, free: nil)["size"] as? UInt64, 2_000_000_000, "what this clean moved")
-        XCTAssertEqual(AgentLook.cleaned(withOldTrash, free: nil)["emptying_the_trash_frees"] as? UInt64, 25_000_000_000, "and what emptying the Trash gives, with what was in it before")
+        XCTAssertEqual(
+            AgentLook.cleaned(withOldTrash, free: nil)["emptying_the_trash_frees"] as? UInt64, 25_000_000_000,
+            "and what emptying the Trash gives, with what was in it before")
         XCTAssertTrue((said["state"] as? String ?? "").hasPrefix("In the Trash"), "nothing is gone for good until the Trash is emptied")
         XCTAssertEqual((said["items"] as? [[String: Any]])?.first?["was_at"] as? String, "/Volumes/Fake/Work/Old")
         after.state = .done(got: 2_000_000_000)
@@ -339,15 +387,20 @@ final class AgentTests: XCTestCase {
         XCTAssertTrue(plan.items.allSatisfy { $0.isPickedByHand && $0.step == .trash }, "one path each, to the Trash, like a click on the ring")
         XCTAssertEqual(plan.items[0].lastKnownBytes, 2_000_000_000)
 
-        XCTAssertEqual(select(["/Volumes/Fake/Films/Big.mkv"], in: tree, plan: &plan), ["already selected"], "what's inside a selected folder is selected")
+        XCTAssertEqual(
+            select(["/Volumes/Fake/Films/Big.mkv"], in: tree, plan: &plan), ["already selected"], "what's inside a selected folder is selected")
         XCTAssertEqual(plan.count, 2)
     }
 
     func testWhatHeadroomNeverRemovesAnAgentCantSelect() {
         let tree = disk().tree
         var plan = PlanList()
-        let results = select(["/Volumes/Fake", "/Volumes/Fake/Nowhere", "node:\(tree.free)@\(tree.scanID.uuidString.prefix(8))", "/etc/passwd", NSHomeDirectory() + "/Documents"],
-                             in: tree, plan: &plan)
+        let results = select(
+            [
+                "/Volumes/Fake", "/Volumes/Fake/Nowhere", "node:\(tree.free)@\(tree.scanID.uuidString.prefix(8))", "/etc/passwd",
+                NSHomeDirectory() + "/Documents",
+            ],
+            in: tree, plan: &plan)
         XCTAssertTrue(results[0].hasPrefix("not done: Protected"), "a whole disk")
         XCTAssertTrue(results[1].hasPrefix("not done: Not found"), "something that isn't there")
         XCTAssertTrue(results[2].hasPrefix("not done: It has no path"), "free space")
@@ -374,15 +427,19 @@ final class AgentTests: XCTestCase {
         let tree = disk.tree
         var plan = PlanList()
 
-        let picks = AgentPicks.select([root + "/known/new.bin", root + "/known/tiny.txt", root + "/unseen/deep.bin", root + "/known/gone.bin", root + "/via/old.bin"],
-                                      in: tree, plan: &plan, by: "Test Agent", reason: "Found with find") { tree.name($0) }
+        let picks = AgentPicks.select(
+            [root + "/known/new.bin", root + "/known/tiny.txt", root + "/unseen/deep.bin", root + "/known/gone.bin", root + "/via/old.bin"],
+            in: tree, plan: &plan, by: "Test Agent", reason: "Found with find"
+        ) { tree.name($0) }
         XCTAssertEqual(picks[0].outcome, .selected, "it's on the disk, in a folder the map knows")
         XCTAssertTrue(picks[0].isNewerThanMap, "and the disk is read again so it shows")
         XCTAssertNil(picks[0].node)
         XCTAssertEqual(picks[1].outcome, .selected)
         XCTAssertFalse(picks[1].isNewerThanMap, "a file too small for the map never will be on it: no reading again for that")
         XCTAssertTrue(picks[1].note?.hasPrefix("Too small") ?? false)
-        XCTAssertTrue(picks[2].outcome.text.hasPrefix("not done: Headroom's map doesn't have the folder"), "nothing is selected that couldn't be counted or shown")
+        XCTAssertTrue(
+            picks[2].outcome.text.hasPrefix("not done: Headroom's map doesn't have the folder"),
+            "nothing is selected that couldn't be counted or shown")
         XCTAssertTrue(picks[2].isNewerThanMap)
         XCTAssertTrue(picks[3].outcome.text.hasPrefix("not done: Not found"))
         XCTAssertEqual(picks[4].outcome, .selected, "through a link, it's the file the map has")
@@ -400,16 +457,22 @@ final class AgentTests: XCTestCase {
 
         XCTAssertEqual(AgentLook.check(root + "/known/new.bin", in: tree, rules: rules, plan: plan)["on_the_map"] as? Bool, false)
         XCTAssertEqual(AgentLook.check(root + "/known/new.bin", in: tree, rules: rules, plan: plan)["selected_for_removal"] as? Bool, true)
-        XCTAssertEqual(AgentPicks.deselect(paths: [root + "/known/new.bin"], ids: [], in: tree, plan: &plan).map(\.outcome), [.deselected], "and taken back the same way")
+        XCTAssertEqual(
+            AgentPicks.deselect(paths: [root + "/known/new.bin"], ids: [], in: tree, plan: &plan).map(\.outcome), [.deselected],
+            "and taken back the same way")
     }
 
     func testAnAgentTakesBackItsOwnAndLeavesYours() {
         let tree = disk().tree
         var plan = PlanList()
-        plan.add(PlanItem(id: PlanItem.id(pickedByHand: "/Volumes/Fake/Work/report.pdf"), title: "report.pdf", note: "", tierRaw: Tier.yourCall.rawValue,
-                          paths: ["/Volumes/Fake/Work/report.pdf"], byHand: true))
+        plan.add(
+            PlanItem(
+                id: PlanItem.id(pickedByHand: "/Volumes/Fake/Work/report.pdf"), title: "report.pdf", note: "", tierRaw: Tier.yourCall.rawValue,
+                paths: ["/Volumes/Fake/Work/report.pdf"], byHand: true))
         _ = select(["/Volumes/Fake/Films"], in: tree, plan: &plan)
-        func deselect(_ paths: [String], ids: [String] = []) -> [String] { AgentPicks.deselect(paths: paths, ids: ids, in: tree, plan: &plan).map(\.outcome.text) }
+        func deselect(_ paths: [String], ids: [String] = []) -> [String] {
+            AgentPicks.deselect(paths: paths, ids: ids, in: tree, plan: &plan).map(\.outcome.text)
+        }
 
         XCTAssertTrue(deselect(["/Volumes/Fake/Work/report.pdf"])[0].hasPrefix("not done: The user selected this"))
         XCTAssertTrue(plan.covers("/Volumes/Fake/Work/report.pdf"))
@@ -427,7 +490,10 @@ final class AgentTests: XCTestCase {
         XCTAssertEqual(plan.items.map(\.id), [PlanItem.id(pickedByHand: "/Volumes/Fake/Work/report.pdf")], "yours is all that's left")
 
         // A suggestion goes by its id: one an agent ticked comes out, one you ticked stays.
-        plan.add(PlanItem(id: "cache:theirs", title: "Cache", note: "", tierRaw: Tier.rebuilds.rawValue, paths: ["/Volumes/Fake/Work/Old"], agent: "Test Agent"))
+        plan.add(
+            PlanItem(
+                id: "cache:theirs", title: "Cache", note: "", tierRaw: Tier.rebuilds.rawValue, paths: ["/Volumes/Fake/Work/Old"], agent: "Test Agent")
+        )
         plan.add(PlanItem(id: "cache:yours", title: "Cache", note: "", tierRaw: Tier.rebuilds.rawValue, paths: ["/Volumes/Fake/Films"]))
         XCTAssertEqual(deselect([], ids: ["cache:theirs", "cache:nothing"]), ["deselected", "not selected"])
         XCTAssertTrue(deselect([], ids: ["cache:yours"])[0].hasPrefix("not done: The user selected this"))
@@ -449,7 +515,10 @@ final class AgentTests: XCTestCase {
     func testThePlanSaysWhoSelectedWhat() {
         let tree = disk().tree
         var plan = PlanList()
-        plan.add(PlanItem(id: "path:/Volumes/Fake/Work/report.pdf", title: "report.pdf", note: "", tierRaw: Tier.yourCall.rawValue, paths: ["/Volumes/Fake/Work/report.pdf"], byHand: true))
+        plan.add(
+            PlanItem(
+                id: "path:/Volumes/Fake/Work/report.pdf", title: "report.pdf", note: "", tierRaw: Tier.yourCall.rawValue,
+                paths: ["/Volumes/Fake/Work/report.pdf"], byHand: true))
         _ = select(["/Volumes/Fake/Films"], in: tree, plan: &plan)
         let items = AgentLook.plan(plan, numbers: PlanNumbers(), checks: [:], isChecking: false, isCleaning: false)["items"] as? [[String: Any]]
         XCTAssertEqual(items?.compactMap { $0["selected_by"] as? String }, ["the user", "Test Agent"])

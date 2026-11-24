@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 
 /// One category: a heading in its own colour that opens to the things in it. The things are what get ticked.
@@ -24,7 +23,9 @@ struct BoxView: View {
 
     private var isOpen: Bool { model.openBoxes.contains(box.id) }
     private var color: Color { box.color.swiftUI }
-    private var isLit: Bool { isHovered || model.litBox.isLit(box.id) || model.cursorRow == box.id || (model.recommendedHot && !box.recommended.isEmpty) }
+    private var isLit: Bool {
+        isHovered || model.litBox.isLit(box.id) || model.cursorRow == box.id || (model.recommendedHot && !box.recommended.isEmpty)
+    }
 
     private var thing: NamedThing {
         let model = model, box = box
@@ -35,52 +36,45 @@ struct BoxView: View {
         let state = model.rowStates[box.id] ?? .none
         // Worked out once for the heading: its size, its line and its button all ask.
         let short = state == .none ? nil : model.shortfall(of: box)
-        return HStack(alignment: .top, spacing: nested ? 8 : 10) {
+        return BoxHead(title: box.title, isLarge: !nested) {
             // A category is a heading that opens, in its own colour. What's ticked is the things inside it.
-            DisclosureChevron(isOpen: isOpen, size: nested ? 9.5 : 11)
+            DisclosureChevron(isOpen: isOpen, isLarge: !nested)
                 .foregroundStyle(color.opacity(isLit || isOpen ? 1 : 0.8))
                 .frame(width: nested ? 16 : 20, height: nested ? 16 : 20)
-                .padding(.top, 1)
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(box.title)
-                        .font(.system(size: nested ? 12.5 : 13.5, weight: nested ? .medium : .semibold))
-                        .foregroundStyle(.white.opacity(0.94))
-                        .lineLimit(1)
-                    Spacer(minLength: 2)
-                    if state != .none {
-                        // Something in here is selected: all of it, or part. The same tick as the things inside, small.
-                        TickMark(state: state, color: color, size: nested ? 11 : 12)
-                            .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 2 }
-                    }
-                    size(state, short)
+        } value: {
+            if state != .none {
+                // Something in here is selected: all of it, or part. The same tick as the things inside, small.
+                TickMark(state: state, color: color, size: nested ? 11 : 12)
+                    .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 2 }
+            }
+            size(state, short)
+        } line: {
+            detail(state, short)
+        } accessory: {
+            if short != nil {
+                Button("Include other copies") {
+                    Motion.animate(.snappy(duration: 0.2)) { model.includeOtherCopies(of: box) }
                 }
-                HStack(spacing: 8) {
-                    detail(state, short)
-                    Spacer(minLength: 0)
-                    if short != nil {
-                        Button("Include other copies") {
-                            Motion.animate(.snappy(duration: 0.2)) { model.includeOtherCopies(of: box) }
-                        }
-                        .buttonStyle(.pill(nil, size: .small))
-                        .help("Also select the hardlinks and clones elsewhere, so the space is freed. Torrents stop seeding.")
-                    }
-                }
-                .frame(minHeight: 15)
-                if !box.isShortlist {
-                    BoxBar(model: model, box: box, scale: scale, height: nested ? 3 : 5, isLit: isLit, hovered: { row in
+                .buttonStyle(.pill(nil, size: .small))
+                .help("Also select the hardlinks and clones elsewhere, so the space is freed. Torrents stop seeding.")
+            }
+        } bar: {
+            if !box.isShortlist {
+                BoxBar(
+                    model: model, box: box, scale: scale, height: nested ? 3 : 5, isLit: isLit,
+                    hovered: { row in
                         guard hoveredRow?.id != row?.id else { return }
                         hoveredRow = row
                         if isHovered { model.point(at: box, row: row) }
-                    })
-                    .padding(.top, 1)
-                }
+                    }
+                )
+                .padding(.top, Kit.Space.hairline)
             }
         }
-        .padding(.leading, nested ? 8 : Kit.rowInset)
+        .padding(.leading, nested ? Kit.Space.regular : Kit.rowInset)
         .padding(.trailing, Kit.rowInset)
-        .padding(.vertical, nested ? 6 : 7)
-        .background(RoundedRectangle(cornerRadius: Kit.cardRadius, style: .continuous).fill(state.rowFill(color, isLit: isLit)))
+        .padding(.vertical, nested ? Kit.Space.medium : 7)
+        .card(state.rowFill(color, isLit: isLit), hairline: false)
         .contentShape(Rectangle())
         .onHover { inside in
             isHovered = inside
@@ -98,9 +92,7 @@ struct BoxView: View {
     @ViewBuilder
     private func size(_ state: TickState, _ short: (real: UInt64, wanted: UInt64)?) -> some View {
         if let short {
-            Text("\(formatBytes(short.real)) of \(formatBytes(short.wanted))")
-                .font(.system(size: nested ? 12 : 13, weight: .semibold).monospacedDigit())
-                .foregroundStyle(Kit.amber)
+            BoxValue(text: "\(formatBytes(short.real)) of \(formatBytes(short.wanted))", isLarge: !nested, colour: Kit.amber)
         } else if state == .some {
             // What's ticked, and of what's only partly ticked, what really goes.
             let part = box.rows.reduce(UInt64(0)) { sum, row in
@@ -110,38 +102,33 @@ struct BoxView: View {
                 case .none: sum
                 }
             }
-            Text(box.isShortlist ? formatBytes(part) : "\(formatBytes(part)) of \(formatBytes(box.bytes))")
-                .font(.system(size: nested ? 12 : 13, weight: nested ? .medium : .semibold).monospacedDigit())
-                .foregroundStyle(.white.opacity(nested ? 0.82 : 0.92))
+            BoxValue(text: box.isShortlist ? formatBytes(part) : "\(formatBytes(part)) of \(formatBytes(box.bytes))", isLarge: !nested)
         } else if !box.isShortlist {
-            Text(formatBytes(box.bytes))
-                .font(.system(size: nested ? 12 : 13.5, weight: nested ? .medium : .semibold).monospacedDigit())
-                .foregroundStyle(.white.opacity(nested ? 0.82 : 0.92))
+            BoxValue(text: formatBytes(box.bytes), isLarge: !nested)
         }
     }
 
     @ViewBuilder
     private func detail(_ state: TickState, _ short: (real: UInt64, wanted: UInt64)?) -> some View {
-        let font = Font.system(size: nested ? 10.5 : 11)
         if let row = hoveredRow {
-            (Text(row.title).foregroundStyle(.white.opacity(0.88)) + Text(" · \(formatBytes(row.gain))").foregroundStyle(.white.opacity(0.54)))
-                .font(font)
+            Text("\(Text(row.title).foregroundStyle(Kit.Text.primary))\(Text(" · \(formatBytes(row.gain))").foregroundStyle(Kit.Text.tertiary))")
+                .font(Kit.Font.detail)
                 .lineLimit(1)
                 .truncationMode(.middle)
         } else if short != nil {
             Text("Other copies remain")
-                .font(font.weight(.medium))
+                .font(Kit.Font.detail.weight(.medium))
                 .foregroundStyle(Kit.amber)
                 .lineLimit(1)
         } else if let note = box.note {
             Text(note)
-                .font(font.weight(.medium))
+                .font(Kit.Font.detail.weight(.medium))
                 .foregroundStyle(Kit.amber)
                 .lineLimit(1)
         } else {
             Text(box.detail)
-                .font(font)
-                .foregroundStyle(.white.opacity(0.54))
+                .font(Kit.Font.detail)
+                .foregroundStyle(Kit.Text.tertiary)
                 .lineLimit(1)
         }
     }
@@ -158,8 +145,8 @@ struct BoxView: View {
             .help(box.rowsATickTakes.count < box.rows.count ? "Skips items in use or set up by hand" : "")
         }
         .padding(.trailing, Kit.rowInset)
-        .padding(.top, 1)
-        .padding(.bottom, 2)
+        .padding(.top, Kit.Space.hairline)
+        .padding(.bottom, Kit.Space.tight)
     }
 
     @ViewBuilder
@@ -183,12 +170,12 @@ struct BoxView: View {
                     }
                     .buttonStyle(.textLink)
                     .padding(.leading, 32)
-                    .padding(.vertical, 4)
+                    .padding(.vertical, Kit.Space.small)
                 }
             }
         }
         .padding(.leading, nested ? 16 : 22)
-        .padding(.top, 1)
+        .padding(.top, Kit.Space.hairline)
         .padding(.bottom, 3)
     }
 }

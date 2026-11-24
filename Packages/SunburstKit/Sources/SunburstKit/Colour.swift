@@ -1,6 +1,5 @@
 import Foundation
 import SwiftUI
-import simd
 
 /// Colour in OKLab, which mixes and steps the way the eye expects. Everything ends up in linear Display P3.
 public struct Lab: Sendable {
@@ -27,10 +26,10 @@ public struct Lab: Sendable {
 
     /// Outside 0...1 means the screen can't show this colour.
     public var unclampedP3: SIMD3<Float> {
-        let L = l + 0.3963377774 * a + 0.2158037573 * b
-        let M = l - 0.1055613458 * a - 0.0638541728 * b
-        let S = l - 0.0894841775 * a - 1.2914855480 * b
-        let lc = L * L * L, mc = M * M * M, sc = S * S * S
+        let coneL = l + 0.3963377774 * a + 0.2158037573 * b
+        let coneM = l - 0.1055613458 * a - 0.0638541728 * b
+        let coneS = l - 0.0894841775 * a - 1.2914855480 * b
+        let lc = coneL * coneL * coneL, mc = coneM * coneM * coneM, sc = coneS * coneS * coneS
         let x = 1.2270138511 * lc - 0.5577999807 * mc + 0.2812561490 * sc
         let y = -0.0405801784 * lc + 1.1122568696 * mc - 0.0716766787 * sc
         let z = -0.0763812845 * lc - 0.4214819784 * mc + 1.5861632204 * sc
@@ -54,12 +53,15 @@ public struct Lab: Sendable {
     public static func mix(_ x: Lab, _ y: Lab, _ t: Float) -> Lab {
         Lab(l: x.l + (y.l - x.l) * t, a: x.a + (y.a - x.a) * t, b: x.b + (y.b - x.b) * t)
     }
+
+    /// Slate: what anything without a colour of its own is drawn in.
+    static let slate = Lab(lch: 0.38, 0.014, 255)
 }
 
-public extension Lab {
+extension Lab {
     /// Around the wheel, each hue at its own best lightness: yellow can only look yellow when it's light, and blue only looks
     /// blue when it's deep.
-    static func spectrumLightness(_ hue: Float) -> Float {
+    public static func spectrumLightness(_ hue: Float) -> Float {
         var h = hue.truncatingRemainder(dividingBy: 360)
         if h < 0 { h += 360 }
         let stops = spectrumStops
@@ -83,7 +85,7 @@ public extension Lab {
     ]
 
     /// The strongest colour a Display P3 screen can show at this lightness and hue.
-    static func strongestChroma(lightness l: Float, hue h: Float) -> Float {
+    public static func strongestChroma(lightness l: Float, hue h: Float) -> Float {
         var low: Float = 0, high: Float = 0.4
         for _ in 0..<9 {
             let middle = (low + high) / 2
@@ -119,7 +121,7 @@ public struct BranchColours<Tree: SunburstTree> {
     @available(*, deprecated, renamed: "SunburstHues.neighbourGap")
     public static var neighbourGap: Float { SunburstHues.neighbourGap }
     /// What anything without a colour of its own, or quiet, is drawn in: slate.
-    public static var quiet: Lab { Lab(lch: 0.38, 0.014, 255) }
+    public static var quiet: Lab { .slate }
 
     /// The hue of the branch at this place in the order.
     @available(*, deprecated, renamed: "SunburstHues.hue")
@@ -204,7 +206,7 @@ public struct BranchColours<Tree: SunburstTree> {
         var c = tree.firstChild(of: id)
         while c != 0 {
             let size = tree.size(of: c)
-            if size <= smallest { break }       // children are biggest first, so the rest are smaller still
+            if size <= smallest { break }  // children are biggest first, so the rest are smaller still
             let middle = (Float(before) + Float(size) / 2) / parentSize
             paint(c, hue: hue + (middle - 0.5) * 2 * reach, depth: depth + 1, step: index)
             before &+= size
@@ -329,7 +331,7 @@ public struct SunburstPalette: Sendable, Hashable, Identifiable {
             let h = hue(index), l = Lab.spectrumLightness(h)
             return Lab(lch: l, 0.95 * Lab.strongestChroma(lightness: l, hue: h), h)
         case .fixed(let colours):
-            guard !colours.isEmpty else { return Lab(lch: 0.38, 0.014, 255) }
+            guard !colours.isEmpty else { return .slate }
             let c = colours[((index % colours.count) + colours.count) % colours.count]
             return Lab(l: c.x, a: c.y, b: c.z)
         }
@@ -352,25 +354,31 @@ public struct SunburstPalette: Sendable, Hashable, Identifiable {
     /// Rose through red and orange to amber.
     public static let warm = SunburstPalette(id: "warm", name: "Warm", kind: .dynamic(from: 345, through: 455))
     /// Okabe and Ito's colours, told apart with any colour vision.
-    public static let colourBlindSafe = fixed(id: "okabe-ito", name: "Colour-Blind Safe", [
-        Lab(lch: 0.753, 0.158, 76.8),   // orange
-        Lab(lch: 0.735, 0.117, 236.2),  // sky blue
-        Lab(lch: 0.621, 0.170, 47.5),   // vermillion
-        Lab(lch: 0.620, 0.130, 165.5),  // bluish green
-        Lab(lch: 0.679, 0.118, 346.3),  // reddish purple
-        Lab(lch: 0.902, 0.172, 105.0),  // yellow
-        Lab(lch: 0.532, 0.131, 244.0),  // blue
-    ])
+    public static let colourBlindSafe = fixed(
+        id: "okabe-ito", name: "Colour-Blind Safe",
+        [
+            Lab(lch: 0.753, 0.158, 76.8),  // orange
+            Lab(lch: 0.735, 0.117, 236.2),  // sky blue
+            Lab(lch: 0.621, 0.170, 47.5),  // vermillion
+            Lab(lch: 0.620, 0.130, 165.5),  // bluish green
+            Lab(lch: 0.679, 0.118, 346.3),  // reddish purple
+            Lab(lch: 0.902, 0.172, 105.0),  // yellow
+            Lab(lch: 0.532, 0.131, 244.0),  // blue
+        ])
     /// Soft, light colours.
-    public static let pastel = fixed(id: "pastel", name: "Pastel", [
-        Lab(lch: 0.80, 0.085, 20), Lab(lch: 0.82, 0.075, 200), Lab(lch: 0.86, 0.080, 95), Lab(lch: 0.78, 0.085, 300),
-        Lab(lch: 0.84, 0.075, 150), Lab(lch: 0.82, 0.080, 60), Lab(lch: 0.78, 0.080, 250),
-    ])
+    public static let pastel = fixed(
+        id: "pastel", name: "Pastel",
+        [
+            Lab(lch: 0.80, 0.085, 20), Lab(lch: 0.82, 0.075, 200), Lab(lch: 0.86, 0.080, 95), Lab(lch: 0.78, 0.085, 300),
+            Lab(lch: 0.84, 0.075, 150), Lab(lch: 0.82, 0.080, 60), Lab(lch: 0.78, 0.080, 250),
+        ])
     /// One blue, told apart by lightness.
-    public static let mono = fixed(id: "mono", name: "Mono", [
-        Lab(lch: 0.64, 0.12, 258), Lab(lch: 0.78, 0.09, 252), Lab(lch: 0.54, 0.13, 262), Lab(lch: 0.71, 0.11, 255),
-        Lab(lch: 0.85, 0.07, 248), Lab(lch: 0.58, 0.12, 260),
-    ])
+    public static let mono = fixed(
+        id: "mono", name: "Mono",
+        [
+            Lab(lch: 0.64, 0.12, 258), Lab(lch: 0.78, 0.09, 252), Lab(lch: 0.54, 0.13, 262), Lab(lch: 0.71, 0.11, 255),
+            Lab(lch: 0.85, 0.07, 248), Lab(lch: 0.58, 0.12, 260),
+        ])
 
     /// The palettes the kit comes with, dynamic first.
     public static let all: [SunburstPalette] = [.spectrum, .cool, .warm, .colourBlindSafe, .pastel, .mono]

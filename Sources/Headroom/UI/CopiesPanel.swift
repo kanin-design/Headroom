@@ -17,7 +17,7 @@ struct CopiesPanel: View {
         let aliases = groups.filter { $0.kind == .alias || $0.kind == .broken }
         let scale = max(sets.map(\.back).max() ?? 1, 1)
         ScrollView {
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: Kit.Space.hairline) {
                 // A clean of duplicates is a clean like Free Up's, and shows as one.
                 FreeUpTopCard(model: model, showsSelection: false)
                 summary(sets)
@@ -28,19 +28,17 @@ struct CopiesPanel: View {
                     CopySetRow(model: model, group: set, scale: scale)
                 }
                 if sets.count > Self.most {
-                    Text("\((sets.count - Self.most).formatted()) more, smaller")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.white.opacity(0.4))
+                    MoreLine(text: "\((sets.count - Self.most).formatted()) more, smaller")
                         .padding(.horizontal, Kit.rowInset)
-                        .padding(.vertical, 6)
+                        .padding(.bottom, Kit.Space.small)
                 }
                 if !once.isEmpty {
                     Folded(model: model, id: "links", title: "Hardlinks and clones", groups: once, total: once.reduce(UInt64(0)) { $0 &+ $1.size })
-                        .padding(.top, 8)
+                        .padding(.top, Kit.Space.regular)
                 }
                 if !aliases.isEmpty {
                     Folded(model: model, id: "symlinks", title: "Symlinks", groups: aliases, total: nil)
-                        .padding(.top, once.isEmpty ? 8 : 2)
+                        .padding(.top, once.isEmpty ? Kit.Space.regular : Kit.Space.tight)
                 }
             }
             .padding(Kit.panelInset)
@@ -51,19 +49,22 @@ struct CopiesPanel: View {
 
     @ViewBuilder
     private func summary(_ sets: [CopyGroup]) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
+        VStack(alignment: .leading, spacing: Kit.Space.medium) {
+            HStack(alignment: .firstTextBaseline, spacing: Kit.Space.medium) {
                 // The empty states' look, whether or not there's anything: one line that says what's here.
                 Text(sentence(sets))
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.85))
+                    .font(Kit.Font.note)
+                    .foregroundStyle(Kit.Text.primary)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
                 @Bindable var model = model
-                Button { model.copiesHelpShown.toggle() } label: {
+                // macOS's own help button: a ? in a circle, the system's way to say "what does this mean".
+                Button {
+                    model.copiesHelpShown.toggle()
+                } label: {
                     Image(systemName: "questionmark.circle")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.white.opacity(model.copiesHelpShown ? 0.85 : 0.45))
+                        .font(Kit.Font.headline.weight(.regular))
+                        .foregroundStyle(model.copiesHelpShown ? Kit.Text.primary : Kit.Text.tertiary)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -71,10 +72,10 @@ struct CopiesPanel: View {
                 .popover(isPresented: $model.copiesHelpShown, arrowEdge: .bottom) { CopiesHelp() }
             }
             if model.copiesReading {
-                ThinBar(fraction: Double(model.copiesGroupsDone) / Double(max(model.copiesGroupsTotal, 1)), tint: .white.opacity(0.7), height: 4)
+                ThinBar(fraction: Double(model.copiesGroupsDone) / Double(max(model.copiesGroupsTotal, 1)), tint: Kit.Text.secondary, height: 4)
                 Text("Comparing… \(formatBytes(model.copiesBytesRead)) read")
-                    .font(.system(size: 11).monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.45))
+                    .font(Kit.Font.detail.monospacedDigit())
+                    .foregroundStyle(Kit.Text.tertiary)
             }
         }
     }
@@ -99,15 +100,15 @@ private struct CopiesHelp: View {
     ]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: Kit.rowInset) {
             VStack(alignment: .leading, spacing: 7) {
                 ForEach(rows, id: \.term) { row in
-                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    HStack(alignment: .firstTextBaseline, spacing: Kit.Space.large) {
                         Text(row.term)
-                            .font(.system(size: 12, weight: .semibold))
+                            .font(Kit.Font.strong)
                             .frame(width: 62, alignment: .leading)
                         Text(row.means)
-                            .font(.system(size: 12))
+                            .font(Kit.Font.body)
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .fixedSize(horizontal: false, vertical: true)
@@ -115,11 +116,11 @@ private struct CopiesHelp: View {
                 }
             }
             Text("The space comes back when the Trash is emptied. Undo puts the copies back.")
-                .font(.system(size: 11))
+                .font(Kit.Font.detail)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(14)
+        .padding(Kit.Space.section)
         .frame(width: 330)
     }
 }
@@ -143,40 +144,27 @@ private struct CopySetRow: View {
             head(state, colour, isLit)
             if isOpen { inside(colour) }
         }
-        .background(RoundedRectangle(cornerRadius: Kit.cardRadius, style: .continuous).fill(state.rowFill(colour, isLit: isLit || isOpen)))
+        .card(state.rowFill(colour, isLit: isLit || isOpen), hairline: false)
         .animation(.easeOut(duration: 0.14), value: isLit)
     }
 
     private func head(_ state: TickState, _ colour: Color, _ isLit: Bool) -> some View {
-        HStack(alignment: .top, spacing: 10) {
+        BoxHead(title: group.title) {
             TickMark(state: state, color: colour, size: 20, isLit: isLit)
-                .padding(.top, 1)
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(group.title)
-                        .font(.system(size: 13.5, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.94))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Spacer(minLength: 2)
-                    Text(formatBytes(group.back))
-                        .font(.system(size: 13.5, weight: .semibold).monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.92))
-                }
-                HStack(spacing: 6) {
-                    // Where the one that stays is comes first and is kept whole; a row of many files keeps its count at the end.
-                    Text(detail)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.white.opacity(0.55))
-                        .lineLimit(1)
-                        .truncationMode(group.files > 1 ? .middle : .tail)
-                    Spacer(minLength: 0)
-                    chevron
-                }
-                .frame(minHeight: 15)
-                bar(colour, state: state, isLit: isLit)
-                    .padding(.top, 3)
-            }
+        } value: {
+            BoxValue(text: formatBytes(group.back), isLarge: true)
+        } line: {
+            // Where the one that stays is comes first and is kept whole; a row of many files keeps its count at the end.
+            Text(detail)
+                .font(Kit.Font.detail)
+                .foregroundStyle(Kit.Text.tertiary)
+                .lineLimit(1)
+                .truncationMode(group.files > 1 ? .middle : .tail)
+        } accessory: {
+            chevron
+        } bar: {
+            bar(colour, state: state, isLit: isLit)
+                .padding(.top, 3)
         }
         .padding(.horizontal, Kit.rowInset)
         .padding(.vertical, 7)
@@ -192,23 +180,16 @@ private struct CopySetRow: View {
     }
 
     private var chevron: some View {
-        Button {
-            Motion.animate(.snappy(duration: 0.22)) {
-                if isOpen { model.copiesOpen.remove(group.id) } else { model.copiesOpen.insert(group.id) }
-            }
-        } label: {
-            DisclosureChevron(isOpen: isOpen, size: 10)
-                .foregroundStyle(.white.opacity(isHovered || isOpen ? 0.75 : 0.4))
-                .frame(width: 20, height: 15)
-                .contentShape(Rectangle())
+        DisclosureButton(isOpen: isOpen, isLit: isHovered, help: ("Hide copies", "Show copies"), width: 20) {
+            if isOpen { model.copiesOpen.remove(group.id) } else { model.copiesOpen.insert(group.id) }
         }
-        .buttonStyle(.plain)
-        .help(isOpen ? "Hide copies" : "Show copies")
     }
 
     /// Every copy, each original first with its extra copies under it. A row of many files lists its folders instead.
     private var lines: [(node: UInt32, stays: Bool, opensSet: Bool)] {
-        if group.files > 6 { return (group.homes.isEmpty ? [group.home] : group.homes).map { ($0, true, false) } + group.others.map { ($0, false, false) } }
+        if group.files > 6 {
+            return (group.homes.isEmpty ? [group.home] : group.homes).map { ($0, true, false) } + group.others.map { ($0, false, false) }
+        }
         var out: [(UInt32, Bool, Bool)] = []
         for (i, set) in group.sets.enumerated() {
             out.append((set.keeper, true, i > 0))
@@ -221,16 +202,18 @@ private struct CopySetRow: View {
         let shown = lines
         // Where each one is, said as the names around the ring say it, so a line and its name match, and so that no two
         // lines read the same.
-        let places = model.tree.map { tree in
-            CopiesMap.places(shown.map { tree.nodes[Int($0.node)].has(NodeFlag.directory) ? $0.node : tree.nodes[Int($0.node)].parent }, in: tree, short: true)
-        } ?? []
-        return VStack(alignment: .leading, spacing: 1) {
+        let places =
+            model.tree.map { tree in
+                CopiesMap.places(
+                    shown.map { tree.nodes[Int($0.node)].has(NodeFlag.directory) ? $0.node : tree.nodes[Int($0.node)].parent }, in: tree, short: true)
+            } ?? []
+        return VStack(alignment: .leading, spacing: Kit.Space.hairline) {
             ForEach(Array(shown.enumerated()), id: \.element.node) { at, line in
                 CopyLine(model: model, group: group, node: line.node, stays: line.stays, colour: colour, place: at < places.count ? places[at] : "")
                     .padding(.top, line.opensSet ? 6 : 0)
             }
             // What happens to every copy not marked Keep.
-            HStack(spacing: 6) {
+            HStack(spacing: Kit.Space.medium) {
                 ForEach(AppModel.CopyAction.allCases, id: \.self) { action in
                     Button(action.title) { model.takeCopies(group, action) }
                         .buttonStyle(.pill(colour))
@@ -243,7 +226,7 @@ private struct CopySetRow: View {
         // The copies line up under the set's name, past its tick.
         .padding(.leading, Kit.rowInset + 20 + 10 - 8)
         .padding(.trailing, Kit.rowInset)
-        .padding(.bottom, 10)
+        .padding(.bottom, Kit.rowInset)
     }
 
     private var detail: String {
@@ -272,11 +255,11 @@ private struct CopySetRow: View {
         }
         .frame(height: 5)
     }
-
 }
 
 /// One copy in an open set: where it is, its name there, when it changed and its size. Pointing at it makes it stand out on
 /// the ring among its other copies. The one to keep is marked; a click on any other keeps that one instead, as radio buttons.
+/// Not a `ListRow`: it's a choice of one, and the line under its name keeps the date and size whole while the name gives way.
 private struct CopyLine: View {
     let model: AppModel
     let group: CopyGroup
@@ -295,8 +278,8 @@ private struct CopyLine: View {
                 .frame(width: 8, height: 8)
             VStack(alignment: .leading, spacing: 0) {
                 Text(place)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.9))
+                    .font(Kit.Font.name)
+                    .foregroundStyle(Kit.Text.primary)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 // A long name gives way; its date and size are what tell the copies apart, so they stay whole.
@@ -308,18 +291,18 @@ private struct CopyLine: View {
                         .lineLimit(1)
                         .fixedSize()
                 }
-                .font(.system(size: 10.5).monospacedDigit())
-                .foregroundStyle(.white.opacity(0.45))
+                .font(Kit.Font.detail.monospacedDigit())
+                .foregroundStyle(Kit.Text.tertiary)
             }
-            Spacer(minLength: 4)
+            Spacer(minLength: Kit.Space.small)
             // The one that stays is marked; any other says it can be, under the pointer. The whole line is the choice.
             if stays || isHovered {
                 PillLabel(text: "Keep", tint: stays ? colour : nil, prominence: .tinted)
             }
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, Kit.Space.regular)
         .padding(.vertical, 5)
-        .background(RoundedRectangle(cornerRadius: Kit.rowRadius, style: .continuous).fill(.white.opacity(isHovered ? 0.07 : 0)))
+        .background(RoundedRectangle(cornerRadius: Kit.Radius.row, style: .continuous).fill(isHovered ? Kit.Fill.hover : .clear))
         .contentShape(Rectangle())
         .onHover { inside in
             isHovered = inside
@@ -368,10 +351,10 @@ private struct FoldedRow: View {
     let open: () -> Void
 
     var body: some View {
-        NodeRow(title: group.title, subtitle: subtitle, value: value, share: 0, color: group.colour.swiftUI,
-                isLit: model.litCopyGroup.isLit(group.id), showsBar: false,
-                onHover: { inside in model.pointAtCopyGroup(inside ? group : nil) },
-                onTap: open)
+        ListRow(
+            title: group.title, detail: subtitle.isEmpty ? nil : subtitle, trailing: value, isLit: model.litCopyGroup.isLit(group.id),
+            markWidth: ListDot.size, onHover: { inside in model.pointAtCopyGroup(inside ? group : nil) }, onTap: open,
+            mark: { ListDot(colour: group.colour.swiftUI) })
     }
 }
 
@@ -386,29 +369,33 @@ private struct Folded: View {
     let total: UInt64?
 
     var body: some View {
-        let isOpen = Binding(get: { model.copiesOpen.contains(id) }, set: { now in
-            if now { model.copiesOpen.insert(id) } else { model.copiesOpen.remove(id) }
-        })
+        let isOpen = Binding(
+            get: { model.copiesOpen.contains(id) },
+            set: { now in
+                if now { model.copiesOpen.insert(id) } else { model.copiesOpen.remove(id) }
+            })
         Fold(title: title, count: groups.count.formatted(), trailing: total.map(formatBytes), isOpen: isOpen) {
             LazyVStack(spacing: 0) {
-                    ForEach(groups.prefix(80)) { group in
-                        FoldedRow(model: model, group: group, subtitle: subtitle(group), value: value(group)) { open(group) }
-                    }
+                ForEach(groups.prefix(80)) { group in
+                    FoldedRow(model: model, group: group, subtitle: subtitle(group), value: value(group)) { open(group) }
                 }
-                .padding(.leading, 8)
+            }
+            .padding(.leading, Kit.Space.regular)
         }
     }
 
     private func subtitle(_ g: CopyGroup) -> String {
         guard let tree = model.tree else { return "" }
         // Said apart, so two places that end the same way don't read as one.
-        let elsewhere = CopiesMap.places(Array(g.others.prefix(2)), in: tree, short: true).joined(separator: ", ") + (g.others.count > 2 ? " +\(g.others.count - 2)" : "")
+        let elsewhere =
+            CopiesMap.places(Array(g.others.prefix(2)), in: tree, short: true).joined(separator: ", ")
+            + (g.others.count > 2 ? " +\(g.others.count - 2)" : "")
         switch g.kind {
         case .sameFile: return "Hardlink · \(elsewhere)"
         case .sharedCopy: return "Clone · \(elsewhere)"
         case .alias, .broken:
             // Where the symlink is, and what it points to: a path, which says when it's missing or on a disk that isn't connected.
-            let target = g.kind == .alias && g.home != 0 ? place(g.home, tree) : (g.target ?? "")
+            let target = g.kind == .alias && g.home != 0 ? CopiesMap.place(g.home, in: tree) : (g.target ?? "")
             return "\(CopiesMap.place(g.others[0], in: tree, short: true)) → \(target)"
         case .duplicate: return ""
         }
@@ -421,10 +408,4 @@ private struct Folded: View {
     private func open(_ g: CopyGroup) {
         model.openFromList(g.home != 0 && g.kind != .broken ? g.home : g.others[0])
     }
-}
-
-/// Where something is, as short as it can be said: from your home folder, or from the top of the disk you're looking at, and
-/// deep places by their first two folders and their last two, `Projects/p1/…/darwin-arm64/bin`, which is what tells copies apart.
-private func place(_ node: UInt32, _ tree: DiskTree) -> String {
-    CopiesMap.place(node, in: tree)
 }

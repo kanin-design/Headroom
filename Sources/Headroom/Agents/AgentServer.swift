@@ -8,8 +8,9 @@ import Foundation
 enum AgentServer {
     /// What agents are told about Headroom, and where its door is: `agent.sock` and `agents.json` in Headroom's own folder.
     nonisolated static func host(version: String) -> AgentHost {
-        AgentHost(name: "Headroom", version: version, instructions: instructions, folder: AppData.folder, tools: AgentLook.tools,
-                  accessSettingsLocation: "under Agents in the app menu")
+        AgentHost(
+            name: "Headroom", version: version, instructions: instructions, folder: AppData.folder, tools: AgentLook.tools,
+            accessSettingsLocation: "under Agents in the app menu")
     }
 
     /// What it tells every agent once, when it connects.
@@ -43,12 +44,12 @@ enum AgentServer {
     }
 
     /// Answers a call you allowed from what the app has on screen.
-    static func answer(_ call: AgentCall) async throws -> AgentReply {
+    private static func answer(_ call: AgentCall) async throws -> AgentReply {
         .json(try await AgentAPI(model: AppModel.shared).answer(call.tool, call.arguments, by: call.agent.name))
     }
 
     /// What an agent asked for, in a line for the list of what agents did.
-    nonisolated static func describe(_ tool: String, _ arguments: [String: Any]) -> String {
+    nonisolated private static func describe(_ tool: String, _ arguments: [String: Any]) -> String {
         var said = ["path", "group"].compactMap { key in (arguments[key] as? String).map { "\(key) \($0)" } }
         for key in ["paths", "ids"] {
             guard let list = arguments[key] as? [String], let first = list.first else { continue }

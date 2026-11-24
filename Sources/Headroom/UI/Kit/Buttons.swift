@@ -13,17 +13,20 @@ struct GoButton: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 14, weight: .semibold).monospacedDigit())
-            .foregroundStyle(.white.opacity(isEnabled ? 1 : 0.42))
+            .font(Kit.Font.headline.monospacedDigit())
+            .foregroundStyle(isEnabled ? Color.white : Kit.Text.quaternary)
             .frame(maxWidth: .infinity)
-            .frame(height: 38)
+            .frame(height: Kit.barButtonHeight)
             .background {
-                RoundedRectangle(cornerRadius: 15, style: .continuous)
-                    .fill(isEnabled ? AnyShapeStyle(LinearGradient(colors: [top, bottom], startPoint: .top, endPoint: .bottom)) : AnyShapeStyle(.white.opacity(0.08)))
+                RoundedRectangle(cornerRadius: Kit.Radius.barButton, style: .continuous)
+                    .fill(
+                        isEnabled
+                            ? AnyShapeStyle(LinearGradient(colors: [top, bottom], startPoint: .top, endPoint: .bottom))
+                            : AnyShapeStyle(Kit.Fill.track))
             }
             .overlay {
                 if isEnabled {
-                    RoundedRectangle(cornerRadius: 15, style: .continuous)
+                    RoundedRectangle(cornerRadius: Kit.Radius.barButton, style: .continuous)
                         .strokeBorder(LinearGradient(colors: [.white.opacity(0.28), .clear], startPoint: .top, endPoint: .center), lineWidth: 1)
                 }
             }
@@ -37,11 +40,14 @@ struct GoButton: ButtonStyle {
 struct SoftButton: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(.white.opacity(0.9))
+            .font(Kit.Font.headline)
+            .foregroundStyle(Kit.Text.primary)
             .padding(.horizontal, 16)
-            .frame(height: 38)
-            .background(RoundedRectangle(cornerRadius: 15, style: .continuous).fill(.white.opacity(configuration.isPressed ? 0.16 : 0.1)))
+            .frame(height: Kit.barButtonHeight)
+            .background(
+                RoundedRectangle(cornerRadius: Kit.Radius.barButton, style: .continuous).fill(
+                    configuration.isPressed ? Kit.Fill.controlLit : Kit.Fill.control)
+            )
             .contentShape(Rectangle())
     }
 }
@@ -52,7 +58,7 @@ struct SoftButton: ButtonStyle {
 enum PillSize {
     case regular, small
 
-    var font: Font { self == .regular ? .system(size: 11.5, weight: .semibold) : .system(size: 10.5, weight: .semibold) }
+    var font: Font { self == .regular ? Kit.Font.label : Kit.Font.caption.weight(.semibold) }
     var horizontal: CGFloat { self == .regular ? 11 : 8 }
     var vertical: CGFloat { self == .regular ? 5 : 2 }
 }
@@ -72,7 +78,7 @@ private struct PillChrome: ViewModifier {
 
     private var fill: Color {
         let lit = isLit && isEnabled
-        guard let tint else { return .white.opacity(isEnabled ? (lit ? 0.17 : 0.1) : 0.06) }
+        guard let tint else { return isEnabled ? (lit ? Kit.Fill.controlLit : Kit.Fill.control) : Kit.Fill.card }
         switch prominence {
         case .filled: return tint.opacity(isEnabled ? (lit ? 0.42 : 0.3) : 0.12)
         case .tinted: return tint.opacity(isEnabled ? (lit ? 0.24 : 0.16) : 0.08)
@@ -80,9 +86,9 @@ private struct PillChrome: ViewModifier {
     }
 
     private var ink: Color {
-        guard isEnabled else { return .white.opacity(0.4) }
+        guard isEnabled else { return Kit.Text.quaternary }
         if let tint, prominence == .tinted { return tint }
-        return .white.opacity(tint == nil ? 0.88 : 0.95)
+        return Kit.Text.primary
     }
 
     func body(content: Content) -> some View {
@@ -126,17 +132,15 @@ private struct PillButtonBody: View {
     }
 }
 
-/// The same capsule for words that aren't a button: the copy that's kept, or a menu's label.
+/// The same capsule for words that aren't a button, at the small size: the copy that's kept, or a menu's label.
 struct PillLabel: View {
     let text: String
     var tint: Color? = nil
-    var size: PillSize = .small
     var prominence: PillProminence = .filled
-    var isLit = false
 
     var body: some View {
         Text(text)
-            .modifier(PillChrome(tint: tint, size: size, prominence: prominence, isLit: isLit, isEnabled: true))
+            .modifier(PillChrome(tint: tint, size: .small, prominence: prominence, isLit: false, isEnabled: true))
             .fixedSize()
     }
 }
@@ -148,34 +152,77 @@ extension ButtonStyle where Self == PillButtonStyle {
     }
 }
 
-// MARK: Links
+// MARK: Cards
 
-/// Words that do something, with nothing round them: Deselect all, Not now, Open Trash, Select. White and quiet unless it's
-/// given a tint, and brighter under the pointer. (SwiftUI's own `LinkButtonStyle` is a different thing, hence the name.)
-struct TextLinkStyle: ButtonStyle {
+/// A card that's pressed as a whole: Select recommended in Free Up, Backup's actions. In a colour of its own, or white, and
+/// brighter under the pointer; dimmed while it can't be pressed.
+struct CardButtonStyle: ButtonStyle {
     var tint: Color? = nil
 
     func makeBody(configuration: Configuration) -> some View {
-        TextLinkBody(configuration: configuration, tint: tint)
+        CardButtonBody(configuration: configuration, tint: tint)
+    }
+}
+
+private struct CardButtonBody: View {
+    let configuration: ButtonStyleConfiguration
+    let tint: Color?
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var isHovered = false
+
+    private var fill: Color {
+        let lit = isEnabled && (isHovered || configuration.isPressed)
+        guard let tint else { return lit ? Kit.Fill.control : Kit.Fill.card }
+        return tint.opacity(lit ? 0.18 : 0.1)
+    }
+
+    var body: some View {
+        configuration.label
+            .padding(.horizontal, Kit.rowInset)
+            .padding(.vertical, Kit.Space.regular)
+            .card(fill, hairline: false)
+            .contentShape(Rectangle())
+            .opacity(isEnabled ? 1 : 0.6)
+            .onHover { isHovered = $0 }
+    }
+}
+
+extension ButtonStyle where Self == CardButtonStyle {
+    static var card: CardButtonStyle { CardButtonStyle() }
+    static func card(_ tint: Color?) -> CardButtonStyle { CardButtonStyle(tint: tint) }
+}
+
+// MARK: Links
+
+/// Words that do something, with nothing round them: Deselect all, Not now, Open Trash, Select, Undo. White and quiet unless
+/// it's given a tint, and brighter under the pointer. (SwiftUI's own `LinkButtonStyle` is a different thing, hence the name.)
+struct TextLinkStyle: ButtonStyle {
+    var tint: Color? = nil
+    /// The size of the words around it, when it's among them rather than on a line of its own.
+    var font: Font = Kit.Font.detail.weight(.medium)
+
+    func makeBody(configuration: Configuration) -> some View {
+        TextLinkBody(configuration: configuration, tint: tint, font: font)
     }
 }
 
 private struct TextLinkBody: View {
     let configuration: ButtonStyleConfiguration
     let tint: Color?
+    let font: Font
     @Environment(\.isEnabled) private var isEnabled
     @State private var isHovered = false
 
     private var ink: Color {
-        guard isEnabled else { return (tint ?? .white).opacity(0.3) }
+        guard isEnabled else { return tint?.opacity(0.3) ?? Kit.Text.quaternary }
         let lit = isHovered || configuration.isPressed
         if let tint { return tint.opacity(lit ? 1 : 0.88) }
-        return .white.opacity(lit ? 0.88 : 0.6)
+        return lit ? Kit.Text.primary : Kit.Text.secondary
     }
 
     var body: some View {
         configuration.label
-            .font(.system(size: 11, weight: .medium))
+            .font(font)
             .foregroundStyle(ink)
             .lineLimit(1)
             .contentShape(Rectangle())
@@ -186,5 +233,29 @@ private struct TextLinkBody: View {
 
 extension ButtonStyle where Self == TextLinkStyle {
     static var textLink: TextLinkStyle { TextLinkStyle() }
-    static func textLink(_ tint: Color?) -> TextLinkStyle { TextLinkStyle(tint: tint) }
+    static func textLink(_ tint: Color?, font: Font = Kit.Font.detail.weight(.medium)) -> TextLinkStyle { TextLinkStyle(tint: tint, font: font) }
+}
+
+// MARK: Symbols
+
+/// A button that's only a symbol: Close on a message over the map, or Back and Close in a circle of their own on the card.
+struct SymbolButtonStyle: ButtonStyle {
+    /// Drawn in a circle this wide, or bare.
+    var circle: CGFloat? = nil
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(Kit.Font.caption.weight(.bold))
+            .foregroundStyle(circle == nil ? Kit.Text.tertiary : Kit.Text.primary)
+            .frame(width: circle, height: circle)
+            .background {
+                if circle != nil { Circle().fill(configuration.isPressed ? Kit.Fill.controlLit : Kit.Fill.control) }
+            }
+            .contentShape(Circle())
+    }
+}
+
+extension ButtonStyle where Self == SymbolButtonStyle {
+    static var symbol: SymbolButtonStyle { SymbolButtonStyle() }
+    static func symbol(circle: CGFloat) -> SymbolButtonStyle { SymbolButtonStyle(circle: circle) }
 }

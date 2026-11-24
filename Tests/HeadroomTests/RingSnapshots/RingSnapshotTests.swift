@@ -1,11 +1,13 @@
 import Foundation
 import Testing
+
 @testable import Headroom
 
 /// Headroom's rings as the app drew them before the kit had parts: the whole disk with its band and wedges, a folder,
 /// the disk as it will be after cleaning, Backup's two disks, and what lights up for a set of things. Written once from
 /// the app as it was (SNAPSHOT_OUT=<folder>), then compared line for line. Backup's pair at its top was written again on
-/// 2026-11-22, when its two sides became a thin split band with a dial for each; zoomed into a side, it's as it was.
+/// 2026-11-22, when its two sides became a thin split band with a dial for each; zoomed into a side, it's as it was. Both
+/// pair cases were written again on 2026-11-23, when the Mac's half took the map's keys: only the keys changed.
 @Suite("Ring snapshots")
 struct RingSnapshotTests {
     private let baseline = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Baseline")
@@ -30,7 +32,7 @@ struct RingSnapshotTests {
         let disk = FakeDisk(capacity: 900_000_000_000, free: 120_000_000_000)
         var state: UInt64 = 11
         func next() -> UInt64 {
-            state = state &* 6364136223846793005 &+ 1442695040888963407
+            state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
             return state >> 33
         }
         let tops = ["Movies", "Photos", "Library", "Projects", "Music", "Downloads"]
@@ -62,11 +64,14 @@ struct RingSnapshotTests {
             out += "\(Self.bits(p.marked)) \(Self.bits(p.deeper))\n"
         }
         for node in 0..<UInt32(tree.count) {
-            out += "N \(node) \(layout.piece(of: node).map(String.init) ?? "-") \(layout.nearestPiece(to: node, tree: tree).map(String.init) ?? "-")\n"
+            out +=
+                "N \(node) \(layout.piece(of: node).map(String.init) ?? "-") \(layout.nearestPiece(to: node, tree: tree).map(String.init) ?? "-")\n"
         }
         for a in 0..<72 {
             let angle = Float(a) / 72 * 2 * .pi + 0.011
-            out += "H \(a) " + (0..<20).map { r in layout.hit(angle: angle, radius: Float(r) / 18).map(String.init) ?? "-" }.joined(separator: " ") + "\n"
+            out +=
+                "H \(a) " + (0..<20).map { r in layout.hit(angle: angle, radius: Float(r) / 18).map(String.init) ?? "-" }.joined(separator: " ")
+                + "\n"
         }
         for set in sets {
             let lit = layout.light(set, in: tree)
@@ -94,8 +99,10 @@ struct RingSnapshotTests {
         try make(drive + "/F1/extra.bin", 300_000_000)
         try make(drive + "/Elsewhere/only-drive.bin", 900_000_000)
         try make(drive + "/Elsewhere/more/deep.bin", 120_000_000)
-        return try #require(PairPicture.build(real: disk.tree, macFolder: disk.node(mac), macPath: mac, drivePath: drive, driveName: "Spare",
-                                               notes: [], ghosts: true))
+        return try #require(
+            PairPicture.build(
+                real: disk.tree, macFolder: disk.node(mac), macPath: mac, drivePath: drive, driveName: "Spare",
+                notes: [], ghosts: true))
     }
 
     private func cases() throws -> [(String, String)] {
@@ -140,7 +147,9 @@ struct RingSnapshotTests {
             let expected = try String(contentsOf: baseline.appendingPathComponent("\(name).txt"), encoding: .utf8)
             let a = expected.split(separator: "\n"), b = text.split(separator: "\n")
             if let i = (0..<min(a.count, b.count)).first(where: { a[$0] != b[$0] }) ?? (a.count != b.count ? min(a.count, b.count) : nil) {
-                differ.append("\(name) line \(i + 1):\n  was: \(i < a.count ? String(a[i].prefix(200)) : "(end)")\n  now: \(i < b.count ? String(b[i].prefix(200)) : "(end)")")
+                differ.append(
+                    "\(name) line \(i + 1):\n  was: \(i < a.count ? String(a[i].prefix(200)) : "(end)")\n  now: \(i < b.count ? String(b[i].prefix(200)) : "(end)")"
+                )
             }
         }
         #expect(differ.isEmpty, Comment(rawValue: differ.joined(separator: "\n")))

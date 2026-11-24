@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Headroom
 
 /// A finished tree keeps each different set of numbers and each different name once. Nothing that asks may notice.
@@ -120,7 +121,8 @@ final class GitStopsEarlyTests: XCTestCase {
     private func git(_ arguments: [String], in folder: String, date: String? = nil) throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-        process.arguments = ["-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", "-c", "init.defaultBranch=main"] + arguments
+        process.arguments =
+            ["-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", "-c", "init.defaultBranch=main"] + arguments
         process.currentDirectoryURL = URL(fileURLWithPath: folder)
         var environment = ProcessInfo.processInfo.environment
         if let date {

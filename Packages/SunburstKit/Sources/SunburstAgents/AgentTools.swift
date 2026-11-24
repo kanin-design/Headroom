@@ -18,8 +18,10 @@ public struct AgentTool: @unchecked Sendable {
     /// It changes what's shown or selected, so an agent allowed only to look can't call it.
     public var selects: Bool
 
-    public init(name: String, description: String, properties: [String: [String: Any]] = [:], required: [String] = [],
-                selects: Bool = false) {
+    public init(
+        name: String, description: String, properties: [String: [String: Any]] = [:], required: [String] = [],
+        selects: Bool = false
+    ) {
         self.name = name
         self.description = description
         self.properties = properties

@@ -1,5 +1,6 @@
 import CryptoKit
 import XCTest
+
 @testable import Headroom
 
 /// Backup: the note a moved file leaves, the hash beside its copy, where a file goes on the drive, the copy that proves
@@ -33,15 +34,18 @@ final class BackupTests: XCTestCase {
         DriveMover.hex(SHA256.hash(data: try Data(contentsOf: URL(fileURLWithPath: path))))
     }
 
-    private let drive = DriveInfo(name: "Spare", mountPath: "/Volumes/Spare", uuid: "6A1F-UUID", fileSystem: "exfat", capacity: 2_000_000_000_000,
-                                  free: 1_000_000_000_000, isInternal: false, isReadOnly: false, isBoot: false)
+    private let drive = DriveInfo(
+        name: "Spare", mountPath: "/Volumes/Spare", uuid: "6A1F-UUID", fileSystem: "exfat", capacity: 2_000_000_000_000,
+        free: 1_000_000_000_000, isInternal: false, isReadOnly: false, isBoot: false)
 
     // MARK: The note
 
     func testANoteSaysWhereTheFileIsAndReadsBack() throws {
-        let note = MovedNote(name: "Film (2026) - 1080p.mkv", size: 7_381_234_567, sha256: String(repeating: "ab", count: 32), driveName: "Spare", driveID: "6A1F-UUID",
-                             drivePath: "Media/Movies/Film (2026)/Film (2026) - 1080p.mkv", moved: Date(timeIntervalSince1970: 1_794_000_000),
-                             notePath: "/Users/x/Media/Movies/Film (2026)/Film (2026) - 1080p.mkv.hrmoved")
+        let note = MovedNote(
+            name: "Film (2026) - 1080p.mkv", size: 7_381_234_567, sha256: String(repeating: "ab", count: 32), driveName: "Spare",
+            driveID: "6A1F-UUID",
+            drivePath: "Media/Movies/Film (2026)/Film (2026) - 1080p.mkv", moved: Date(timeIntervalSince1970: 1_794_000_000),
+            notePath: "/Users/x/Media/Movies/Film (2026)/Film (2026) - 1080p.mkv.hrmoved")
         let text = note.text
         XCTAssertTrue(text.hasPrefix(MovedNote.firstLine), "a person who opens it reads what it is first")
         XCTAssertTrue(text.contains("size: 7381234567"))
@@ -65,7 +69,8 @@ final class BackupTests: XCTestCase {
 
     func testAHashBesideACopyFromBeforeIsStillRead() throws {
         let film = try file(folder + "/Drive/a film.mkv", bytes: 1000)
-        try (String(repeating: "C", count: 64) + "  a film.mkv\n# size 1000 bytes\n").write(toFile: film + ".sha256", atomically: true, encoding: .utf8)
+        try (String(repeating: "C", count: 64) + "  a film.mkv\n# size 1000 bytes\n").write(
+            toFile: film + ".sha256", atomically: true, encoding: .utf8)
         XCTAssertEqual(Sidecar.hash(for: film), String(repeating: "c", count: 64))
         try "nonsense".write(toFile: film + ".sha256", atomically: true, encoding: .utf8)
         XCTAssertNil(Sidecar.hash(for: film))
@@ -75,11 +80,18 @@ final class BackupTests: XCTestCase {
 
     func testAFileKeepsItsWholePathInTheMacsFolder() {
         let mac = "Backup from Test"
-        XCTAssertEqual(BackupPaths.relative("/Users/x/Downloads/F.mkv", folder: mac), "Backup from Test/Users/x/Downloads/F.mkv", "the home folder stays in the path")
-        XCTAssertEqual(BackupPaths.relative("/System/Volumes/Data/Users/x/Downloads/F.mkv", folder: mac), "Backup from Test/Users/x/Downloads/F.mkv",
-                       "the path as the Finder shows it")
-        XCTAssertEqual(BackupPaths.onDrive("/Users/x/Media/Movies/F.mkv", under: "/Volumes/Spare", folder: mac), "/Volumes/Spare/Backup from Test/Users/x/Media/Movies/F.mkv")
-        XCTAssertEqual(BackupPaths.onDrive("/Users/x/Media/F.mkv", under: "/Volumes/Spare/Backups", folder: mac), "/Volumes/Spare/Backups/Backup from Test/Users/x/Media/F.mkv")
+        XCTAssertEqual(
+            BackupPaths.relative("/Users/x/Downloads/F.mkv", folder: mac), "Backup from Test/Users/x/Downloads/F.mkv",
+            "the home folder stays in the path")
+        XCTAssertEqual(
+            BackupPaths.relative("/System/Volumes/Data/Users/x/Downloads/F.mkv", folder: mac), "Backup from Test/Users/x/Downloads/F.mkv",
+            "the path as the Finder shows it")
+        XCTAssertEqual(
+            BackupPaths.onDrive("/Users/x/Media/Movies/F.mkv", under: "/Volumes/Spare", folder: mac),
+            "/Volumes/Spare/Backup from Test/Users/x/Media/Movies/F.mkv")
+        XCTAssertEqual(
+            BackupPaths.onDrive("/Users/x/Media/F.mkv", under: "/Volumes/Spare/Backups", folder: mac),
+            "/Volumes/Spare/Backups/Backup from Test/Users/x/Media/F.mkv")
         XCTAssertEqual(BackupPaths.relative("/Users/Shared/Big.mov", folder: mac), "Backup from Test/Users/Shared/Big.mov")
         XCTAssertEqual(BackupPaths.relative("/Volumes/Other/Films/F.mkv", folder: mac), "Backup from Test/Volumes/Other/Films/F.mkv")
         XCTAssertTrue(BackupPaths.macFolder.hasPrefix("Backup from "), "named for this Mac")
@@ -125,7 +137,9 @@ final class BackupTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: source), "the original isn't touched")
         let dates = try FileManager.default.attributesOfItem(atPath: source)[.modificationDate] as? Date
         XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: target)[.modificationDate] as? Date, dates, "the copy keeps its date")
-        XCTAssertFalse(try FileManager.default.contentsOfDirectory(atPath: folder + "/Drive/Media/Films").contains { $0.hasSuffix(".hrpart") }, "no half copy is left")
+        XCTAssertFalse(
+            try FileManager.default.contentsOfDirectory(atPath: folder + "/Drive/Media/Films").contains { $0.hasSuffix(".hrpart") },
+            "no half copy is left")
 
         // Again: the same file is already there, so nothing is copied, and it's proved the same.
         let again = try DriveMover.copy(source, to: target, stop: LockedFlag()) { _ in }
@@ -149,7 +163,9 @@ final class BackupTests: XCTestCase {
         let source = try file(folder + "/Mac/Films/a.mkv", bytes: 20_000_000)
         let target = folder + "/Drive/a.mkv"
         let stop = LockedFlag()
-        XCTAssertThrowsError(try DriveMover.copy(source, to: target, stop: stop) { p in if p.bytes >= UInt64(DriveMover.chunk) { stop.value = true } }) { error in
+        XCTAssertThrowsError(
+            try DriveMover.copy(source, to: target, stop: stop) { p in if p.bytes >= UInt64(DriveMover.chunk) { stop.value = true } }
+        ) { error in
             XCTAssertEqual(error as? DriveMover.Failure, .stopped)
         }
         XCTAssertFalse(FileManager.default.fileExists(atPath: target), "nothing has the real name")
@@ -183,7 +199,8 @@ final class BackupTests: XCTestCase {
         let source = try file(folder + "/Mac/Films/Film.mkv", bytes: 2_000_000)
         var mount = drive
         mount.mountPath = folder + "/Drive"
-        let note = try XCTUnwrap(DriveMover.send(source, to: folder + "/Drive/Films/Film.mkv", drive: mount, writeNote: true, stop: LockedFlag()) { _ in }.note)
+        let note = try XCTUnwrap(
+            DriveMover.send(source, to: folder + "/Drive/Films/Film.mkv", drive: mount, writeNote: true, stop: LockedFlag()) { _ in }.note)
         try FileManager.default.removeItem(atPath: source)
         XCTAssertEqual(DriveMover.verify(note, on: mount, stop: LockedFlag()), .fine)
 
@@ -210,10 +227,12 @@ final class BackupTests: XCTestCase {
         disk.file("/Volumes/Fake/Media/Movies/Here.mkv", 2_000_000_000, kind: .video)
         disk.finish()
         let tree = disk.tree
-        let moved = MovedNote(name: "Gone.mkv", size: 5_000_000_000, sha256: String(repeating: "a", count: 64), driveName: "Spare", driveID: nil,
-                              drivePath: "Media/Movies/Gone.mkv", moved: Date(), notePath: "/Volumes/Fake/Media/Movies/Gone.mkv.hrmoved")
-        let elsewhere = MovedNote(name: "Lost.mkv", size: 1, sha256: String(repeating: "b", count: 64), driveName: "Spare", driveID: nil,
-                                  drivePath: "x/Lost.mkv", moved: Date(), notePath: "/Volumes/Fake/Nowhere/Lost.mkv.hrmoved")
+        let moved = MovedNote(
+            name: "Gone.mkv", size: 5_000_000_000, sha256: String(repeating: "a", count: 64), driveName: "Spare", driveID: nil,
+            drivePath: "Media/Movies/Gone.mkv", moved: Date(), notePath: "/Volumes/Fake/Media/Movies/Gone.mkv.hrmoved")
+        let elsewhere = MovedNote(
+            name: "Lost.mkv", size: 1, sha256: String(repeating: "b", count: 64), driveName: "Spare", driveID: nil,
+            drivePath: "x/Lost.mkv", moved: Date(), notePath: "/Volumes/Fake/Nowhere/Lost.mkv.hrmoved")
         let picture = try XCTUnwrap(tree.withGhosts([moved, elsewhere]))
         XCTAssertEqual(picture.count, tree.count + 1, "a note in a folder the map doesn't have is left out")
         let ghost = UInt32(tree.count)
@@ -253,8 +272,10 @@ final class BackupTests: XCTestCase {
         disk.file(mac + "/Mixed/c.mkv", 4_000_000, kind: .video)
         disk.file(mac + "/Mixed/d.mkv", 20_000_000, kind: .video)
         disk.finish()
-        let pair = try XCTUnwrap(PairPicture.build(real: disk.tree, macFolder: disk.node(mac), macPath: mac, drivePath: drive, driveName: "Spare",
-                                                   notes: [], ghosts: false))
+        let pair = try XCTUnwrap(
+            PairPicture.build(
+                real: disk.tree, macFolder: disk.node(mac), macPath: mac, drivePath: drive, driveName: "Spare",
+                notes: [], ghosts: false))
         func backedUp(_ path: String) -> Bool { pair.tree.find(path: path).map { pair.backedUp.contains($0) } ?? false }
         XCTAssertTrue(backedUp(mac + "/Kept/a.mkv"))
         XCTAssertTrue(backedUp(drive + "/Kept/a.mkv"), "on either half")
@@ -268,8 +289,12 @@ final class BackupTests: XCTestCase {
     @MainActor
     func testListsCutFolderPathsBetweenFolders() {
         let forms = ListNames.folderForms("~/Media/TV/Lanterns (2025)/Season 01")
-        XCTAssertEqual(forms, ["~/Media/TV/Lanterns (2025)/Season 01", "~/…/TV/Lanterns (2025)/Season 01",
-                               "~/…/Lanterns (2025)/Season 01", "~/…/Season 01"])
+        XCTAssertEqual(
+            forms,
+            [
+                "~/Media/TV/Lanterns (2025)/Season 01", "~/…/TV/Lanterns (2025)/Season 01",
+                "~/…/Lanterns (2025)/Season 01", "~/…/Season 01",
+            ])
         XCTAssertEqual(ListNames.folderForms("/Volumes/Spare/Films").last, "/…/Films")
         XCTAssertEqual(ListNames.folderForms("~/Films"), ["~/Films"])
         // Episodes listed together keep what tells them apart.
@@ -290,8 +315,10 @@ final class BackupTests: XCTestCase {
         disk.finish()
         func key(_ tree: DiskTree, _ node: UInt32) -> UInt64 { RingLayout.pathKey(MapTree(tree), node) }
         for (folderNode, macPath, drivePath) in [(disk.node(mac), mac, drive), (UInt32(0), disk.tree.rootPath, drive)] {
-            let pair = try XCTUnwrap(PairPicture.build(real: disk.tree, macFolder: folderNode, macPath: macPath, drivePath: drivePath,
-                                                       driveName: "Spare", notes: [], ghosts: false))
+            let pair = try XCTUnwrap(
+                PairPicture.build(
+                    real: disk.tree, macFolder: folderNode, macPath: macPath, drivePath: drivePath,
+                    driveName: "Spare", notes: [], ghosts: false))
             // What's on the Mac's half moves as the map's own pieces do when Backup comes and goes.
             for path in [mac + "/Kept", mac + "/Kept/a.mkv", mac + "/b.mkv"] {
                 let onHalf = try XCTUnwrap(pair.tree.find(path: path), path)
@@ -311,8 +338,10 @@ final class BackupTests: XCTestCase {
         let disk = FakeDisk(root: folder + "/Mac3")
         disk.file(mac + "/Kept/a.mkv", 3_000_000, kind: .video)
         disk.finish()
-        let pair = try XCTUnwrap(PairPicture.build(real: disk.tree, macFolder: disk.node(mac), macPath: mac, drivePath: drive, driveName: "Spare",
-                                                   notes: [], ghosts: false))
+        let pair = try XCTUnwrap(
+            PairPicture.build(
+                real: disk.tree, macFolder: disk.node(mac), macPath: mac, drivePath: drive, driveName: "Spare",
+                notes: [], ghosts: false))
         func steps(_ focus: UInt32) -> [PathStep] {
             PathStep.steps(tree: pair.tree, focus: focus, pair: pair, bare: disk.tree, name: pair.tree.name)
         }
@@ -359,10 +388,13 @@ final class BackupTests: XCTestCase {
         disk.file(mac + "/only-mac.mkv", 150_000_000, kind: .video)
         disk.file(mac + "/small.mkv", 6_000_000, kind: .video)
         disk.finish()
-        let note = MovedNote(name: "moved.mkv", size: 5_000_000, sha256: String(repeating: "a", count: 64), driveName: "Spare", driveID: nil,
-                             drivePath: "moved.mkv", moved: Date(), notePath: mac + "/moved.mkv.hrmoved")
-        let pair = try XCTUnwrap(PairPicture.build(real: disk.tree, macFolder: disk.node(mac), macPath: mac, drivePath: drive, driveName: "Spare",
-                                                   notes: [note], ghosts: true))
+        let note = MovedNote(
+            name: "moved.mkv", size: 5_000_000, sha256: String(repeating: "a", count: 64), driveName: "Spare", driveID: nil,
+            drivePath: "moved.mkv", moved: Date(), notePath: mac + "/moved.mkv.hrmoved")
+        let pair = try XCTUnwrap(
+            PairPicture.build(
+                real: disk.tree, macFolder: disk.node(mac), macPath: mac, drivePath: drive, driveName: "Spare",
+                notes: [note], ghosts: true))
         let tree = pair.tree
         func place(_ path: String) -> PairPlace? { tree.find(path: path).flatMap { pair.places[$0] } }
         XCTAssertEqual(place(mac + "/same.mkv"), .both)
@@ -383,7 +415,8 @@ final class BackupTests: XCTestCase {
         XCTAssertEqual(tree.children(0).first, pair.driveSide)
         XCTAssertEqual(tree.name(pair.driveSide), "Spare")
         XCTAssertEqual(tree.name(pair.macSide), "This Mac")
-        XCTAssertEqual(tree.totals[Int(pair.macSide)], disk.tree.totals[Int(disk.node(mac))] + 5_000_000, "the Mac's side at its size, with the ghost")
+        XCTAssertEqual(
+            tree.totals[Int(pair.macSide)], disk.tree.totals[Int(disk.node(mac))] + 5_000_000, "the Mac's side at its size, with the ghost")
         XCTAssertEqual(pair.macBytes, disk.tree.totals[Int(disk.node(mac))], "the middle says what's really on the Mac")
         XCTAssertEqual(tree.bytesHere(pair.macSide), pair.macBytes, "and so does the Mac's half")
         // A file picked on the drive's half knows where it goes on the Mac.
@@ -396,8 +429,10 @@ final class BackupTests: XCTestCase {
 
         // A note whose file is gone from the drive says so.
         try FileManager.default.removeItem(atPath: drive + "/moved.mkv")
-        let after = try XCTUnwrap(PairPicture.build(real: disk.tree, macFolder: disk.node(mac), macPath: mac, drivePath: drive, driveName: "Spare",
-                                                    notes: [note], ghosts: true))
+        let after = try XCTUnwrap(
+            PairPicture.build(
+                real: disk.tree, macFolder: disk.node(mac), macPath: mac, drivePath: drive, driveName: "Spare",
+                notes: [note], ghosts: true))
         XCTAssertEqual(after.counts[.missing]?.files, 1)
     }
 
@@ -437,8 +472,10 @@ final class BackupTests: XCTestCase {
 
     func testHalvesAreEqualAndAFolderIsCutByPlace() throws {
         let (disk, mac, drive) = try seasonOnBothSides()
-        let pair = try XCTUnwrap(PairPicture.build(real: disk.tree, macFolder: disk.node(mac), macPath: mac, drivePath: drive, driveName: "Spare",
-                                                   notes: [], ghosts: false))
+        let pair = try XCTUnwrap(
+            PairPicture.build(
+                real: disk.tree, macFolder: disk.node(mac), macPath: mac, drivePath: drive, driveName: "Spare",
+                notes: [], ghosts: false))
         let tree = pair.tree
         XCTAssertTrue(tree.twoSides)
         let layout = RingLayout.build(tree: tree, focus: 0, colorer: { pair.colour($0) }, byPlace: true)
@@ -473,8 +510,10 @@ final class BackupTests: XCTestCase {
         XCTAssertEqual(pair.macNode(for: mac + "/Season/b.mkv"), tree.find(path: mac + "/Season/b.mkv"))
         XCTAssertEqual(pair.realOf[macA], disk.node(mac + "/Season/a.mkv"), "and its place in the map")
         // A folder the drive doesn't have at all still gets its half, empty.
-        let none = try XCTUnwrap(PairPicture.build(real: disk.tree, macFolder: disk.node(mac), macPath: mac, drivePath: drive + "/Nothing", driveName: "Spare",
-                                                   notes: [], ghosts: false))
+        let none = try XCTUnwrap(
+            PairPicture.build(
+                real: disk.tree, macFolder: disk.node(mac), macPath: mac, drivePath: drive + "/Nothing", driveName: "Spare",
+                notes: [], ghosts: false))
         let emptyHalves = RingLayout.build(tree: none.tree, focus: 0, colorer: { none.colour($0) }).pieces.filter { $0.ring == 0 }
         XCTAssertEqual(emptyHalves.count, 2)
         XCTAssertEqual(emptyHalves.first?.size, 0)
@@ -482,21 +521,27 @@ final class BackupTests: XCTestCase {
 
     func testTheDrivesHalfIsDrawnFromWhatWasReadWhenItsUnplugged() throws {
         let (disk, mac, drive) = try seasonOnBothSides()
-        let read = try XCTUnwrap(PairPicture.build(real: disk.tree, macFolder: disk.node(mac), macPath: mac, drivePath: drive, driveName: "Spare",
-                                                   notes: [], ghosts: false, online: true, listingID: "spare-id", mount: folder))
+        let read = try XCTUnwrap(
+            PairPicture.build(
+                real: disk.tree, macFolder: disk.node(mac), macPath: mac, drivePath: drive, driveName: "Spare",
+                notes: [], ghosts: false, online: true, listingID: "spare-id", mount: folder))
         XCTAssertTrue(read.online)
         XCTAssertEqual(read.counts[.both]?.files, 1)
         // Unplugged: the file is gone from where it was read, but the listing still has it.
         try FileManager.default.removeItem(atPath: drive + "/Season/a.mkv")
-        let offline = try XCTUnwrap(PairPicture.build(real: disk.tree, macFolder: disk.node(mac), macPath: mac, drivePath: drive, driveName: "Spare",
-                                                      notes: [], ghosts: false, online: false, listingID: "spare-id", mount: folder))
+        let offline = try XCTUnwrap(
+            PairPicture.build(
+                real: disk.tree, macFolder: disk.node(mac), macPath: mac, drivePath: drive, driveName: "Spare",
+                notes: [], ghosts: false, online: false, listingID: "spare-id", mount: folder))
         XCTAssertFalse(offline.online)
         XCTAssertNotNil(offline.readAt)
         XCTAssertEqual(offline.counts[.both]?.files, 1, "drawn from what was read")
         XCTAssertNotEqual(offline.colour(offline.driveSide), read.colour(read.driveSide), "and it steps back")
         // A drive never read has an empty half.
-        let never = try XCTUnwrap(PairPicture.build(real: disk.tree, macFolder: disk.node(mac), macPath: mac, drivePath: drive, driveName: "Other",
-                                                    notes: [], ghosts: false, online: false, listingID: "other-id", mount: folder))
+        let never = try XCTUnwrap(
+            PairPicture.build(
+                real: disk.tree, macFolder: disk.node(mac), macPath: mac, drivePath: drive, driveName: "Other",
+                notes: [], ghosts: false, online: false, listingID: "other-id", mount: folder))
         XCTAssertNil(never.readAt)
         XCTAssertNil(never.counts[.both])
         XCTAssertEqual(never.driveBytes, 0)
@@ -504,8 +549,9 @@ final class BackupTests: XCTestCase {
 
     func testLocationsUsedBeforeAreKeptWithTheirFolders() throws {
         // A file from before locations were kept: the drives used, and where files go now.
-        let nas = DriveInfo(name: "NAS", mountPath: "/Volumes/Media", uuid: nil, fileSystem: "smbfs", capacity: 8_000_000_000_000,
-                            free: 3_000_000_000_000, isInternal: false, isReadOnly: false, isBoot: false)
+        let nas = DriveInfo(
+            name: "NAS", mountPath: "/Volumes/Media", uuid: nil, fileSystem: "smbfs", capacity: 8_000_000_000_000,
+            free: 3_000_000_000_000, isInternal: false, isReadOnly: false, isBoot: false)
         var state = BackupState()
         state.knownDrives = [drive, nas]
         state.destination = BackupDestination(drive: nas, folder: "Backups/Mac")
@@ -556,11 +602,13 @@ final class BackupTests: XCTestCase {
     /// a failed copy is taken away again, and what was freed leaves out a file whose other copy stays.
     @MainActor
     func testRunCountsWhatLandedAndWhatFreed() {
-        let job = DriveJob(kind: .move, title: "Moving", driveName: "Drive", entries: [
-            DriveJob.Entry(id: "/a", title: "a", bytes: 100),
-            DriveJob.Entry(id: "/b", title: "b", bytes: 50),
-            DriveJob.Entry(id: "/c", title: "c", bytes: 30),
-        ])
+        let job = DriveJob(
+            kind: .move, title: "Moving", driveName: "Drive",
+            entries: [
+                DriveJob.Entry(id: "/a", title: "a", bytes: 100),
+                DriveJob.Entry(id: "/b", title: "b", bytes: 50),
+                DriveJob.Entry(id: "/c", title: "c", bytes: 30),
+            ])
         job.freesNothing = ["/b"]
         job.begin(0)
         job.progress(0, phase: .copying, bytes: 40, of: 100)

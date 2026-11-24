@@ -163,8 +163,9 @@ extension AppModel {
     private func selectAction(for thing: NamedThing, startsGroup: Bool, tree: DiskTree) -> ThingAction {
         let isOn = mode == .backup ? backupPlanned() : plannedTest()
         let planned = thing.nodes.allSatisfy { isOn($0) }
-        return ThingAction(title: planned ? "Deselect" : "Select", symbol: planned ? "minus.circle" : "plus.circle", shortcut: .selectThing,
-                           startsGroup: startsGroup, run: stillThisScan(tree) { self.toggleSelection(of: thing) })
+        return ThingAction(
+            title: planned ? "Deselect" : "Select", symbol: planned ? "minus.circle" : "plus.circle", shortcut: .selectThing,
+            startsGroup: startsGroup, run: stillThisScan(tree) { self.toggleSelection(of: thing) })
     }
 
     /// What you'd really get back, said before you choose.
@@ -270,7 +271,7 @@ extension AppModel {
         var title: String
         var rows: [(name: String, size: String)] = []
         if isSearching {
-            title = "\"\(searchText)\": \(searchResults.count.formatted()) found"
+            title = "\"\(searchText)\": \(searchResults.count.formatted()) found" + (searchFolderName.map { " in " + $0 } ?? "")
             rows = searchResults.prefix(most).map { (tree.friendlyPath($0), formatBytes(tree.totals[Int($0)])) }
         } else {
             // What the panel shows: the mode's, or in Copies with Free Up, the duplicates.
@@ -280,7 +281,8 @@ extension AppModel {
                 rows = boxes.flatMap(\.rows).prefix(most).map { ($0.title, formatBytes($0.gain)) }
             case .backup:
                 title = "Backup" + (backup.destination.map { " to " + $0.title } ?? "")
-                rows = backup.items.prefix(most).map { (DiskTree.friendly($0.path), formatBytes($0.bytes)) }
+                rows =
+                    backup.items.prefix(most).map { (DiskTree.friendly($0.path), formatBytes($0.bytes)) }
                     + movedNotes.prefix(most).map { ("Moved: " + DiskTree.friendly($0.originalPath) + " → " + $0.driveName, formatBytes($0.size)) }
             case .copies:
                 title = focus == 0 ? "Copies" : "Copies in " + displayName(RingLayout.chainTail(tree: tree, focus))
@@ -296,12 +298,6 @@ extension AppModel {
         return (ThingText.list(title: title, rows: rows), rows.count)
     }
 
-    /// What the Map's list shows: what's in the folder you're in, or the biggest of everything at the top of the disk.
-    func panelNodes(_ tree: DiskTree) -> [UInt32] {
-        if focus == 0 { return flatTop(tree) }
-        return tree.children(RingLayout.chainTail(tree: tree, focus)).filter { tree.totals[Int($0)] > 0 }
-    }
-
     /// A row in one of the inspector's lists was clicked. A folder with something in it is gone into. Anything else is
     /// selected, in the folder it's in: a list that reaches beyond the folder in view goes there first.
     func openFromList(_ node: UInt32, goingToItsFolder: Bool = true) {
@@ -315,23 +311,14 @@ extension AppModel {
         }
     }
 
-    /// What the whole disk's list shows: what's at the top, with your home folder and macOS's groups opened up.
-    private func topThings(_ tree: DiskTree) -> [UInt32] {
+    /// What the whole disk's list shows: what's at the top, with your home folder and macOS's groups opened up, biggest first.
+    func flatTop(_ tree: DiskTree) -> [UInt32] {
         var all: [UInt32] = []
         for top in tree.children(0) where top != tree.free && top != tree.hidden {
             let n = tree.nodes[Int(top)]
             if top == tree.home || n.has(NodeFlag.synthetic) { all += tree.children(top) } else { all.append(top) }
         }
-        return all.filter { tree.totals[Int($0)] > 0 }
-    }
-
-    func flatTop(_ tree: DiskTree) -> [UInt32] {
-        topThings(tree).sorted { tree.totals[Int($0)] > tree.totals[Int($1)] }
-    }
-
-    /// The biggest of them, without putting the rest in order.
-    func biggestAtTop(_ tree: DiskTree) -> UInt32? {
-        topThings(tree).max { tree.totals[Int($0)] < tree.totals[Int($1)] }
+        return all.filter { tree.totals[Int($0)] > 0 }.sorted { tree.totals[Int($0)] > tree.totals[Int($1)] }
     }
 
     // MARK: Handing things over
@@ -358,7 +345,27 @@ extension AppModel {
         handOver("open \(path)") { NSWorkspace.shared.open(URL(fileURLWithPath: path)) }
     }
 
-    func openInTerminal(_ path: String) {
+    // MARK: Small files
+
+    /// A small file isn't on the map, so it goes by where it is: its folder's path and its name.
+    func path(of file: SmallFile) -> String? { file.folderPath.isEmpty ? nil : (file.folderPath == "/" ? "/" : file.folderPath + "/") + file.name }
+
+    func open(_ file: SmallFile) {
+        guard let path = path(of: file) else { return }
+        handOver("open \(path)") { NSWorkspace.shared.open(URL(fileURLWithPath: path)) }
+    }
+
+    func reveal(_ file: SmallFile) {
+        guard let path = path(of: file) else { return }
+        handOver("reveal \(path)") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }
+    }
+
+    func copyPath(of file: SmallFile) {
+        guard let path = path(of: file).map({ HiddenNames.isOn ? DiskTree.friendly($0) : $0 }) else { return }
+        copy(path, saying: "Copied: \(path)")
+    }
+
+    private func openInTerminal(_ path: String) {
         let terminal = URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app")
         handOver("open \(path) in Terminal") {
             NSWorkspace.shared.open([URL(fileURLWithPath: path)], withApplicationAt: terminal, configuration: NSWorkspace.OpenConfiguration())
@@ -419,7 +426,7 @@ extension AppModel {
         if Motion.isReduced { panelOpen = open } else { Motion.animate(.smooth(duration: 0.25)) { panelOpen = open } }
     }
 
-    func findOthers(named name: String) {
+    private func findOthers(named name: String) {
         searchActive = true
         showPanel(true)
         searchText = name
@@ -427,20 +434,20 @@ extension AppModel {
     }
 
     /// The other side of a hard link or a clone. Back comes back here.
-    func goToPlace(_ node: UInt32) {
+    private func goToPlace(_ node: UInt32) {
         guard let tree else { return }
         zoom(into: RingLayout.chainTail(tree: tree, node))
     }
 
     // MARK: Selecting
 
-    /// What Send to Trash in the File menu means right now, where the pointer can't be on anything else.
     /// Whether this can be sent to the Trash as it is, which the Delete submenu and the File menu both go by.
     func canSendToTrash(_ node: UInt32) -> Bool {
         guard node != 0, let tree, let raw = tree.path(node) else { return false }
         return Safety.canTrash(raw)
     }
 
+    /// What Send to Trash in the File menu means right now, where the pointer can't be on anything else.
     var trashTitle: String {
         let node = selected ?? focus
         return node == 0 ? "Move to Trash" : "Move “\(realName(of: node))” to Trash"
@@ -460,9 +467,10 @@ extension AppModel {
         guard backForwardWatch == nil else { return }
         backForwardWatch = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, event.keyCode == 123 || event.keyCode == 124,
-                  event.modifierFlags.intersection([.command, .option, .control, .shift]) == .command,
-                  let window = event.window, window === self.mapView?.window || window === LookPanel.shared.window,
-                  !(window.firstResponder is NSText) else { return event }
+                event.modifierFlags.intersection([.command, .option, .control, .shift]) == .command,
+                let window = event.window, window === self.mapView?.window || window === LookPanel.shared.window,
+                !(window.firstResponder is NSText)
+            else { return event }
             if event.keyCode == 123 { self.goBack() } else { self.goForward() }
             return nil
         }

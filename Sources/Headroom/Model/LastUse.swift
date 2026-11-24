@@ -1,5 +1,5 @@
-import Foundation
 import CoreServices
+import Foundation
 import SQLite3
 
 /// The line under the size in the middle of the ring, when nothing about links needs saying: when you last used the thing
@@ -43,7 +43,7 @@ enum LastUse {
 
     // MARK: Plex
 
-    static let plexDatabase = "/Library/Application Support/Plex Media Server/Plug-in Support/Databases/com.plexapp.plugins.library.db"
+    private static let plexDatabase = "/Library/Application Support/Plex Media Server/Plug-in Support/Databases/com.plexapp.plugins.library.db"
 
     /// Plex's library folders: a few short paths, read once and again after ten minutes, so that only what's inside a
     /// library ever opens Plex's database.
@@ -84,14 +84,17 @@ enum LastUse {
         librariesLock.unlock()
         if let known, Date().timeIntervalSince(known.read) < 600 { return known.roots }
         guard FileManager.default.fileExists(atPath: database) else { return nil }
-        let roots = withPlex(database) { db -> [String] in
-            var statement: OpaquePointer?
-            guard sqlite3_prepare_v2(db, "select root_path from section_locations", -1, &statement, nil) == SQLITE_OK, let statement else { return [] }
-            defer { sqlite3_finalize(statement) }
-            var out: [String] = []
-            while sqlite3_step(statement) == SQLITE_ROW { if let text = sqlite3_column_text(statement, 0) { out.append(String(cString: text)) } }
-            return out
-        } ?? []
+        let roots =
+            withPlex(database) { db -> [String] in
+                var statement: OpaquePointer?
+                guard sqlite3_prepare_v2(db, "select root_path from section_locations", -1, &statement, nil) == SQLITE_OK, let statement else {
+                    return []
+                }
+                defer { sqlite3_finalize(statement) }
+                var out: [String] = []
+                while sqlite3_step(statement) == SQLITE_ROW { if let text = sqlite3_column_text(statement, 0) { out.append(String(cString: text)) } }
+                return out
+            } ?? []
         librariesLock.lock()
         libraries[database] = (Date(), roots)
         librariesLock.unlock()
@@ -134,13 +137,7 @@ enum LastUse {
 
     /// Whether the scan saw a `.git` folder directly inside.
     private static func hasGit(_ node: UInt32, in tree: DiskTree) -> Bool {
-        var child = tree.nodes[Int(node)].firstChild
-        while child != 0 {
-            let n = tree.nodes[Int(child)]
-            if n.nameLength == 4, n.has(NodeFlag.directory), tree.rawName(child) == ".git" { return true }
-            child = n.nextSibling
-        }
-        return false
+        tree.child(of: node, named: ".git").map { tree.nodes[Int($0)].has(NodeFlag.directory) } ?? false
     }
 
     /// The last commit made here, from git's own log of where HEAD has been. It reads the last two kilobytes of that log,
@@ -185,7 +182,8 @@ enum LastUse {
     /// someone opened it.
     private static func openedBySpotlight(_ path: String) -> Date? {
         guard let item = MDItemCreateWithURL(nil, URL(fileURLWithPath: path) as CFURL),
-              let count = MDItemCopyAttribute(item, "kMDItemUseCount" as CFString) as? Int, count > 0 else { return nil }
+            let count = MDItemCopyAttribute(item, "kMDItemUseCount" as CFString) as? Int, count > 0
+        else { return nil }
         return MDItemCopyAttribute(item, kMDItemLastUsedDate) as? Date
     }
 

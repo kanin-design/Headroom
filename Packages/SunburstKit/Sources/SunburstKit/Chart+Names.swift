@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 
 /// What a chart writes: the names around its ring, and what its centre says.
@@ -17,8 +16,9 @@ extension SunburstChart {
         if focus != 0 {
             // Zoomed in: what share of everything this is, and a way back out.
             let share = Double(whole) / Double(max(tree.size(of: 0), 1))
-            return SunburstReadout(title: name(focus), size: whole, text: amountText(focus), detail: Self.percent(share) + " of " + name(0),
-                                   goesBack: true)
+            return SunburstReadout(
+                title: name(focus), size: whole, text: amountText(focus), detail: Self.percent(share) + " of " + name(0),
+                goesBack: true)
         }
         return SunburstReadout(title: name(focus), size: whole, text: amountText(focus), detail: "")
     }
@@ -92,13 +92,16 @@ extension SunburstChart {
             labels = []
             return
         }
-        let area = LabelArea(center: place.center, radius: place.radius, width: place.size.width, height: place.size.height,
-                             top: labelInsets.top, bottom: place.size.height - labelInsets.bottom)
+        let area = LabelArea(
+            center: place.center, radius: place.radius, width: place.size.width, height: place.size.height,
+            top: labelInsets.top, bottom: place.size.height - labelInsets.bottom)
         let order = LabelPlacer.order(layout)
         // Names side by side can be written by what tells them apart, where the whole name doesn't fit.
-        let short = shortensNames ? ShortNames(layout: layout, pieces: order.prefix(260), context: contextNames()) { i in
-            self.name(layout.pieces[i].node)
-        } : ShortNames()
+        let short =
+            shortensNames
+            ? ShortNames(layout: layout, pieces: order.prefix(260), context: contextNames()) { i in
+                self.name(layout.pieces[i].node)
+            } : ShortNames()
         shortNames = short
         var named = LabelPlacer.Placed()
         if let namer {
@@ -166,17 +169,19 @@ public struct SunburstChartLabels<Tree: SunburstTree, Outer: ViewModifier>: View
 
     public var body: some View {
         let placedFor = chart.labelsPlacedFor
-        SunburstLabels(labels: chart.labels, lights: chart.labelLights, visible: chart.labelsVisible, width: width,
-                       onEnter: { [chart] in chart.pointerOnLabel(piece: $0) }, onLeave: { [chart] in chart.pointerLeftLabel(piece: $0) },
-                       onOpen: { [chart] piece, clicks in chart.labelClicked(piece: piece, count: clicks) },
-                       outer: outer)
-            .following(ring ?? placedFor, placedFor: placedFor)
-            .animation(.easeOut(duration: chart.labelsVisible ? 0.28 : 0.1), value: chart.labelsVisible)
+        SunburstLabels(
+            labels: chart.labels, lights: chart.labelLights, visible: chart.labelsVisible, width: width,
+            onEnter: { [chart] in chart.pointerOnLabel(piece: $0) }, onLeave: { [chart] in chart.pointerLeftLabel(piece: $0) },
+            onOpen: { [chart] piece, clicks in chart.labelClicked(piece: piece, count: clicks) },
+            outer: outer
+        )
+        .following(ring ?? placedFor, placedFor: placedFor)
+        .animation(.easeOut(duration: chart.labelsVisible ? 0.28 : 0.1), value: chart.labelsVisible)
     }
 }
 
-public extension SunburstChartLabels where Outer == EmptyModifier {
-    init(_ chart: SunburstChart<Tree>, width: CGFloat, ring: RingPlacement? = nil) {
+extension SunburstChartLabels where Outer == EmptyModifier {
+    public init(_ chart: SunburstChart<Tree>, width: CGFloat, ring: RingPlacement? = nil) {
         self.init(chart, width: width, ring: ring) { _ in EmptyModifier() }
     }
 }

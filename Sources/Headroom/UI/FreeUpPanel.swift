@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 
 /// A short stack of boxes, what you'd miss least on top. Each box selects a whole section, and the ring wears the same colours:
@@ -13,7 +12,7 @@ struct FreeUpPanel: View {
         let others = model.shownRows.filter { !$0.isPlannable }
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 1) {
+                VStack(alignment: .leading, spacing: Kit.Space.hairline) {
                     FreeUpTopCard(model: model)
                     NeedsALook(model: model)
                     RecommendedButton(model: model)
@@ -22,7 +21,10 @@ struct FreeUpPanel: View {
                             .id(box.id)
                     }
                     if boxes.isEmpty { emptyState }
-                    if !others.isEmpty { TuckedAway(model: model, title: "Other actions", promise: "Done outside Headroom", rows: others).padding(.top, 8) }
+                    if !others.isEmpty {
+                        TuckedAway(model: model, title: "Other actions", promise: "Done outside Headroom", rows: others).padding(
+                            .top, Kit.Space.regular)
+                    }
                     keptLink
                 }
                 .padding(Kit.panelInset)
@@ -37,8 +39,9 @@ struct FreeUpPanel: View {
 
     private var emptyState: some View {
         // With nothing read, there's no knowing what could go.
-        EmptyNote(title: !model.hasFullAccess ? "Needs Full Disk Access" : model.focus == 0 ? "No suggestions" : "No suggestions here",
-                  detail: model.hasFullAccess ? "To select an item, point to it on the map and press Space." : nil)
+        EmptyNote(
+            title: !model.hasFullAccess ? "Needs Full Disk Access" : model.focus == 0 ? "No suggestions" : "No suggestions here",
+            detail: model.hasFullAccess ? "To select an item, point to it on the map and press Space." : nil)
     }
 
     @ViewBuilder
@@ -49,7 +52,7 @@ struct FreeUpPanel: View {
                     KeptLine(title: kept.title) { model.stopKeeping(kept.id) }
                 }
             }
-            .padding(.top, 8)
+            .padding(.top, Kit.Space.regular)
         }
     }
 }
@@ -59,7 +62,6 @@ struct FreeUpPanel: View {
 /// pointing at it shows what it would take, in the list and on the ring.
 private struct RecommendedButton: View {
     let model: AppModel
-    @State private var isHovered = false
 
     var body: some View {
         let rows = model.recommendedLeft
@@ -69,26 +71,19 @@ private struct RecommendedButton: View {
             } label: {
                 HStack(spacing: 7) {
                     Image(systemName: "sparkles")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(Kit.Font.label)
                     Text("Select recommended")
-                        .font(.system(size: 12.5, weight: .semibold))
-                    Spacer(minLength: 4)
+                        .font(Kit.Font.strong)
+                    Spacer(minLength: Kit.Space.small)
                     Text(formatBytes(rows.reduce(UInt64(0)) { $0 &+ $1.aTickFrees }))
-                        .font(.system(size: 12.5, weight: .semibold).monospacedDigit())
+                        .font(Kit.Font.strong.monospacedDigit())
                 }
                 .foregroundStyle(Kit.green)
-                .padding(.horizontal, Kit.rowInset)
-                .padding(.vertical, 8)
-                .background(RoundedRectangle(cornerRadius: Kit.cardRadius, style: .continuous).fill(Kit.green.opacity(isHovered ? 0.18 : 0.1)))
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            .onHover { inside in
-                isHovered = inside
-                model.pointAtRecommended(inside)
-            }
+            .buttonStyle(.card(Kit.green))
+            .onHover { inside in model.pointAtRecommended(inside) }
             .help("Caches not in use, and junk")
-            .padding(.bottom, 6)
+            .padding(.bottom, Kit.Space.medium)
         }
     }
 }
@@ -101,8 +96,10 @@ private struct TuckedAway: View {
     let rows: [WinRow]
 
     var body: some View {
-        Fold(title: title, count: rows.count == 1 ? "1 item" : "\(rows.count) items",
-             trailing: formatBytes(rows.reduce(UInt64(0)) { $0 &+ $1.gain }), help: promise) {
+        Fold(
+            title: title, count: counted(rows.count, "item"),
+            trailing: formatBytes(rows.reduce(UInt64(0)) { $0 &+ $1.gain }), help: promise
+        ) {
             VStack(spacing: 0) {
                 ForEach(rows) { row in
                     ThingRow(model: model, row: row, color: Palette.Box.other)

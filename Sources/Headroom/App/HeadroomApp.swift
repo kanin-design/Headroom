@@ -10,6 +10,14 @@ extension NSApplication {
     }
 }
 
+extension [String] {
+    /// What follows a flag on the command line: `--script steps.txt` gives `steps.txt`.
+    func value(after flag: String) -> String? {
+        guard let at = firstIndex(of: flag), at + 1 < count else { return nil }
+        return self[at + 1]
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.appearance = NSAppearance(named: .darkAqua)
@@ -115,6 +123,16 @@ private struct GlowCommand: View {
     }
 }
 
+/// Whether a search also finds small files, which aren't on the map. Their names are kept in a catalogue of their own.
+private struct SmallFilesCommand: View {
+    let model = AppModel.shared
+
+    var body: some View {
+        Toggle("Search Small Files", isOn: Binding(get: { model.searchesSmallFiles }, set: { model.setSearchesSmallFiles($0) }))
+            .help("Also find files under 1 MiB, which aren't on the map")
+    }
+}
+
 /// Up to the folder this one is in, as in the Finder. Like Esc, it lets go of what's selected first.
 private struct EnclosingFolderCommand: View {
     let model = AppModel.shared
@@ -137,30 +155,32 @@ private struct ShowMovedFilesCommand: View {
     }
 }
 
-private struct AboutCommand: View {
+/// A menu item that opens one of the app's windows, after doing `first`.
+private struct OpenWindowCommand: View {
+    let title: String
+    let id: String
+    var first: () -> Void = {}
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        Button("About Headroom") { openWindow(id: "about") }
-    }
-}
-
-private struct AgentsCommand: View {
-    @Environment(\.openWindow) private var openWindow
-
-    var body: some View {
-        Button("Agents…") { openWindow(id: "agents") }
-    }
-}
-
-private struct UpdateCommand: View {
-    @Environment(\.openWindow) private var openWindow
-
-    var body: some View {
-        Button("Check for Updates…") {
-            Updater.shared.checkNow()
-            openWindow(id: "update")
+        Button(title) {
+            first()
+            openWindow(id: id)
         }
+    }
+}
+
+extension Scene {
+    /// A small window of its own: no title bar, its content's size, dragged by its background, opened only when asked for,
+    /// in the middle of the screen, and with no menu commands of its own.
+    fileprivate func smallWindow() -> some Scene {
+        windowStyle(.hiddenTitleBar)
+            .windowResizability(.contentSize)
+            .windowBackgroundDragBehavior(.enabled)
+            .restorationBehavior(.disabled)
+            .defaultLaunchBehavior(.suppressed)
+            .defaultPosition(.center)
+            .commandsRemoved()
     }
 }
 
@@ -182,9 +202,9 @@ struct HeadroomApp: App {
         .restorationBehavior(AppModel.remembersWindow ? .automatic : .disabled)
         .commands {
             CommandGroup(replacing: .appInfo) {
-                AboutCommand()
-                UpdateCommand()
-                AgentsCommand()
+                OpenWindowCommand(title: "About Headroom", id: "about")
+                OpenWindowCommand(title: "Check for Updates…", id: "update") { Updater.shared.checkNow() }
+                OpenWindowCommand(title: "Agents…", id: "agents")
             }
             CommandGroup(replacing: .newItem) {
                 Button("Scan Again") { AppModel.shared.scan(hurry: true) }
@@ -267,6 +287,7 @@ struct HeadroomApp: App {
                     AppModel.shared.showPanel(true)
                 }
                 .keyboardShortcut("f", modifiers: .command)
+                SmallFilesCommand()
             }
         }
 
@@ -276,26 +297,14 @@ struct HeadroomApp: App {
                 .windowResizeBehavior(.disabled)
                 .windowFullScreenBehavior(.disabled)
         }
-        .windowStyle(.hiddenTitleBar)
-        .windowResizability(.contentSize)
-        .windowBackgroundDragBehavior(.enabled)
-        .restorationBehavior(.disabled)
-        .defaultLaunchBehavior(.suppressed)
-        .defaultPosition(.center)
-        .commandsRemoved()
+        .smallWindow()
 
         Window("Agents", id: "agents") {
             AgentsView()
                 .windowMinimizeBehavior(.disabled)
                 .windowFullScreenBehavior(.disabled)
         }
-        .windowStyle(.hiddenTitleBar)
-        .windowResizability(.contentSize)
-        .windowBackgroundDragBehavior(.enabled)
-        .restorationBehavior(.disabled)
-        .defaultLaunchBehavior(.suppressed)
-        .defaultPosition(.center)
-        .commandsRemoved()
+        .smallWindow()
 
         Window("Full Disk Access", id: "access") {
             AccessGuideView()
@@ -303,13 +312,7 @@ struct HeadroomApp: App {
                 .windowResizeBehavior(.disabled)
                 .windowFullScreenBehavior(.disabled)
         }
-        .windowStyle(.hiddenTitleBar)
-        .windowResizability(.contentSize)
-        .windowBackgroundDragBehavior(.enabled)
-        .restorationBehavior(.disabled)
-        .defaultLaunchBehavior(.suppressed)
-        .defaultPosition(.center)
-        .commandsRemoved()
+        .smallWindow()
 
         Window("Update Headroom", id: "update") {
             UpdateView()
@@ -317,12 +320,6 @@ struct HeadroomApp: App {
                 .windowResizeBehavior(.disabled)
                 .windowFullScreenBehavior(.disabled)
         }
-        .windowStyle(.hiddenTitleBar)
-        .windowResizability(.contentSize)
-        .windowBackgroundDragBehavior(.enabled)
-        .restorationBehavior(.disabled)
-        .defaultLaunchBehavior(.suppressed)
-        .defaultPosition(.center)
-        .commandsRemoved()
+        .smallWindow()
     }
 }

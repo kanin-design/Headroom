@@ -33,9 +33,10 @@ final class LookPanel: NSObject, NSWindowDelegate {
     }
 
     private func make(for model: AppModel) -> NSPanel {
-        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 620, height: 520),
-                            styleMask: [.titled, .fullSizeContentView, .resizable, .nonactivatingPanel, .utilityWindow],
-                            backing: .buffered, defer: true)
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 620, height: 520),
+            styleMask: [.titled, .fullSizeContentView, .resizable, .nonactivatingPanel, .utilityWindow],
+            backing: .buffered, defer: true)
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
         for button: NSWindow.ButtonType in [.closeButton, .miniaturizeButton, .zoomButton] { panel.standardWindowButton(button)?.isHidden = true }
@@ -110,7 +111,8 @@ final class LookPanel: NSObject, NSWindowDelegate {
     /// it's narrower instead.
     private func shaped(width: CGFloat, on screen: NSScreen?) -> NSSize? {
         guard let model, let look = model.look, model.lookDetails.node == look.node, let aspect = model.lookDetails.aspect,
-              aspect > 0, model.lookChrome > 0 else { return nil }
+            aspect > 0, model.lookChrome > 0
+        else { return nil }
         let chrome = model.lookChrome
         var width = max(width, 360)
         var height = chrome + width / aspect
@@ -125,7 +127,7 @@ final class LookPanel: NSObject, NSWindowDelegate {
 
 /// What the card's window shows: the card for what you're looking at, filling it. While the window fades out, the card
 /// it had stays in it.
-struct LookWindow: View {
+private struct LookWindow: View {
     let model: AppModel
     @State private var lastShown: Look?
 

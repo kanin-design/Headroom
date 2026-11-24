@@ -25,7 +25,8 @@ extension AppModel {
         let started = Date()
         let scanID = tree.scanID
         Task { [weak self] in
-            let first = await Task.detached(priority: .userInitiated) { () -> (aliases: [Aliases.Found], work: [Duplicates.Work], known: [Duplicates.Found], read: [Int]) in
+            let first = await Task.detached(priority: .userInitiated) {
+                () -> (aliases: [Aliases.Found], work: [Duplicates.Work], known: [Duplicates.Found], read: [Int]) in
                 let aliases = Aliases.find(in: tree, rules: rules, stop: stop)
                 let work = Duplicates.work(in: tree, rules: rules)
                 var known: [Duplicates.Found] = []
@@ -36,7 +37,8 @@ extension AppModel {
                 return (aliases, work, known, read)
             }.value
             let firstMap = await Task.detached(priority: .userInitiated) {
-                CopiesMap.build(tree: tree, duplicates: first.known, aliases: first.aliases, duplicatesDone: first.read.isEmpty, kept: kept, colours: colours)
+                CopiesMap.build(
+                    tree: tree, duplicates: first.known, aliases: first.aliases, duplicatesDone: first.read.isEmpty, kept: kept, colours: colours)
             }.value
             guard let self else { return }
             guard !stop.value, self.tree?.scanID == scanID else { self.copiesEnded(stop); return }
@@ -75,7 +77,8 @@ extension AppModel {
                     // Worked out off the main thread, so the window never waits for it.
                     let kept = self.keptCopies, colours = self.copyColours
                     let map = await Task.detached(priority: .userInitiated) {
-                        CopiesMap.build(tree: tree, duplicates: first.known + sets, aliases: first.aliases, duplicatesDone: done, kept: kept, colours: colours)
+                        CopiesMap.build(
+                            tree: tree, duplicates: first.known + sets, aliases: first.aliases, duplicatesDone: done, kept: kept, colours: colours)
                     }.value
                     guard !stop.value, self.tree?.scanID == scanID else { self.copiesEnded(stop); return }
                     self.copiesFound = first.known + sets
@@ -215,9 +218,8 @@ extension AppModel {
         Set((try? JSONDecoder().decode([String].self, from: Data(contentsOf: keptCopiesFile))) ?? [])
     }
 
-    static func saveKeptCopies(_ paths: Set<String>) {
-        let list = Array(paths).sorted(), file = keptCopiesFile
-        Saves.write(list, to: file)
+    private static func saveKeptCopies(_ paths: Set<String>) {
+        Saves.write(paths.sorted(), to: keptCopiesFile)
     }
 
     // MARK: Taking the extra copies
@@ -247,8 +249,11 @@ extension AppModel {
         }
         for e in extras where !isPlanned(e.node) {
             guard Safety.canTrash(e.path), let keeper = group.keeper(of: e.node) else { continue }
-            plan.add(PlanItem(id: PlanItem.id(pickedByHand: e.path), title: tree.name(e.node), note: "Duplicate of \(tree.friendlyPath(keeper))", tierRaw: Tier.yourCall.rawValue,
-                              paths: [e.path], byHand: true, lastKnownBytes: tree.totals[Int(e.node)], diskID: Cleaner.diskID(of: e.path)))
+            plan.add(
+                PlanItem(
+                    id: PlanItem.id(pickedByHand: e.path), title: tree.name(e.node), note: "Duplicate of \(tree.friendlyPath(keeper))",
+                    tierRaw: Tier.yourCall.rawValue,
+                    paths: [e.path], byHand: true, lastKnownBytes: tree.totals[Int(e.node)], diskID: Cleaner.diskID(of: e.path)))
         }
         planChanged()
     }

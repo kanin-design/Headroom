@@ -15,7 +15,7 @@ struct AboutView: View {
             logo
                 .padding(.top, 6)
             Text("Version \(version)  ·  Build \(build)")
-                .font(.system(size: 12).monospacedDigit())
+                .font(Kit.Font.body.monospacedDigit())
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
                 .padding(.top, 14)
@@ -56,7 +56,7 @@ struct AboutView: View {
                 .accessibilityLabel("Headroom")
         } else {
             Text("Headroom")
-                .font(.system(size: 24, weight: .semibold))
+                .font(Kit.Font.title)
         }
     }
 }

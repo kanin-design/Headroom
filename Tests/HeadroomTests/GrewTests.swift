@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Headroom
 
 /// What Changes lists as grown and shrunk, compared with an earlier scan.
@@ -23,12 +24,16 @@ final class GrewTests: XCTestCase {
         _ = disk.file("/Volumes/Fake/Docs/a", 10 * gb)
         disk.finish()
         // A day ago the old show had 5 GB more, the new one wasn't there, and the Trash held 14 GB more.
-        let map = ChangeMap(tree: disk.tree, comparingWith: earlier(disk, [
-            "/Volumes/Fake": 31 * gb + gb / 10, "/Volumes/Fake/Media": 7 * gb, "/Volumes/Fake/Media/TV": 7 * gb,
-            "/Volumes/Fake/Media/TV/Old show": 7 * gb, "/Volumes/Fake/Media/TV/Old show/e1": 2 * gb,
-            "/Volumes/Fake/.Trash": 14 * gb + gb / 10, "/Volumes/Fake/.Trash/left": gb / 10,
-            "/Volumes/Fake/Docs": 10 * gb, "/Volumes/Fake/Docs/a": 10 * gb,
-        ]))
+        let map = ChangeMap(
+            tree: disk.tree,
+            comparingWith: earlier(
+                disk,
+                [
+                    "/Volumes/Fake": 31 * gb + gb / 10, "/Volumes/Fake/Media": 7 * gb, "/Volumes/Fake/Media/TV": 7 * gb,
+                    "/Volumes/Fake/Media/TV/Old show": 7 * gb, "/Volumes/Fake/Media/TV/Old show/e1": 2 * gb,
+                    "/Volumes/Fake/.Trash": 14 * gb + gb / 10, "/Volumes/Fake/.Trash/left": gb / 10,
+                    "/Volumes/Fake/Docs": 10 * gb, "/Volumes/Fake/Docs/a": 10 * gb,
+                ]))
         let rules = RuleBook(homePath: "/Users/nobody")
         XCTAssertEqual(Double(map.value(of: disk.node("/Volumes/Fake/Media/TV"))), -2e9, accuracy: 1, "the TV folder shrank overall")
 
@@ -47,10 +52,14 @@ final class GrewTests: XCTestCase {
         _ = disk.file("/Volumes/Fake/Work/Project/src/main", gb)
         disk.finish()
         // The build folder is new. Nothing else changed, so the project it's in says it just as well.
-        let map = ChangeMap(tree: disk.tree, comparingWith: earlier(disk, [
-            "/Volumes/Fake": gb, "/Volumes/Fake/Work": gb, "/Volumes/Fake/Work/Project": gb,
-            "/Volumes/Fake/Work/Project/src": gb, "/Volumes/Fake/Work/Project/src/main": gb,
-        ]))
+        let map = ChangeMap(
+            tree: disk.tree,
+            comparingWith: earlier(
+                disk,
+                [
+                    "/Volumes/Fake": gb, "/Volumes/Fake/Work": gb, "/Volumes/Fake/Work/Project": gb,
+                    "/Volumes/Fake/Work/Project/src": gb, "/Volumes/Fake/Work/Project/src/main": gb,
+                ]))
         let rules = RuleBook(homePath: "/Users/nobody")
         XCTAssertEqual(map.rows(tree: disk.tree, rules: rules).map(\.title), ["Work"])
         XCTAssertEqual(map.rows(tree: disk.tree, rules: rules, shrinking: true), [], "nothing shrank")
@@ -63,17 +72,22 @@ final class GrewTests: XCTestCase {
         _ = disk.file("/Volumes/Fake/.Trash/left", gb / 10)
         _ = disk.file("/Volumes/Fake/Docs/a", 10 * gb)
         disk.finish()
-        let map = ChangeMap(tree: disk.tree, comparingWith: earlier(disk, [
-            "/Volumes/Fake": 31 * gb + gb / 10, "/Volumes/Fake/Media": 7 * gb, "/Volumes/Fake/Media/TV": 7 * gb,
-            "/Volumes/Fake/Media/TV/Old show": 7 * gb, "/Volumes/Fake/Media/TV/Old show/e1": 2 * gb,
-            "/Volumes/Fake/.Trash": 14 * gb + gb / 10, "/Volumes/Fake/.Trash/left": gb / 10,
-            "/Volumes/Fake/Docs": 10 * gb, "/Volumes/Fake/Docs/a": 10 * gb,
-        ]))
+        let map = ChangeMap(
+            tree: disk.tree,
+            comparingWith: earlier(
+                disk,
+                [
+                    "/Volumes/Fake": 31 * gb + gb / 10, "/Volumes/Fake/Media": 7 * gb, "/Volumes/Fake/Media/TV": 7 * gb,
+                    "/Volumes/Fake/Media/TV/Old show": 7 * gb, "/Volumes/Fake/Media/TV/Old show/e1": 2 * gb,
+                    "/Volumes/Fake/.Trash": 14 * gb + gb / 10, "/Volumes/Fake/.Trash/left": gb / 10,
+                    "/Volumes/Fake/Docs": 10 * gb, "/Volumes/Fake/Docs/a": 10 * gb,
+                ]))
         let rules = RuleBook(homePath: "/Users/nobody")
         let media = disk.node("/Volumes/Fake/Media")
         XCTAssertEqual(map.rows(tree: disk.tree, rules: rules, under: media).map(\.title), ["New show"])
-        XCTAssertEqual(map.rows(tree: disk.tree, rules: rules, shrinking: true, under: media).map(\.title), ["Old show"],
-                       "the Trash shrank more, but it isn't in Media")
+        XCTAssertEqual(
+            map.rows(tree: disk.tree, rules: rules, shrinking: true, under: media).map(\.title), ["Old show"],
+            "the Trash shrank more, but it isn't in Media")
         XCTAssertEqual(map.rows(tree: disk.tree, rules: rules, under: disk.node("/Volumes/Fake/Docs")), [], "nothing in Docs changed")
     }
 
@@ -82,10 +96,14 @@ final class GrewTests: XCTestCase {
         _ = disk.file("/Volumes/Fake/Work/Project/build/out", 2 * gb)
         _ = disk.file("/Volumes/Fake/Work/Project/src/main", gb)
         disk.finish()
-        let map = ChangeMap(tree: disk.tree, comparingWith: earlier(disk, [
-            "/Volumes/Fake": gb, "/Volumes/Fake/Work": gb, "/Volumes/Fake/Work/Project": gb,
-            "/Volumes/Fake/Work/Project/src": gb, "/Volumes/Fake/Work/Project/src/main": gb,
-        ]))
+        let map = ChangeMap(
+            tree: disk.tree,
+            comparingWith: earlier(
+                disk,
+                [
+                    "/Volumes/Fake": gb, "/Volumes/Fake/Work": gb, "/Volumes/Fake/Work/Project": gb,
+                    "/Volumes/Fake/Work/Project/src": gb, "/Volumes/Fake/Work/Project/src/main": gb,
+                ]))
         let rules = RuleBook(homePath: "/Users/nobody")
         // On the whole disk this is Work. Inside the project you're already in it, so it's the folder that's new.
         XCTAssertEqual(map.rows(tree: disk.tree, rules: rules, under: disk.node("/Volumes/Fake/Work/Project")).map(\.title), ["build"])

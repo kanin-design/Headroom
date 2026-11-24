@@ -1,4 +1,5 @@
 import Foundation
+
 @testable import Headroom
 
 /// A made-up disk, so the advice can be tested with no real files anywhere.
@@ -21,7 +22,10 @@ final class FakeDisk {
         tree.free = add(parent: 0, name: "Free", flags: NodeFlag.synthetic | NodeFlag.free, bytes: free)
     }
 
-    private func add(parent: UInt32, name: String, flags: UInt16, bytes: UInt64 = 0, alias: UInt64 = 0, kind: Kind = .other, modTime: UInt32 = 0, isRoot: Bool = false) -> UInt32 {
+    private func add(
+        parent: UInt32, name: String, flags: UInt16, bytes: UInt64 = 0, alias: UInt64 = 0, kind: Kind = .other, modTime: UInt32 = 0,
+        isRoot: Bool = false
+    ) -> UInt32 {
         let id = count
         count += 1
         var node = Node()
@@ -34,6 +38,8 @@ final class FakeDisk {
         let utf8 = Array(name.utf8)
         node.nameOffset = nameCursor
         node.nameLength = UInt16(utf8.count)
+        // An array's buffer has an address even when it's empty.
+        // swift-format-ignore: NeverForceUnwrap
         utf8.withUnsafeBufferPointer { (tree.names + Int(nameCursor)).update(from: $0.baseAddress!, count: utf8.count) }
         nameCursor += UInt32(utf8.count)
         if !isRoot {
@@ -65,7 +71,9 @@ final class FakeDisk {
     func file(_ path: String, _ bytes: UInt64, kind: Kind = .other, alias: Bool = false, modTime: UInt32 = 0) -> UInt32 {
         let parent = folder((path as NSString).deletingLastPathComponent)
         let flags: UInt16 = alias ? NodeFlag.alias : 0
-        let id = add(parent: parent, name: (path as NSString).lastPathComponent, flags: flags, bytes: alias ? 0 : bytes, alias: alias ? bytes : 0, kind: kind, modTime: modTime)
+        let id = add(
+            parent: parent, name: (path as NSString).lastPathComponent, flags: flags, bytes: alias ? 0 : bytes, alias: alias ? bytes : 0, kind: kind,
+            modTime: modTime)
         paths[path] = id
         return id
     }
@@ -87,9 +95,12 @@ final class FakeDisk {
         tree.compactStats()
         tree.compactNames()
     }
-    func node(_ path: String) -> UInt32 { paths[path]! }
+    func node(_ path: String) -> UInt32 {
+        guard let node = paths[path] else { fatalError("\(path) isn't in the fake tree") }
+        return node
+    }
 }
 
-private extension UInt16 {
-    var isDirectory: Bool { self & NodeFlag.directory != 0 }
+extension UInt16 {
+    fileprivate var isDirectory: Bool { self & NodeFlag.directory != 0 }
 }

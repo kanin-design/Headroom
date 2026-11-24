@@ -79,7 +79,8 @@ private struct Named: ViewModifier {
 
     func body(content: Content) -> some View {
         here.thing = thing
-        return content
+        return
+            content
             .environment(\.enclosingThing, here)
             .contextMenu { ThingMenu(model: model, thing: thing) }
             .highPriorityGesture(TapGesture().modifiers(.command).onEnded { model.copyName(of: thing) })
@@ -104,8 +105,8 @@ private struct ClickToCopy: ViewModifier {
         HStack(spacing: 6) {
             content
             Image(systemName: "doc.on.doc")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.55))
+                .font(Kit.Font.caption.weight(.semibold))
+                .foregroundStyle(Kit.Text.tertiary)
                 .opacity(isHovered ? 1 : 0)
         }
         .contentShape(Rectangle())

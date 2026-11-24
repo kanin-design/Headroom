@@ -1,5 +1,4 @@
 import Foundation
-import SwiftUI
 
 /// The fourth question: what's on the disk more than once, and what only looks like it. As in Free Up, each set of copies has a
 /// colour of its own and every copy of it wears that colour on the ring, so the same colour in two places is the same file, and
@@ -116,13 +115,17 @@ struct CopiesMap {
     init(scanID: UUID) { self.scanID = scanID }
 
     /// This many sets with their extra copies in the same folders make one row.
-    static let mergeAt = 2
+    private static let mergeAt = 2
 
-    static func build(tree: DiskTree, duplicates: [Duplicates.Found], aliases: [Aliases.Found], duplicatesDone: Bool,
-                      kept: Set<String> = [], colours: [UInt64: Int] = [:]) -> CopiesMap {
+    static func build(
+        tree: DiskTree, duplicates: [Duplicates.Found], aliases: [Aliases.Found], duplicatesDone: Bool,
+        kept: Set<String> = [], colours: [UInt64: Int] = [:]
+    ) -> CopiesMap {
         var map = CopiesMap(scanID: tree.scanID)
         map.duplicatesDone = duplicatesDone
         let nodes = tree.nodes
+        /// A file's folder, or a folder itself.
+        func folder(_ node: UInt32) -> UInt32 { nodes[Int(node)].has(NodeFlag.directory) ? node : nodes[Int(node)].parent }
         func add(_ bytes: UInt64, to node: UInt32, in table: inout [UInt32: UInt64]) {
             var a = node
             while true {
@@ -148,7 +151,7 @@ struct CopiesMap {
         var byExtras: [[UInt32]: [(keeper: UInt32, extras: [UInt32])]] = [:]
         var order: [[UInt32]] = []
         for folders in folderOrder {
-            let sets = setsIn[folders]!
+            guard let sets = setsIn[folders] else { continue }
             let keep = Self.keeperFolder(folders, sets: sets, in: tree, kept: kept)
             for live in sets {
                 let there = live.filter { nodes[Int($0)].parent == keep }
@@ -163,7 +166,7 @@ struct CopiesMap {
             }
         }
         for key in order {
-            let sets = byExtras[key]!
+            guard let sets = byExtras[key] else { continue }
             // The extra copies of each set right after its original, so they can be told apart in an open row.
             let ordered = sets.sorted { (nodes[Int($0.keeper)].bytes, $0.keeper) > (nodes[Int($1.keeper)].bytes, $1.keeper) }
             let keepers = ordered.map(\.keeper), extras = ordered.flatMap(\.extras)
@@ -174,15 +177,19 @@ struct CopiesMap {
                 for k in keepers { homes[nodes[Int(k)].parent, default: 0] += 1 }
                 let byCount = homes.sorted { ($0.value, $1.key) > ($1.value, $0.key) }.map(\.key)
                 let into = key.count == 1 ? tree.name(key[0]) : "\(key.count) folders"
-                map.groups.append(CopyGroup(id: "dups:\(min(keepers.min()!, extras.min()!))", kind: .duplicate, title: "\(sets.count) duplicates in \(into)",
-                                            size: size, back: back, home: byCount[0], others: key, isFiles: true, keepers: keepers, extras: extras,
-                                            extrasPer: ordered.map(\.extras.count), homes: byCount))
+                map.groups.append(
+                    CopyGroup(
+                        id: "dups:\((keepers + extras).min() ?? 0)", kind: .duplicate, title: "\(sets.count) duplicates in \(into)",
+                        size: size, back: back, home: byCount[0], others: key, isFiles: true, keepers: keepers, extras: extras,
+                        extrasPer: ordered.map(\.extras.count), homes: byCount))
             } else {
                 for set in ordered {
                     let b = set.extras.reduce(UInt64(0)) { $0 &+ nodes[Int($1)].bytes }
-                    map.groups.append(CopyGroup(id: "dup:\(min(set.keeper, set.extras.min()!))", kind: .duplicate, title: tree.name(set.keeper),
-                                                size: nodes[Int(set.keeper)].bytes, back: b, home: set.keeper, others: set.extras,
-                                                keepers: [set.keeper], extras: set.extras, extrasPer: [set.extras.count], homes: [nodes[Int(set.keeper)].parent]))
+                    map.groups.append(
+                        CopyGroup(
+                            id: "dup:\(set.extras.reduce(set.keeper, min))", kind: .duplicate, title: tree.name(set.keeper),
+                            size: nodes[Int(set.keeper)].bytes, back: b, home: set.keeper, others: set.extras,
+                            keepers: [set.keeper], extras: set.extras, extrasPer: [set.extras.count], homes: [nodes[Int(set.keeper)].parent]))
                 }
             }
         }
@@ -206,7 +213,6 @@ struct CopiesMap {
                 if node != homeNode, !others.contains(node) { others.append(node) }
             }
             guard !others.isEmpty, !nodes[Int(homeNode)].has(NodeFlag.gone) else { continue }
-            func folder(_ node: UInt32) -> UInt32 { nodes[Int(node)].has(NodeFlag.directory) ? node : nodes[Int(node)].parent }
             let places = [h.isClone ? 1 : 0, folder(homeNode)] + others.map(folder).sorted()
             if families[places] == nil { familyOrder.append(places) }
             families[places, default: []].append((homeNode, others, h.bytes, h.key, h.file == 0))
@@ -214,20 +220,24 @@ struct CopiesMap {
             add(h.bytes, to: homeNode, in: &map.held)
         }
         for places in familyOrder {
-            let all = families[places]!
+            guard let all = families[places] else { continue }
             let kind: CopyGroup.Kind = places[0] == 1 ? .sharedCopy : .sameFile
             if all.count >= Self.mergeAt {
                 var folders: [UInt32] = []
-                for f in all { for o in f.others where !folders.contains(nodes[Int(o)].has(NodeFlag.directory) ? o : nodes[Int(o)].parent) {
-                    folders.append(nodes[Int(o)].has(NodeFlag.directory) ? o : nodes[Int(o)].parent)
-                } }
-                map.groups.append(CopyGroup(id: "links:\(all[0].key)", kind: kind, title: "\(all.count) files in \(tree.name(places[1]))",
-                                            size: all.reduce(UInt64(0)) { $0 &+ $1.bytes }, home: places[1], others: folders, isFiles: true,
-                                            keepers: all.map(\.home), extras: all.flatMap(\.others)))
+                for f in all {
+                    for o in f.others where !folders.contains(folder(o)) { folders.append(folder(o)) }
+                }
+                map.groups.append(
+                    CopyGroup(
+                        id: "links:\(all[0].key)", kind: kind, title: "\(all.count) files in \(tree.name(places[1]))",
+                        size: all.reduce(UInt64(0)) { $0 &+ $1.bytes }, home: places[1], others: folders, isFiles: true,
+                        keepers: all.map(\.home), extras: all.flatMap(\.others)))
             } else {
                 for f in all {
-                    map.groups.append(CopyGroup(id: "link:\(f.key):\(f.home)", kind: kind, title: tree.name(f.home), size: f.bytes, home: f.home,
-                                                others: f.others, isFiles: f.isFiles))
+                    map.groups.append(
+                        CopyGroup(
+                            id: "link:\(f.key):\(f.home)", kind: kind, title: tree.name(f.home), size: f.bytes, home: f.home,
+                            others: f.others, isFiles: f.isFiles))
                 }
             }
         }
@@ -241,9 +251,13 @@ struct CopiesMap {
             case .broken: place = DiskTree.friendly(alias.target) + " (missing)"
             case .here: place = alias.node.map(tree.friendlyPath) ?? DiskTree.friendly(alias.target)
             }
-            let title = HiddenNames.isOn ? ((HiddenNames.madeUp(path: (tree.path(alias.dir) ?? "") + "/" + alias.name)) as NSString).lastPathComponent : alias.name
-            map.groups.append(CopyGroup(id: "alias:\(alias.dir):\(alias.name)", kind: alias.isBroken ? .broken : .alias, title: title, size: size,
-                                        home: alias.node ?? 0, others: [alias.dir], target: place))
+            let title =
+                HiddenNames.isOn
+                ? ((HiddenNames.madeUp(path: (tree.path(alias.dir) ?? "") + "/" + alias.name)) as NSString).lastPathComponent : alias.name
+            map.groups.append(
+                CopyGroup(
+                    id: "alias:\(alias.dir):\(alias.name)", kind: alias.isBroken ? .broken : .alias, title: title, size: size,
+                    home: alias.node ?? 0, others: [alias.dir], target: place))
         }
 
         map.groups.sort { a, b in
@@ -330,7 +344,7 @@ struct CopiesMap {
     /// Where copies in these folders stay: not Downloads, the Desktop or the Trash, not a cache or build folder, then not a folder
     /// named like a copy or whose copies mostly are, then the folder whose copies are older by a day or more, then the one holding
     /// more files, which is likelier the collection the others were copied from, then the one nearest the top.
-    static func keeperFolder(_ folders: [UInt32], sets: [[UInt32]], in tree: DiskTree, kept: Set<String> = []) -> UInt32 {
+    private static func keeperFolder(_ folders: [UInt32], sets: [[UInt32]], in tree: DiskTree, kept: Set<String> = []) -> UInt32 {
         guard folders.count > 1 else { return folders[0] }
         // The folder you picked, or the one holding a copy you picked.
         if !kept.isEmpty {
@@ -355,7 +369,10 @@ struct CopiesMap {
         }
         // The same one on every scan, whatever the node numbers: the path settles a tie.
         func score(_ folder: UInt32) -> (Int, Int, UInt32, Int64, Int, String) {
-            (passing(folder, in: tree), named(folder), days(folder), -Int64(n[Int(folder)].fileCount), depth(folder, in: tree), tree.path(folder) ?? "")
+            (
+                passing(folder, in: tree), named(folder), days(folder), -Int64(n[Int(folder)].fileCount), depth(folder, in: tree),
+                tree.path(folder) ?? ""
+            )
         }
         let scored = folders.map { ($0, score($0)) }
         return scored.min { $0.1 < $1.1 }?.0 ?? folders[0]
@@ -363,7 +380,7 @@ struct CopiesMap {
 
     /// How sure it is that a copy here isn't the one to keep: 2 in Downloads, the Desktop or the Trash, 1 in a cache or build
     /// folder, 0 anywhere else.
-    static func passing(_ folder: UInt32, in tree: DiskTree) -> Int {
+    private static func passing(_ folder: UInt32, in tree: DiskTree) -> Int {
         let n = tree.nodes
         var out = 0
         var a = folder
@@ -393,7 +410,10 @@ struct CopiesMap {
         return (folder ? copyFolderName : copyFileName).firstMatch(in: stem, range: NSRange(stem.startIndex..., in: stem)) != nil
     }
 
+    // Fixed patterns, so they can't fail on a name: CopiesTests runs both.
+    // swift-format-ignore: NeverUseForceTry
     private static let copyFileName = try! NSRegularExpression(pattern: #"( copy( \d+)?| \(\d+\)| [2-9])$"#)
+    // swift-format-ignore: NeverUseForceTry
     private static let copyFolderName = try! NSRegularExpression(pattern: #"( copy( \d+)?| \(\d+\))$"#)
 
     /// The copy that stays: not one in Downloads, the Desktop or the Trash, not one in a cache or build folder, then not one whose
@@ -477,8 +497,7 @@ struct CopiesMap {
         let top = HiddenNames.isOn && !tree.rootPath.isEmpty ? HiddenNames.madeUp(path: tree.rootPath) : tree.rootPath
         let all: [[Substring]?] = nodes.map { node in
             var path = tree.friendlyPath(node)
-            if !top.isEmpty, path.hasPrefix(top + "/") { path = String(path.dropFirst(top.count + 1)) }
-            else if path == top { return nil }
+            if !top.isEmpty, path.hasPrefix(top + "/") { path = String(path.dropFirst(top.count + 1)) } else if path == top { return nil }
             return path.split(separator: "/", omittingEmptySubsequences: false)
         }
         // The folders each one is said by: its first ones from home or the top, unless short, and its last two.
@@ -528,7 +547,8 @@ struct CopiesMap {
     static func summary(of group: CopyGroup, in tree: DiskTree) -> String {
         if group.files > 1 {
             let homes = group.homes.isEmpty ? [group.home] : group.homes
-            return "Originals in " + places(Array(homes.prefix(2)), in: tree, short: true).joined(separator: ", ") + (homes.count > 2 ? " +\(homes.count - 2)" : "")
+            return "Originals in " + places(Array(homes.prefix(2)), in: tree, short: true).joined(separator: ", ")
+                + (homes.count > 2 ? " +\(homes.count - 2)" : "")
         }
         let n = tree.nodes
         let folder = n[Int(group.home)].parent
@@ -541,7 +561,6 @@ struct CopiesMap {
         let said = places([folder] + others, in: tree, short: true)
         return "\(count) copies · \(said[0]), \(said[1])" + (others.count > 1 ? " +\(others.count - 1)" : "")
     }
-
 }
 
 extension Palette {
@@ -552,16 +571,6 @@ extension Palette {
         static let sharedCopy = Lab(lch: 0.80, 0.19, 150)
         static let alias = Lab(lch: 0.83, 0.115, 222)
         static let broken = Lab(lch: 0.66, 0.20, 25)
-        /// The copy that holds the bytes: a step below white, so the extra copies stay the brightest thing on the ring.
-        static let file = Lab(lch: 0.84, 0.010, 250)
-
-        /// A little of it is dim and nearly quiet, all of it is the colour itself. Below one percent it fades into quiet, so a big
-        /// folder with one copy in it doesn't glow.
-        static func ramp(_ colour: Lab, _ share: Float) -> Lab {
-            let dim = Lab(l: 0.40, a: colour.a * 0.38, b: colour.b * 0.38)
-            let shown = Lab.mix(dim, colour, share)
-            return Lab.mix(Palette.quiet, shown, min(share / 0.01, 1))
-        }
     }
 }
 

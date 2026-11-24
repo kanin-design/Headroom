@@ -1,6 +1,3 @@
-import Foundation
-import simd
-
 /// A picture of part of a tree: its pieces, sorted clockwise from 12 o'clock with the biggest first, and the levels they're
 /// in. `build(tree:focus:parts:colorer:marked:)` makes one; the rest answers questions about it.
 ///
@@ -82,8 +79,10 @@ public struct RingLayout: Sendable {
     /// The picture of `focus` and what's inside it, in these parts. It gets as many rings as asked for, but never more than
     /// it can fill, so there's no empty ring around the edge. `colorer` colours each piece; `marked` says which are striped.
     @inlinable
-    public static func build<T: SunburstTree>(tree: T, focus: UInt32, parts: SunburstParts = SunburstParts(), colorer: Colorer,
-                                              marked: Marker? = nil) -> RingLayout {
+    public static func build<T: SunburstTree>(
+        tree: T, focus: UInt32, parts: SunburstParts = SunburstParts(), colorer: Colorer,
+        marked: Marker? = nil
+    ) -> RingLayout {
         let plan = LevelPlan(tree: tree, focus: focus, parts: parts)
         let lists = ChildLists()
         let style = parts.rings.sizes.style
@@ -93,8 +92,9 @@ public struct RingLayout: Sendable {
         let least = plan.thickLeading > 0 && plan.thin.contains(true) ? plan.thickLeading + 1 : 1
         let count = max(min(parts.rings.sizes.depth, reach), least)
         var layout = withoutActuallyEscaping(colorer) { colorer in
-            var builder = RingBuilder(tree: tree, focus: focus, parts: parts, plan: plan, lists: lists, colorer: colorer, marker: marked,
-                                      measuring: false, marksDeeper: style.marksDeeper)
+            var builder = RingBuilder(
+                tree: tree, focus: focus, parts: parts, plan: plan, lists: lists, colorer: colorer, marker: marked,
+                measuring: false, marksDeeper: style.marksDeeper)
             return builder.draw(shares: style.shares(count: count, fill: fill))
         }
         layout._rings = count
@@ -116,8 +116,9 @@ public struct RingLayout: Sendable {
     static func measure<T: SunburstTree>(tree: T, focus: UInt32, parts: SunburstParts, plan: LevelPlan, lists: ChildLists) -> [Float] {
         // Adaptive rings are measured on the taper, the fixed curve nearest to them.
         let measuring: RingStyle = parts.rings.sizes.style == .standard ? .standard : .tapered
-        var builder = RingBuilder(tree: tree, focus: focus, parts: parts, plan: plan, lists: lists, colorer: { _ in .zero }, marker: nil,
-                                  measuring: true, marksDeeper: false)
+        var builder = RingBuilder(
+            tree: tree, focus: focus, parts: parts, plan: plan, lists: lists, colorer: { _ in .zero }, marker: nil,
+            measuring: true, marksDeeper: false)
         _ = builder.draw(shares: measuring.shares(count: RingSizes.most, fill: []))
         let around = builder.around.enumerated().filter { !plan.isThin($0.offset) }.map(\.element)
         return shares(of: around)
@@ -199,7 +200,8 @@ public struct RingLayout: Sendable {
                 c = tree.nextSibling(of: c)
             }
             guard best != 0, tree.isFolder(best), tree.firstChild(of: best) != 0,
-                  Double(tree.size(of: best)) >= Double(tree.size(of: tail)) * chainShare else { return tail }
+                Double(tree.size(of: best)) >= Double(tree.size(of: tail)) * chainShare
+            else { return tail }
             tail = best
         }
         return tail

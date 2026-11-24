@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Headroom
 
 /// The boxes in Free Up: one set of data for the list and the ring.
@@ -151,9 +152,14 @@ final class SectionsTests: XCTestCase {
 
     // MARK: The list
 
-    private func row(_ id: String, _ d: FakeDisk, _ path: String, tier: Tier = .yourCall, quick: Bool = false, action: WinAction = .trash, askFirst: Bool = false, box: BoxKind? = nil) -> WinRow {
+    private func row(
+        _ id: String, _ d: FakeDisk, _ path: String, tier: Tier = .yourCall, quick: Bool = false, action: WinAction = .trash, askFirst: Bool = false,
+        box: BoxKind? = nil
+    ) -> WinRow {
         let node = d.node(path)
-        var r = WinRow(id: id, title: id, subtitle: "", detail: "", tier: tier, nodes: [node], bytes: d.tree.totals[Int(node)], paperBytes: d.tree.totals[Int(node)], action: action, command: nil, bundleID: nil)
+        var r = WinRow(
+            id: id, title: id, subtitle: "", detail: "", tier: tier, nodes: [node], bytes: d.tree.totals[Int(node)],
+            paperBytes: d.tree.totals[Int(node)], action: action, command: nil, bundleID: nil)
         r.isQuick = quick
         r.askFirst = askFirst
         // As the finders say it: a model's row is in AI models, and so on.
@@ -170,14 +176,20 @@ final class SectionsTests: XCTestCase {
         d.file("/Volumes/Fake/film/renders/x.mp4", 1000, kind: .video)
         d.file("/Volumes/Fake/film/review/still.png", 4 * gb, kind: .image)
         d.finish()
-        let rows = [row("series:show", d, "/Volumes/Fake/TV/Show"), row("model:m", d, "/Volumes/Fake/LLM/model", tier: .redownload),
-                    row("Spotify cache", d, "/Volumes/Fake/app/cache", tier: .rebuilds, quick: true, box: .caches),
-                    row("trash", d, "/Volumes/Fake/Trash", tier: .noLoss, quick: true, action: .emptyTrash, box: .trash)]
+        let rows = [
+            row("series:show", d, "/Volumes/Fake/TV/Show"), row("model:m", d, "/Volumes/Fake/LLM/model", tier: .redownload),
+            row("Spotify cache", d, "/Volumes/Fake/app/cache", tier: .rebuilds, quick: true, box: .caches),
+            row("trash", d, "/Volumes/Fake/Trash", tier: .noLoss, quick: true, action: .emptyTrash, box: .trash),
+        ]
         let sections = Sections.build(from: rows, tree: d.tree).sections
-        XCTAssertEqual(Set(sections.map(\.id)), ["caches", "trash", "models", "leftovers", "largest"], "No box for the series: a collection isn't a suggestion")
-        XCTAssertEqual(sections.first { $0.id == "largest" }?.rows.map(\.title), ["S01E01.mp4"], "Its one huge episode is among the largest files, though")
+        XCTAssertEqual(
+            Set(sections.map(\.id)), ["caches", "trash", "models", "leftovers", "largest"], "No box for the series: a collection isn't a suggestion")
+        XCTAssertEqual(
+            sections.first { $0.id == "largest" }?.rows.map(\.title), ["S01E01.mp4"], "Its one huge episode is among the largest files, though")
         let boxes = Sections.boxes(from: sections, tree: d.tree, focus: 0, kept: [])
-        XCTAssertEqual(boxes.map(\.id), ["trash", "leftovers", "models", "caches", "largest"], "The Trash first, then biggest first, and the shortlist under them")
+        XCTAssertEqual(
+            boxes.map(\.id), ["trash", "leftovers", "models", "caches", "largest"],
+            "The Trash first, then biggest first, and the shortlist under them")
         XCTAssertEqual(boxes.first { $0.id == "trash" }?.isOneThing, true, "The Trash has nothing to open: it's one row with its own tick")
         XCTAssertEqual(boxes.first { $0.id == "caches" }?.detail, "Spotify", "A cache is named for its app")
     }
@@ -216,7 +228,10 @@ final class SectionsTests: XCTestCase {
     }
 
     private func filmSections(_ d: FakeDisk) -> [Section] {
-        Sections.build(from: [row("model:a", d, "/Volumes/Fake/LLM/a", tier: .redownload), row("model:b", d, "/Volumes/Fake/LLM/b", tier: .redownload)], tree: d.tree).sections
+        Sections.build(
+            from: [row("model:a", d, "/Volumes/Fake/LLM/a", tier: .redownload), row("model:b", d, "/Volumes/Fake/LLM/b", tier: .redownload)],
+            tree: d.tree
+        ).sections
     }
 
     func testOnTheWholeDiskASectionIsOneBox() throws {

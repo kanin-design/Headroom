@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Headroom
 
 /// Real scans of a real little folder, on real threads. A scan that hangs fails here instead of in the app.
@@ -37,7 +38,9 @@ final class ScannerTests: XCTestCase {
     }
 
     /// The scan on its own thread, with a limit: a hang is a failed test, not a stuck run.
-    private func finishes(_ scan: DiskScan, mode: ScanMode, threads: Int, seconds: TimeInterval = 30, file: StaticString = #filePath, line: UInt = #line) -> Bool {
+    private func finishes(
+        _ scan: DiskScan, mode: ScanMode, threads: Int, seconds: TimeInterval = 30, file: StaticString = #filePath, line: UInt = #line
+    ) -> Bool {
         let done = expectation(description: "the scan finishes")
         Thread.detachNewThread {
             scan.run(mode: mode, threads: threads)

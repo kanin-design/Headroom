@@ -1,5 +1,3 @@
-import Foundation
-
 /// What's on a chart's ring, in words: for an app's own logic, a test, or an agent.
 public struct SunburstSummary: Codable, Sendable, Equatable {
     /// One piece of the ring.

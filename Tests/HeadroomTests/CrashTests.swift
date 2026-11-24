@@ -1,10 +1,12 @@
 import XCTest
+
 @testable import Headroom
 
 /// What used to be able to stop the app: a map saved by another version or damaged on disk, odd numbers from a file or the
 /// system, and things done twice.
 final class CrashTests: XCTestCase {
-    private let facts = VolumeFacts(name: "HeadroomCrashTest", mountPath: "/Volumes/Fake", capacity: 500_000_000_000, free: 50_000_000_000, isBoot: false)
+    private let facts = VolumeFacts(
+        name: "HeadroomCrashTest", mountPath: "/Volumes/Fake", capacity: 500_000_000_000, free: 50_000_000_000, isBoot: false)
     private var savedMap: URL { AppData.folder.appendingPathComponent("last-HeadroomCrashTest.scan") }
     private let rules = RuleBook(homePath: "/Users/nobody")
 

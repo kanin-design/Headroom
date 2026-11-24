@@ -26,6 +26,7 @@ Measured on an M5 MacBook Air with 2.1 million files on a 494 GB disk:
 | A first launch | Half of the disk is on the map in 0.4 s, and about three quarters within a second |
 | Rescanning the whole disk (⌘R) | 6.9 s. `du` takes 40 s on the same disk, and collects less |
 | Searching every file and folder name | 2 to 14 ms per keystroke, across about 324,000 folders and files |
+| Searching the small files | 4 to 13 ms per keystroke, across 1.6 million files under 1 MiB |
 | Sizing up `~/Library`, 376,000 files | 1.7 s |
 | Checking 47 items before a clean | 0.35 s, then 9 ms for each one you add |
 | Finding duplicates among 465 files of the same sizes, 5.6 GB | 1.3 s, reading straight from the disk at 4.2 GB/s. Later checks reuse the results |
@@ -115,6 +116,11 @@ you open it, and never reads a file that's only in iCloud.
 
 Press ⌘F and type. Matches are listed as you type, largest first, with their path and size, and highlighted on the map.
 Search ignores case and accents, in any alphabet.
+
+Files under 1 MiB are too small to be pieces on the map, so they're listed apart, under **Small Files**. Their names are
+written to a catalogue in `~/Library/Caches` as the disk is scanned, and searched there on every core, so they take no
+memory. Pointing at one lights its folder on the map. **Edit › Search Small Files** turns this off and deletes the
+catalogue.
 
 ### Quick Look
 

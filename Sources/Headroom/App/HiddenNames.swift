@@ -41,8 +41,10 @@ enum HiddenNames {
         .video: "Episode", .audio: "Track", .image: "Image", .document: "Document", .code: "Source", .app: "Binary",
         .archive: "Archive", .model: "Weights", .cache: "Cache", .system: "Database", .other: "File",
     ]
-    private static let appNames = ["Video Editor", "Chat", "Web Browser", "Browser Preview", "Music Studio", "3D Studio", "Code Editor",
-                                   "Notes", "Photo Studio", "Player"]
+    private static let appNames = [
+        "Video Editor", "Chat", "Web Browser", "Browser Preview", "Music Studio", "3D Studio", "Code Editor",
+        "Notes", "Photo Studio", "Player",
+    ]
 
     static func apply(to tree: DiskTree) {
         let nodes = tree.nodes

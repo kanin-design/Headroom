@@ -21,8 +21,10 @@ public struct AgentHost: Sendable {
     /// selects: "under Agents in the app menu". Nil says only the app's name.
     public var accessSettingsLocation: String?
 
-    public init(name: String, version: String, instructions: String, folder: URL, tools: [AgentTool],
-                accessSettingsLocation: String? = nil) {
+    public init(
+        name: String, version: String, instructions: String, folder: URL, tools: [AgentTool],
+        accessSettingsLocation: String? = nil
+    ) {
         self.name = name
         self.version = version
         self.instructions = instructions
@@ -164,7 +166,10 @@ public final class AgentDoor {
             case true?: break
             case false?: return .failure(AgentFailure("The user didn't allow this agent to use \(host.name)."))
             case nil:
-                return .failure(AgentFailure("Waiting for the user to allow this agent. \(host.name) is asking in its window: ask the user to answer there, then try again."))
+                return .failure(
+                    AgentFailure(
+                        "Waiting for the user to allow this agent. \(host.name) is asking in its window: ask the user to answer there, then try again."
+                    ))
             }
             if host.tools.first(where: { $0.name == tool })?.selects == true, !agents.maySelect(identity) {
                 let place = host.accessSettingsLocation.map { ", " + $0 } ?? ""

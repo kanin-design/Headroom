@@ -23,7 +23,7 @@ private let mountStatusMounts: UInt32 = 0x0000_0003
 private let extMaySharedBlocks: UInt64 = 0x1
 let objTypeRegular: UInt32 = 1
 let objTypeDirectory: UInt32 = 2
-let objTypeSymlink: UInt32 = 5
+private let objTypeSymlink: UInt32 = 5
 let optionNoFollow: UInt64 = 0x1
 private let optionExtended: UInt64 = 0x20
 
@@ -54,11 +54,13 @@ final class Scanner: @unchecked Sendable {
     let tree: DiskTree
     let rules: RuleBook
     /// Below this, a file is only counted in its folder.
-    let promoteBytes: UInt64 = 1 << 20
+    private let promoteBytes: UInt64 = 1 << 20
     /// 1, except when recording a demo on made-up disks (`Demo`).
     private let demoScale = Demo.scale
     /// When false, folders macOS guards are left alone, so the scan brings up no permission prompts.
     let touchGuarded: Bool
+    /// Where the names of files too small for the map are written, when they're searched (`SmallFiles`). Set before `run`.
+    var smallFiles: SmallFileWriter?
 
     private let nextNode = Atomic<UInt32>(0)
     private let nextName = Atomic<UInt64>(0)
@@ -262,7 +264,10 @@ final class Scanner: @unchecked Sendable {
     // MARK: Building the top of the tree
 
     /// Creates a node that isn't found by scanning: a group, a sealed volume or a scan root.
-    func addNode(parent: UInt32, display: String, flags: UInt16, bytes: UInt64 = 0, rule: UInt16 = 0, kind: Kind = .other, path: String? = nil, ruleState: UInt8 = 0) -> UInt32 {
+    func addNode(
+        parent: UInt32, display: String, flags: UInt16, bytes: UInt64 = 0, rule: UInt16 = 0, kind: Kind = .other, path: String? = nil,
+        ruleState: UInt8 = 0
+    ) -> UInt32 {
         let id = nextNode.add(1, ordering: .relaxed).oldValue
         var node = Node()
         node.parent = parent
@@ -276,6 +281,7 @@ final class Scanner: @unchecked Sendable {
             // A path can come from a system call as a string with no bytes of its own yet. An array always has them.
             Array(path.utf8).withUnsafeBufferPointer { p in
                 let offset = nextName.add(UInt64(p.count), ordering: .relaxed).oldValue
+                // swift-format-ignore: NeverForceUnwrap
                 (tree.names + Int(offset)).update(from: p.baseAddress!, count: p.count)
                 node.nameOffset = UInt32(offset)
                 node.nameLength = UInt16(p.count)
@@ -428,7 +434,7 @@ final class Scanner: @unchecked Sendable {
 
     @inline(__always) private func key(_ node: Node, urgent: Bool) -> UInt64 {
         let order: UInt64 = urgent ? 0 : (node.flags & NodeFlag.later != 0 ? 2 : 1)
-        return order << 48 | UInt64(node.fileCount)         // until a folder is read, fileCount is its entry count
+        return order << 48 | UInt64(node.fileCount)  // until a folder is read, fileCount is its entry count
     }
 
     private func push(_ job: Job) {
@@ -470,7 +476,8 @@ final class Scanner: @unchecked Sendable {
         let buffer = UnsafeMutableRawPointer.allocate(byteCount: bufferSize, alignment: 16)
         let pathBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 8192)
         var opened = OpenFolders()
-        defer { buffer.deallocate(); pathBuffer.deallocate(); opened.closeAll() }
+        let lane = smallFiles?.lane()
+        defer { buffer.deallocate(); pathBuffer.deallocate(); opened.closeAll(); lane?.flush() }
         var local: [Child] = []
         local.reserveCapacity(4096)
         var batch: [Job] = []
@@ -526,7 +533,7 @@ final class Scanner: @unchecked Sendable {
             found.removeAll(keepingCapacity: true)
             var read = 0
             while let job = batch.popLast() {
-                scan(job.id, job.old, buffer, bufferSize, pathBuffer, &local, &linkCursor, &linkEnd, &cursor, &cursorEnd, &opened)
+                scan(job.id, job.old, buffer, bufferSize, pathBuffer, &local, &linkCursor, &linkEnd, &cursor, &cursorEnd, &opened, lane)
                 read += 1
                 for child in local {
                     let next = Job(key: key(tree.nodes[Int(child.id)], urgent: job.isUrgent), id: child.id, old: child.old)
@@ -658,9 +665,11 @@ final class Scanner: @unchecked Sendable {
         return fd
     }
 
-    private func scan(_ id: UInt32, _ given: UInt32, _ buffer: UnsafeMutableRawPointer, _ bufferSize: Int, _ pathBuffer: UnsafeMutablePointer<UInt8>,
-                      _ local: inout [Child], _ linkCursor: inout Int, _ linkEnd: inout Int, _ cursor: inout UInt64, _ cursorEnd: inout UInt64,
-                      _ opened: inout OpenFolders) {
+    private func scan(
+        _ id: UInt32, _ given: UInt32, _ buffer: UnsafeMutableRawPointer, _ bufferSize: Int, _ pathBuffer: UnsafeMutablePointer<UInt8>,
+        _ local: inout [Child], _ linkCursor: inout Int, _ linkEnd: inout Int, _ cursor: inout UInt64, _ cursorEnd: inout UInt64,
+        _ opened: inout OpenFolders, _ lane: SmallFileWriter.Lane?
+    ) {
         if cancelled.load(ordering: .relaxed) { return }
         // A refresh copies what hasn't changed, and reads the rest.
         var old = given
@@ -669,6 +678,7 @@ final class Scanner: @unchecked Sendable {
             switch marks[Int(old)] {
             case Refresh.copy:
                 copy(id, from: old, in: base, &local, &cursor, &cursorEnd)
+                smallFiles?.keep(id, was: old, lane: lane)
                 return
             case Refresh.read:
                 earlier = EarlierFolders(of: old, in: base)
@@ -688,7 +698,8 @@ final class Scanner: @unchecked Sendable {
 
         var list = attrlist()
         list.bitmapcount = u_short(ATTR_BIT_MAP_COUNT)
-        list.commonattr = attrReturned | attrError | attrName | attrObjType | attrModTime | attrFileID | attrAddedTime | (old != Self.none ? attrChangeTime : 0)
+        list.commonattr =
+            attrReturned | attrError | attrName | attrObjType | attrModTime | attrFileID | attrAddedTime | (old != Self.none ? attrChangeTime : 0)
         list.dirattr = attrDirEntryCount | attrDirMountStatus
         list.fileattr = attrFileLinkCount | attrFileAllocSize
         list.forkattr = attrExtCloneID | attrExtFlags
@@ -786,7 +797,8 @@ final class Scanner: @unchecked Sendable {
                     // "node_modules" only means "safe to rebuild" in a project of yours. Inside an app, a Photos library,
                     // Homebrew or a tool's install, the same name is part of something that would stop working without it.
                     let inProjects = parent.flags & NodeFlag.projects != 0
-                    let startsProjects = isHome && name[0] != 0x2E && !(nameLength == 7 && memcmp(name, "Library", 7) == 0)
+                    let startsProjects =
+                        isHome && name[0] != 0x2E && !(nameLength == 7 && memcmp(name, "Library", 7) == 0)
                         && !(nameLength == 12 && memcmp(name, "Applications", 12) == 0)
                     if (inProjects || startsProjects) && !rules.isPackage(name, nameLength) { node.flags |= NodeFlag.projects }
                     if parent.flags & NodeFlag.later != 0 || rules.isSlowFolder(name, nameLength) { node.flags |= NodeFlag.later }
@@ -801,7 +813,8 @@ final class Scanner: @unchecked Sendable {
                     // A link in Downloads or a cache rarely marks a file's real home, so it doesn't claim the bytes.
                     // Otherwise the picture would show them in the wrong folder, then jump when the scan ends.
                     if parent.flags & NodeFlag.shyLinks != 0 || node.rule > rules.neutralLimit
-                        || (isHome && nameLength == 9 && memcmp(name, "Downloads", 9) == 0) {
+                        || (isHome && nameLength == 9 && memcmp(name, "Downloads", 9) == 0)
+                    {
                         node.flags |= NodeFlag.shyLinks
                     }
 
@@ -825,8 +838,11 @@ final class Scanner: @unchecked Sendable {
                     nodes[Int(child)] = node
                     firstChild = child
                     if toRead {
-                        let was = old == Self.none ? Self.none
-                            : sameFolder(earlier, name, nameLength, changed: changed, mod: mod, entries: dirAttrs & attrDirEntryCount != 0 ? entries : nil)
+                        let was =
+                            old == Self.none
+                            ? Self.none
+                            : sameFolder(
+                                earlier, name, nameLength, changed: changed, mod: mod, entries: dirAttrs & attrDirEntryCount != 0 ? entries : nil)
                         local.append(Child(id: child, old: was))
                     }
                     continue
@@ -844,6 +860,8 @@ final class Scanner: @unchecked Sendable {
 
                 fileCount &+= 1
                 if mod > newest { newest = mod }
+                // Too small for the map, so only its name is kept, where a search can find it.
+                if alloc < promoteBytes { lane?.add(name, nameLength, alloc) }
                 // A link takes no room, so it's only counted: Copies reads what it points to when it's asked.
                 if type == objTypeSymlink { symlinks &+= 1 }
                 if alloc == 0 { continue }
@@ -851,7 +869,8 @@ final class Scanner: @unchecked Sendable {
                 var kind = forcedKind ?? extensions.kind(name: name, length: nameLength)
                 // ".ts" is both TypeScript and MPEG video. Only one of those runs to many megabytes.
                 if forcedKind == nil, kind == Kind.code.rawValue, alloc >= 8 << 20, nameLength > 3,
-                   name[nameLength - 3] == 0x2E, name[nameLength - 2] | 0x20 == 0x74, name[nameLength - 1] | 0x20 == 0x73 {
+                    name[nameLength - 3] == 0x2E, name[nameLength - 2] | 0x20 == 0x74, name[nameLength - 1] | 0x20 == 0x73
+                {
                     kind = Kind.video.rawValue
                 }
                 // Hard links and clones count once. The first worker to see one counts it, and `Accounting` picks
@@ -897,7 +916,9 @@ final class Scanner: @unchecked Sendable {
 
                 if linkKey != 0 {
                     let paths: UInt16 = linkKey >> 63 == 0 ? UInt16(min(links32, 65_535)) : 0
-                    addLink(LinkRecord(key: linkKey, bytes: alloc, dir: id, file: fileNode, when: mod, kind: kind, counted: counted, paths: paths), &linkCursor, &linkEnd)
+                    addLink(
+                        LinkRecord(key: linkKey, bytes: alloc, dir: id, file: fileNode, when: mod, kind: kind, counted: counted, paths: paths),
+                        &linkCursor, &linkEnd)
                 }
 
                 if share != 0 {
@@ -940,6 +961,7 @@ final class Scanner: @unchecked Sendable {
         nodes[Int(id)].firstChild = firstChild
         nodes[Int(id)].bytes = bytes
         nodes[Int(id)].flags &= ~NodeFlag.unread
+        lane?.close(id, was: old)
     }
 
     // MARK: Refreshing
@@ -1008,7 +1030,9 @@ final class Scanner: @unchecked Sendable {
     /// The folder the map had under this name, if it's still the same one. Either the journal says it changed, so it's read
     /// again anyway, or it hasn't been touched, moved or renamed since the map was made and holds as many things as it did.
     /// A folder put in its place since was made or renamed since, so its change date is too new.
-    private func sameFolder(_ earlier: EarlierFolders, _ name: UnsafePointer<UInt8>, _ length: Int, changed: UInt32, mod: UInt32, entries: UInt32?) -> UInt32 {
+    private func sameFolder(
+        _ earlier: EarlierFolders, _ name: UnsafePointer<UInt8>, _ length: Int, changed: UInt32, mod: UInt32, entries: UInt32?
+    ) -> UInt32 {
         guard let base, let marks, let found = earlier.named(name, length) else { return Self.none }
         if marks[Int(found)] != Refresh.copy { return found }
         let nodes = base.nodes

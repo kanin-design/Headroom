@@ -1,5 +1,3 @@
-import Foundation
-
 /// A ready-made `SunburstTree` of your own items: give it the top item, what each one is called, how big it is and what's
 /// inside it, and it numbers them for the chart.
 ///
@@ -31,8 +29,10 @@ public struct ItemTree<Item> {
     /// A tree of `root` and everything inside it. `children` may give nil or an empty list for an item with nothing inside.
     /// `role`, if given, says what an item is, such as money not yet spent being room (`SunburstRole.room`); by default an
     /// item with items inside it is a container and the rest are items.
-    public init<Size: BinaryInteger>(_ root: Item, name: (Item) -> String, size: (Item) -> Size, children: (Item) -> [Item]?,
-                                     role: ((Item) -> SunburstRole?)? = nil) {
+    public init<Size: BinaryInteger>(
+        _ root: Item, name: (Item) -> String, size: (Item) -> Size, children: (Item) -> [Item]?,
+        role: ((Item) -> SunburstRole?)? = nil
+    ) {
         var items: [Item] = [], names: [String] = [], parents: [UInt32] = [], owns: [UInt64] = []
         // Depth first without recursion, so a deep tree can't run out of stack: each item is numbered before what's inside it,
         // and what's inside it in the order given.
@@ -64,9 +64,12 @@ public struct ItemTree<Item> {
         var siblings = [UInt32](repeating: 0, count: count)
         for (parent, list) in lists.enumerated() where !list.isEmpty {
             // Biggest first; of the same size, in the order given, which is the order they're numbered in.
-            let ordered = list.count == 1 ? list : list.sorted { a, b in
-                totals[Int(a)] != totals[Int(b)] ? totals[Int(a)] > totals[Int(b)] : a < b
-            }
+            let ordered =
+                list.count == 1
+                ? list
+                : list.sorted { a, b in
+                    totals[Int(a)] != totals[Int(b)] ? totals[Int(a)] > totals[Int(b)] : a < b
+                }
             firstChildren[parent] = ordered[0]
             for at in ordered.indices.dropLast() { siblings[Int(ordered[at])] = ordered[at + 1] }
         }

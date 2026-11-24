@@ -5,7 +5,7 @@ import Foundation
 /// them.
 @MainActor
 enum AgentBackup {
-    static func drive(_ drive: DriveInfo?, connected: Bool) -> [String: Any] {
+    private static func drive(_ drive: DriveInfo?, connected: Bool) -> [String: Any] {
         guard let drive else { return ["chosen": false] }
         var out: [String: Any] = ["name": drive.name, "file_system": drive.fileSystemTitle, "connected": connected]
         if connected {
@@ -26,7 +26,9 @@ enum AgentBackup {
         var out: [String: Any] = [
             "drive": drive,
             "selected": model.backup.items.prefix(limit).map { item -> [String: Any] in
-                var row: [String: Any] = ["path": item.path, "size": item.bytes, "size_text": formatBytes(item.bytes), "selected_by": item.agent ?? "the user"]
+                var row: [String: Any] = [
+                    "path": item.path, "size": item.bytes, "size_text": formatBytes(item.bytes), "selected_by": item.agent ?? "the user",
+                ]
                 if let reason = item.reason { row["reason"] = reason }
                 return row
             },
@@ -34,8 +36,10 @@ enum AgentBackup {
             "selected_size": model.backupBytes,
             "selected_size_text": formatBytes(model.backupBytes),
             "moved": model.movedNotes.prefix(limit).map { note -> [String: Any] in
-                ["path": note.originalPath, "size": note.size, "size_text": formatBytes(note.size), "drive": note.driveName,
-                 "drive_connected": model.drive(of: note) != nil, "moved": AgentLook.dates.string(from: note.moved)]
+                [
+                    "path": note.originalPath, "size": note.size, "size_text": formatBytes(note.size), "drive": note.driveName,
+                    "drive_connected": model.drive(of: note) != nil, "moved": AgentLook.dates.string(from: note.moved),
+                ]
             },
             "moved_in_all": model.movedNotes.count,
             "smallest_file": BackupState.smallest,
@@ -59,7 +63,8 @@ enum AgentBackup {
             "selected_size_text": formatBytes(model.backupBytes),
         ]
         if selecting {
-            out["next"] = model.backup.destination == nil
+            out["next"] =
+                model.backup.destination == nil
                 ? "No drive chosen: call set_backup_drive, or the user picks one. Nothing moves until the user clicks Move."
                 : "Nothing moves until the user clicks Move. Call show with view backup, then wait_for_backup."
         }
@@ -73,12 +78,15 @@ enum AgentBackup {
             throw AgentFailure("No such drive connected: \(wanted). Connected: " + model.drives.map(\.name).joined(separator: ", "))
         }
         if let why = model.whyNotDestination(drive) {
-            throw AgentFailure(why == "Disk shown" ? "That's the disk Headroom is showing. Choose another drive." : "\(drive.name) is \(why.lowercased()).")
+            throw AgentFailure(
+                why == "Disk shown" ? "That's the disk Headroom is showing. Choose another drive." : "\(drive.name) is \(why.lowercased()).")
         }
         guard !model.isCleaning else { throw AgentFailure("Headroom is busy. Try again when it's done.") }
         var folder = (arguments["folder"] as? String ?? "").trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         if folder.split(separator: "/").contains("..") { throw AgentFailure("The folder has to be inside the drive.") }
-        if folder.hasPrefix(String(drive.mountPath.dropFirst())) { folder = String(folder.dropFirst(drive.mountPath.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/")) }
+        if folder.hasPrefix(String(drive.mountPath.dropFirst())) {
+            folder = String(folder.dropFirst(drive.mountPath.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        }
         model.chooseDestination(drive, folder: folder)
         return ["drive": AgentBackup.drive(drive, connected: true), "folder": folder.isEmpty ? "the top of the drive" : folder]
     }
@@ -96,12 +104,13 @@ enum AgentBackup {
     }
 
     /// Waits for a run that's going, or for the user to start one and for it to end, and says what each file came to.
-    static func wait(_ model: AppModel, seconds asked: Int?) async -> [String: Any] {
-        let seconds = min(max(asked ?? 600, 1), AgentLook.longestWait)
+    static func wait(_ model: AppModel, seconds: Int) async -> [String: Any] {
         let before = model.driveJob.map(ObjectIdentifier.init)
         let giveUp = Date().addingTimeInterval(TimeInterval(seconds))
         while Date() < giveUp {
-            if let job = model.driveJob, !job.isRunning, ObjectIdentifier(job) != before || job.finished.map({ Date().timeIntervalSince($0) < 2 }) == true {
+            if let job = model.driveJob, !job.isRunning,
+                ObjectIdentifier(job) != before || job.finished.map({ Date().timeIntervalSince($0) < 2 }) == true
+            {
                 return report(job)
             }
             try? await Task.sleep(for: .milliseconds(300))
@@ -112,7 +121,7 @@ enum AgentBackup {
         return ["finished": false, "note": "Nothing moved yet. Call wait_for_backup again to keep waiting."]
     }
 
-    static func report(_ job: DriveJob) -> [String: Any] {
+    private static func report(_ job: DriveJob) -> [String: Any] {
         [
             "finished": true,
             "summary": job.summary,

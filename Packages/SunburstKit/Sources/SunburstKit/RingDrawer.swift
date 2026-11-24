@@ -4,7 +4,7 @@ import Metal
 import QuartzCore
 
 /// Hands something that isn't `Sendable` to the ring's thread, which from then on is the only one that touches it.
-struct HandedOver<Value>: @unchecked Sendable {
+private struct HandedOver<Value>: @unchecked Sendable {
     let value: Value
 }
 
@@ -178,7 +178,8 @@ private final class RingThread: Thread {
             guard layer.pixelFormat != format else { return }
             Self.log?("format now \(format == SunburstRenderer.outputFormat ? "wide" : "narrow")")
             layer.pixelFormat = format
-            layer.colorspace = CGColorSpace(name: format == SunburstRenderer.outputFormat ? CGColorSpace.extendedLinearDisplayP3 : CGColorSpace.extendedDisplayP3)
+            layer.colorspace = CGColorSpace(
+                name: format == SunburstRenderer.outputFormat ? CGColorSpace.extendedLinearDisplayP3 : CGColorSpace.extendedDisplayP3)
             retireSurfaces()
         }
     }
@@ -274,7 +275,8 @@ private final class RingThread: Thread {
         let dt = given ?? (movedAt == 0 ? 0 : max(began - movedAt, 0))
         movedAt = began
         let (scale, headroom, hasRoom, noting) = lock.withLock { (self.scale, self.headroom, self.hasRoom, notes != nil) }
-        guard hasRoom, let renderer = engine.renderer, let drawable = layer.nextDrawable(), let commands = renderer.commandQueue.makeCommandBuffer() else {
+        guard hasRoom, let renderer = engine.renderer, let drawable = layer.nextDrawable(), let commands = renderer.commandQueue.makeCommandBuffer()
+        else {
             // Nothing to draw into, but time still passes.
             return engine.frame(dt: Float(dt), viewport: .zero, scale: scale, headroom: headroom, encode: nil)
         }
@@ -340,7 +342,11 @@ private final class RingThread: Thread {
     private var notes: [FrameNote]?
 
     public func beginNotes() { lock.withLock { notes = [] } }
-    public func endNotes() -> [FrameNote] { lock.withLock { defer { notes = nil }; return notes ?? [] } }
+    public func endNotes() -> [FrameNote] {
+        lock.withLock {
+            defer { notes = nil }; return notes ?? []
+        }
+    }
 
     private func noteFrame(drawable: CAMetalDrawable, commands: MTLCommandBuffer, target: CFTimeInterval, dt: Double, restarted: Bool) -> Int? {
         let entry: Int? = lock.withLock {

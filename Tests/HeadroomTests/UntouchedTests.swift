@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Headroom
 
 /// The other end of Changes: what nothing has changed in for a long time.
@@ -24,7 +25,9 @@ final class UntouchedTests: XCTestCase {
         XCTAssertEqual(value(year, disk, "/Volumes/Fake/Old/a.bin"), 60e9, accuracy: 1, "a file untouched for a year is untouched as a whole")
         XCTAssertEqual(value(year, disk, "/Volumes/Fake/Old/b.bin"), 0, "a file changed last month isn't untouched for a year")
         XCTAssertEqual(value(ChangeMap(tree: disk.tree, window: .untouched(91)), disk, "/Volumes/Fake/Old"), 60e9, accuracy: 1e6)
-        XCTAssertEqual(value(ChangeMap(tree: disk.tree, window: .untouched(30)), disk, "/Volumes/Fake/Old"), 100e9, accuracy: 1e6, "neither changed in the last month")
+        XCTAssertEqual(
+            value(ChangeMap(tree: disk.tree, window: .untouched(30)), disk, "/Volumes/Fake/Old"), 100e9, accuracy: 1e6,
+            "neither changed in the last month")
     }
 
     func testFreeSpaceAndWhatsHiddenAreNeverUntouched() {
@@ -43,8 +46,11 @@ final class UntouchedTests: XCTestCase {
         disk.file("/Volumes/Fake/Media/film.mkv", 8 * gigabyte, kind: .video, modTime: daysAgo(800))
         disk.finish()
         var facts = Facts()
-        facts.apps = [AppFact(path: "/Volumes/Fake/Applications/Old.app", name: "Old", bundleID: "com.example.old", fromAppStore: false,
-                              newestSign: Date().addingTimeInterval(-3 * 86_400), signCount: 1, isRunning: false, makerNote: nil, settings: [], data: [])]
+        facts.apps = [
+            AppFact(
+                path: "/Volumes/Fake/Applications/Old.app", name: "Old", bundleID: "com.example.old", fromAppStore: false,
+                newestSign: Date().addingTimeInterval(-3 * 86_400), signCount: 1, isRunning: false, makerNote: nil, settings: [], data: [])
+        ]
         facts.plexFiles["/Volumes/Fake/Media/film.mkv"] = Facts.PlexFile(views: 1, lastViewed: Date().addingTimeInterval(-20 * 86_400))
         let used = ChangeMap.usedRecently(facts, in: disk.tree, days: 365)
         XCTAssertEqual(Set(used), [disk.node("/Volumes/Fake/Applications/Old.app"), disk.node("/Volumes/Fake/Media/film.mkv")])

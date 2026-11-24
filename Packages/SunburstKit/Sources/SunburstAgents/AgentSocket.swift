@@ -128,9 +128,11 @@ final class AgentConnection: @unchecked Sendable {
             lock.withLock {
                 guard !closed else { return }
                 data.withUnsafeBytes { raw in
+                    // Never empty: the line ends in a newline.
+                    guard let start = raw.baseAddress else { return }
                     var sent = 0
                     while sent < raw.count {
-                        let wrote = write(fd, raw.baseAddress! + sent, raw.count - sent)
+                        let wrote = write(fd, start + sent, raw.count - sent)
                         if wrote < 0, errno == EINTR { continue }
                         guard wrote > 0 else { return }
                         sent += wrote

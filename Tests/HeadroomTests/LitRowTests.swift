@@ -1,5 +1,6 @@
 import Observation
 import XCTest
+
 @testable import Headroom
 
 /// The row the pointer on the ring lights is told to that row alone.
@@ -11,7 +12,11 @@ final class LitRowTests: XCTestCase {
 
     private func changes(_ rows: LitRow, _ id: String, when change: () -> Void) -> Bool {
         let changed = Flag()
-        withObservationTracking { _ = rows.isLit(id) } onChange: { changed.isSet = true }
+        withObservationTracking {
+            _ = rows.isLit(id)
+        } onChange: {
+            changed.isSet = true
+        }
         change()
         return changed.isSet
     }

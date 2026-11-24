@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Headroom
 
 /// How many rings the map draws and how thick each is, and that any number of them fills the same circle.
@@ -39,8 +40,9 @@ final class RingTests: XCTestCase {
         var firstRing: [RingStyle: [Int: Float]] = [:]
         for style in RingStyle.allCases {
             for depth in [5, 6, 8, 10] {
-                let layout = RingLayout.build(tree: d.tree, focus: d.node("/Volumes/Fake/d1"), colorer: { _ in .zero },
-                                              sizes: RingSizes(depth: depth, style: style))
+                let layout = RingLayout.build(
+                    tree: d.tree, focus: d.node("/Volumes/Fake/d1"), colorer: { _ in .zero },
+                    sizes: RingSizes(depth: depth, style: style))
                 let pieces = layout.pieces
                 XCTAssertEqual(pieces.map(\.ring).max(), Int32(depth - 1), "a ring for every level, as deep as asked")
                 XCTAssertEqual(try XCTUnwrap(pieces.map(\.r1).max()), 1, accuracy: 0.0001, "the same circle at any depth")
@@ -51,8 +53,9 @@ final class RingTests: XCTestCase {
         let standard = try XCTUnwrap(firstRing[.standard]), tapered = try XCTUnwrap(firstRing[.tapered])
         XCTAssertLessThan(try XCTUnwrap(standard[8]), try XCTUnwrap(standard[6]), "more rings are thinner rings")
         XCTAssertLessThan(try XCTUnwrap(standard[10]) / XCTUnwrap(standard[5]), 0.55)
-        XCTAssertGreaterThan(try XCTUnwrap(tapered[10]) / XCTUnwrap(tapered[5]), try XCTUnwrap(standard[10]) / XCTUnwrap(standard[5]),
-                             "tapered, the first ring keeps more of its room")
+        XCTAssertGreaterThan(
+            try XCTUnwrap(tapered[10]) / XCTUnwrap(tapered[5]), try XCTUnwrap(standard[10]) / XCTUnwrap(standard[5]),
+            "tapered, the first ring keeps more of its room")
     }
 
     func testAPictureGetsNoMoreRingsThanItCanFill() throws {
@@ -120,8 +123,10 @@ final class RingTests: XCTestCase {
 
     func testTheBandAroundTheWholeDiskKeepsItsWidth() throws {
         let d = deepDisk()
-        for sizes in [RingSizes(depth: 4, style: .standard), RingSizes(depth: 10, style: .standard), RingSizes(depth: 10, style: .tapered),
-                      RingSizes(depth: 10, style: .adaptive)] {
+        for sizes in [
+            RingSizes(depth: 4, style: .standard), RingSizes(depth: 10, style: .standard), RingSizes(depth: 10, style: .tapered),
+            RingSizes(depth: 10, style: .adaptive),
+        ] {
             let layout = RingLayout.build(tree: d.tree, focus: 0, colorer: { _ in .zero }, sizes: sizes)
             let band = try XCTUnwrap(layout.pieces.first { $0.ring == 0 && $0.node == d.node("/Volumes/Fake") })
             XCTAssertEqual(band.r1 - band.r0, RingLayout.band, accuracy: 0.0001)
@@ -144,7 +149,8 @@ final class RingTests: XCTestCase {
         for style in [RingStyle.standard, .tapered] {
             for focus in [d.node("/Volumes/Fake"), d.node(deep(2)), 0] {
                 let measured = RingLayout.fill(tree: d.tree, focus: focus, parts: d.tree.parts(RingSizes(depth: 6, style: style)))
-                let drawn = RingLayout.build(tree: d.tree, focus: focus, colorer: { _ in .zero }, sizes: RingSizes(depth: RingSizes.most, style: style))
+                let drawn = RingLayout.build(
+                    tree: d.tree, focus: focus, colorer: { _ in .zero }, sizes: RingSizes(depth: RingSizes.most, style: style))
                 XCTAssertGreaterThan(measured.count, 3)
                 // With fewer rings than the most, each sits further out and goes at least as far around.
                 guard drawn.rings == RingSizes.most else {
@@ -155,7 +161,8 @@ final class RingTests: XCTestCase {
                 for (a, b) in zip(drawn.fill, measured) { XCTAssertEqual(a, b, accuracy: 0.0001) }
             }
         }
-        let full = RingLayout.build(tree: d.tree, focus: d.node("/Volumes/Fake"), colorer: { _ in .zero }, sizes: RingSizes(depth: 12, style: .tapered))
+        let full = RingLayout.build(
+            tree: d.tree, focus: d.node("/Volumes/Fake"), colorer: { _ in .zero }, sizes: RingSizes(depth: 12, style: .tapered))
         XCTAssertEqual(full.rings, 12, "this disk fills all twelve, so the comparison above was exact at least once")
     }
 
@@ -185,8 +192,9 @@ final class RingTests: XCTestCase {
                 let slow = pieces.firstIndex { !$0.isSmaller && inChain($0, node) }
                 XCTAssertEqual(layout.piece(of: node), slow, "node \(node)")
             }
-            XCTAssertEqual(layout.piece(of: d.node("/Volumes/Fake/only/chain/of")), layout.piece(of: d.node("/Volumes/Fake/only")),
-                           "a folder in the middle of a chain")
+            XCTAssertEqual(
+                layout.piece(of: d.node("/Volumes/Fake/only/chain/of")), layout.piece(of: d.node("/Volumes/Fake/only")),
+                "a folder in the middle of a chain")
             for (at, p) in pieces.enumerated() where !p.isSmaller {
                 XCTAssertEqual(layout.smallerPiece(in: at), pieces.firstIndex { $0.isSmaller && Int($0.parent) == at })
             }
@@ -208,7 +216,10 @@ final class RingTests: XCTestCase {
     func testAPiecesKeyIsItsPathWhateverItsNumber() throws {
         func disk(reversed: Bool) -> FakeDisk {
             let d = FakeDisk()
-            var paths = (0..<8).flatMap { a in (0..<6).map { b in "/Volumes/Fake/a\(a)/b\(b)/file.bin" } } + ["/Volumes/Fake/only/chain/of/folders/x.bin", "/Volumes/Fake/only/chain/of/folders/y.bin"]
+            var paths =
+                (0..<8).flatMap { a in (0..<6).map { b in "/Volumes/Fake/a\(a)/b\(b)/file.bin" } } + [
+                    "/Volumes/Fake/only/chain/of/folders/x.bin", "/Volumes/Fake/only/chain/of/folders/y.bin",
+                ]
             if reversed { paths.reverse() }
             for path in paths { d.file(path, UInt64(abs(path.hashValue % 50) + 20) * gb) }
             d.finish()
@@ -230,7 +241,8 @@ final class RingTests: XCTestCase {
         // Zoomed in, a piece still has the key it had from further out, also inside a chain.
         for (path, key) in keys(one, focus: "/Volumes/Fake/a3") { XCTAssertEqual(whole[path], key, path) }
         for (path, key) in keys(one, focus: "/Volumes/Fake/only") { XCTAssertEqual(whole[path], key, path) }
-        XCTAssertEqual(whole["/Volumes/Fake/only/chain/of/folders/x.bin"], RingLayout.pathKey(one.tree, one.node("/Volumes/Fake/only/chain/of/folders/x.bin")))
+        XCTAssertEqual(
+            whole["/Volumes/Fake/only/chain/of/folders/x.bin"], RingLayout.pathKey(one.tree, one.node("/Volumes/Fake/only/chain/of/folders/x.bin")))
     }
 
     private func deep(_ level: Int) -> String {

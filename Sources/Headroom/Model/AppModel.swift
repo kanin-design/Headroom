@@ -1,7 +1,7 @@
 import AppKit
 import Observation
-import SwiftUI
 @_spi(Diagnostics) import SunburstKit
+import SwiftUI
 
 /// Something you asked to send to the Trash, and what's using it.
 struct BusyThing {
@@ -11,7 +11,7 @@ struct BusyThing {
 }
 
 /// A scan waiting to run, and how it was asked for.
-struct ScanRequest {
+private struct ScanRequest {
     var hurry = false
     var readAll = false
 }
@@ -121,7 +121,19 @@ final class AppModel {
     var accessCardDismissed = false
 
     // Where you are
-    var focus: UInt32 = 0 { didSet { if oldValue != focus { pointedThing = nil; showHover(atOnce: true); closeLook(); refreshShownRows(); refreshChangeRows(); visitChanged() } } }
+    var focus: UInt32 = 0 {
+        didSet {
+            guard oldValue != focus else { return }
+            pointedThing = nil
+            showHover(atOnce: true)
+            closeLook()
+            refreshShownRows()
+            refreshChangeRows()
+            visitChanged()
+            // A search lists what's in the folder in view.
+            if isSearching { runSearch() }
+        }
+    }
     /// What the card Shift-Space opens is showing, when it's open.
     var look: Look? { didSet { if look?.node != oldValue?.node { lookMoved() } } }
     var lookCursor: Int?
@@ -137,7 +149,7 @@ final class AppModel {
     /// For a check: whether the card's film is playing.
     @ObservationIgnored var lookIsPlaying = false
     @ObservationIgnored var factsCache: [UInt32: String] = [:]
-    @ObservationIgnored var storyTask: Task<Void, Never>?
+    @ObservationIgnored private var storyTask: Task<Void, Never>?
     /// The last link story worked out for a menu: a right-click asks for the same one twice.
     @ObservationIgnored var menuStory: (node: UInt32, version: Int, story: LinkStory)?
     /// The pictures the card shows for a folder, found once for that folder and that map: the card redraws on every arrow key.
@@ -179,7 +191,7 @@ final class AppModel {
             chart.showsGlow = showsGlow
         }
     }
-    static let paletteKey = "palette", glowKey = "glow"
+    private static let paletteKey = "palette", glowKey = "glow"
     private static var savedPalette: SunburstPalette {
         let id = remembersWindow ? UserDefaults.standard.string(forKey: paletteKey) : nil
         return SunburstPalette.all.first { $0.id == id } ?? .spectrum
@@ -223,7 +235,7 @@ final class AppModel {
     @ObservationIgnored let litBox = LitRow()
     /// The pointer is on Select recommended: the boxes it would tick light up.
     var recommendedHot = false
-    var hotRow: String? { didSet { litRow.light(hotRow) } }
+    private var hotRow: String? { didSet { litRow.light(hotRow) } }
     @ObservationIgnored let litRow = LitRow()
     var message: String?
     /// The link story behind whatever the panel is showing.
@@ -302,14 +314,13 @@ final class AppModel {
     @ObservationIgnored var boxOfRow: [String: String] = [:]
     @ObservationIgnored var checkTask: Task<Void, Never>?
     @ObservationIgnored var pointingTask: Task<Void, Never>?
-    /// Every suggestion on screen with its parts spelled out, and which one a node belongs to.
     /// Which scan's node numbers the suggestions use.
     @ObservationIgnored var winsScanID: UUID?
     @ObservationIgnored var quitAfterClean = false
     /// The clean a quit was waiting for has stopped. The quit may still be waiting for a new version to go into place.
     @ObservationIgnored var cleanStoppedForQuit = false
     /// A scan held back while things leave the disk or come back to it: one a clean stopped, or one asked for meanwhile.
-    @ObservationIgnored var scanAfterClean: ScanRequest?
+    @ObservationIgnored private var scanAfterClean: ScanRequest?
 
     @ObservationIgnored var rowOfNode: [UInt32: Int] = [:]
     @ObservationIgnored var checkGeneration = 0
@@ -332,7 +343,7 @@ final class AppModel {
     @ObservationIgnored var factsRunning = false
     @ObservationIgnored var factsWanted = false
     @ObservationIgnored var factsOfSavedMap = false
-    @ObservationIgnored let windowHidden = LockedFlag()
+    @ObservationIgnored private let windowHidden = LockedFlag()
     @ObservationIgnored var isReadingOtherDisk = false
     @ObservationIgnored var lastPlanItems: [PlanItem] = []
     /// What the last move to a drive took, so Undo can select it for Backup again.
@@ -363,6 +374,23 @@ final class AppModel {
     var searchResults: [UInt32] = []
     /// Something is typed in the search field, so the inspector lists what it finds, wherever the keyboard is.
     var isSearching: Bool { !searchText.isEmpty }
+    /// Whether small files, under 1 MiB and so not on the map, are written down as the disk is read, and searched
+    /// (`SmallFiles`). On unless turned off in the Edit menu. A scripted copy starts with it on and keeps nothing.
+    var searchesSmallFiles = AppModel.savedSearchesSmallFiles {
+        didSet { if Self.remembersWindow { UserDefaults.standard.set(searchesSmallFiles, forKey: Self.smallFilesKey) } }
+    }
+    /// Why the small files aren't listed, if they aren't, and what the search found among them.
+    var smallFilesGap: SmallFilesGap? = .notRead
+    var smallFound: SmallFileResults?
+    /// The catalogues of the map on screen and of the one about to replace it.
+    @ObservationIgnored var catalogues: [SmallFileCatalogue] = []
+    @ObservationIgnored private var smallSearch: StopFlag?
+    /// How long the last search of the small files took, in milliseconds.
+    @ObservationIgnored var smallSearchMilliseconds = 0.0
+    private static let smallFilesKey = "searchSmallFiles"
+    private static var savedSearchesSmallFiles: Bool {
+        remembersWindow ? UserDefaults.standard.object(forKey: smallFilesKey) as? Bool ?? true : true
+    }
 
     // MARK: Backup
 
@@ -395,14 +423,14 @@ final class AppModel {
     }
     /// Whether Backup shows both sides when its drive is connected.
     var showDriveSide = true
-    @ObservationIgnored var pairTask: Task<Void, Never>?
+    @ObservationIgnored private var pairTask: Task<Void, Never>?
     /// Both disks for the folder you're in, made ahead in Free Up or kept from when Backup was last on screen, so switching
     /// to Backup shows them at once. Only with the drive unplugged, when its half is what was read there last: one plugged
     /// in is read when Backup asks, not again and again as you go through folders in Free Up.
-    @ObservationIgnored var readyPair: ReadyPair?
-    @ObservationIgnored var readyPairTask: Task<Void, Never>?
+    @ObservationIgnored private var readyPair: ReadyPair?
+    @ObservationIgnored private var readyPairTask: Task<Void, Never>?
     /// The picture of both disks on screen, and what it was made from.
-    @ObservationIgnored var pairShown: ReadyPair?
+    @ObservationIgnored private var pairShown: ReadyPair?
     /// Lets both disks made ahead go when macOS is short of memory: they're made again when Backup is chosen.
     @ObservationIgnored private var memoryWatch: DispatchSourceMemoryPressure?
     /// Once memory has been short, nothing more is made ahead or kept, until Headroom is opened again.
@@ -424,7 +452,7 @@ final class AppModel {
         return SunburstEngine(reducesMotion: { Motion.isReduced })
     }()
     @ObservationIgnored let rules = RuleBook(homePath: NSHomeDirectory())
-    @ObservationIgnored var activeScan: DiskScan?
+    @ObservationIgnored private var activeScan: DiskScan?
     /// The startup disk's change journal, collected from where the map on screen was read, so that a refresh only reads
     /// what has changed since.
     @ObservationIgnored var journal: ChangeJournal.Watcher?
@@ -435,7 +463,7 @@ final class AppModel {
     @ObservationIgnored private var changes: ChangeMap?
     /// Which scan's numbering the Changes map uses.
     @ObservationIgnored private var changesScanID: UUID?
-    @ObservationIgnored var scanGeneration = 0
+    @ObservationIgnored private var scanGeneration = 0
     @ObservationIgnored private var didStart = false
     /// Trees on their way to the screen, so a scan starting now knows the ring won't be empty. At launch there can be two:
     /// the saved map, and the scan that refreshes it.
@@ -450,7 +478,7 @@ final class AppModel {
     @ObservationIgnored var cacheLoadMilliseconds = 0.0
     /// How the last scan went about it, for a scripted check.
     @ObservationIgnored var lastScanNote = ""
-    @ObservationIgnored var nameCache: [UInt32: String] = [:]
+    @ObservationIgnored private var nameCache: [UInt32: String] = [:]
     @ObservationIgnored weak var mapView: MapHostView?
 
     // MARK: Starting
@@ -476,6 +504,7 @@ final class AppModel {
         var saved: DiskTree?
         // Without Full Disk Access nothing is read, the saved map included: whatever it names would be looked at.
         if hasFullAccess, !CommandLine.arguments.contains("--no-cache"), let cached = TreeCache.load(for: volume, rules: rules) {
+            loadCatalogue(for: cached)
             present(cached, transition: .appear)
             cacheLoadMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - launch.uptimeNanoseconds) / 1e6
             watchJournal(from: cached, on: volume)
@@ -490,7 +519,8 @@ final class AppModel {
     /// the disk is quicker than going through it.
     private func watchJournal(from map: DiskTree, on facts: VolumeFacts) {
         guard facts.isBoot, let place = map.journal, let behind = ChangeJournal.distance(from: place, for: facts.mountPath),
-              behind < 3_000_000 else { return }
+            behind < 3_000_000
+        else { return }
         journal?.stop()
         journal = ChangeJournal.Watcher(from: place, roots: ChangeJournal.roots(of: map))
     }
@@ -499,9 +529,10 @@ final class AppModel {
     /// in full within the last day, by this build and the same way, and that the journal has been watched from.
     private func refreshable(_ map: DiskTree?, facts: VolumeFacts, scan: DiskScan) -> DiskTree? {
         guard facts.isBoot, !HiddenNames.isOn, let map, map.isWhole, !map.isPartial, let place = map.journal,
-              map.rootPath == facts.mountPath, Date().timeIntervalSince(map.fullReadAt) < 86_400,
-              map.readGuarded == scan.scanner.touchGuarded,
-              let journal, journal.base == place, journal.roots == scan.watchRoots else { return nil }
+            map.rootPath == facts.mountPath, Date().timeIntervalSince(map.fullReadAt) < 86_400,
+            map.readGuarded == scan.scanner.touchGuarded,
+            let journal, journal.base == place, journal.roots == scan.watchRoots
+        else { return nil }
         return map
     }
 
@@ -544,7 +575,12 @@ final class AppModel {
         let mode: ScanMode = hurry ? .full : (showPictures ? .firstLook : .quiet)
         // Free space, macOS and swap come straight from the disk, so the very first frame already has them.
         if showPictures { show(scan.picture()) }
-        let base = hurry || readAll ? nil : refreshable(given ?? tree, facts: facts, scan: scan)
+        let map = hurry || readAll ? nil : refreshable(given ?? tree, facts: facts, scan: scan)
+        // The small files are refreshed with the map, from the catalogue written for it. With none, everything is read,
+        // so the new one is whole.
+        let writesCatalogue = searchesSmallFiles
+        let catalogueBase = map.flatMap { catalogue(for: $0) ?? SmallFileCatalogue.load(volume: facts.name, for: $0) }
+        let base = writesCatalogue && catalogueBase == nil ? nil : map
         if base == nil, facts.isBoot {
             // Everything's read, and the journal is watched from here, for the refresh after.
             journal?.stop()
@@ -556,13 +592,16 @@ final class AppModel {
         Thread.detachNewThread { [weak self] in
             Thread.current.qualityOfService = .userInitiated
             var note = "read everything"
+            var refreshed = false
             if let base, let journal {
                 // At launch, what happened while the app was closed comes first.
                 let asked = Date()
                 if let place = base.journal, journal.waitForHistory(timeout: 6), let taken = journal.take(from: place) {
                     if scan.refresh(from: base, changes: taken.changes, place: taken.next) {
-                        note = String(format: "refreshed: %.2f s for the journal, %d folders changed, %d of the map's read again",
-                                      Date().timeIntervalSince(asked), taken.changes.folders.count, scan.foldersToRead)
+                        refreshed = true
+                        note = String(
+                            format: "refreshed: %.2f s for the journal, %d folders changed, %d of the map's read again",
+                            Date().timeIntervalSince(asked), taken.changes.folders.count, scan.foldersToRead)
                     } else {
                         scan.place = taken.next
                     }
@@ -576,21 +615,26 @@ final class AppModel {
                     }
                 }
             }
+            let writer = writesCatalogue ? SmallFileWriter(volume: facts.name, refreshing: refreshed ? catalogueBase : nil) : nil
+            scan.scanner.smallFiles = writer
             // A picture is a copy of the whole tree, so there's never a second one waiting behind one nobody has looked at yet.
             let pictureWaiting = LockedFlag()
             let windowHidden = self?.windowHidden
-            scan.run(mode: mode, tick: {
-                let files = Int(scan.scanner.filesSoFar)
-                let picture = showPictures && !pictureWaiting.value && windowHidden?.value != true ? scan.picture() : nil
-                if picture != nil { pictureWaiting.value = true }
-                DispatchQueue.main.async {
-                    if picture != nil { pictureWaiting.value = false }
-                    guard let self, self.scanGeneration == generation else { return }
-                    self.scanFiles = files
-                    if let picture { self.show(picture) }
-                }
-            })
+            scan.run(
+                mode: mode,
+                tick: {
+                    let files = Int(scan.scanner.filesSoFar)
+                    let picture = showPictures && !pictureWaiting.value && windowHidden?.value != true ? scan.picture() : nil
+                    if picture != nil { pictureWaiting.value = true }
+                    DispatchQueue.main.async {
+                        if picture != nil { pictureWaiting.value = false }
+                        guard let self, self.scanGeneration == generation else { return }
+                        self.scanFiles = files
+                        if let picture { self.show(picture) }
+                    }
+                })
             if scan.surprised {
+                writer?.abandon()
                 DispatchQueue.main.async {
                     guard let self, self.scanGeneration == generation else { return }
                     // Read again in full, and still at full power if you were waiting for it.
@@ -605,6 +649,8 @@ final class AppModel {
             // would show the wrong map on the next launch and spoil the next comparison.
             let complete = !scan.scanner.wasCancelled && VolumeFacts.read(path: facts.mountPath) != nil
             let snapshot = complete ? History.record(tree: tree, facts: facts) : []
+            let catalogue = complete ? writer?.finish(tree) : nil
+            writer?.abandon()
             if complete {
                 TreeCache.save(tree, for: facts, rules: scan.rules)
                 DiskIndex.save(tree)
@@ -623,6 +669,7 @@ final class AppModel {
                 self.scanFiles = Int(tree.totalFiles[0])
                 self.activeScan = nil
                 self.history = snapshot
+                if let catalogue { self.keep(catalogue) }
                 self.present(tree, transition: .settle)
             }
         }
@@ -718,20 +765,14 @@ final class AppModel {
     private func workOutInsights(from picture: DiskTree) {
         guard !insightsRunning, Date().timeIntervalSince(insightsAt) >= 2 else { return }
         insightsRunning = true
-        let rules = self.rules
-        let window = changeWindow
-        let running = runningBundleIDs()
-        let facts = self.facts
-        let kept = plan.kept
+        let input = insightInputs
         Task.detached(priority: .utility) {
-            let (wins, map) = Self.suggest(tree: picture, rules: rules, running: running, facts: facts, kept: kept)
-            let change = Self.changeMap(tree: picture, window: window, rules: rules, facts: facts)
-            let rows = change.rows(tree: picture, rules: rules)
+            let worked = Self.workOut(picture, from: input)
             await MainActor.run {
                 self.insightsRunning = false
                 self.insightsAt = Date()
                 guard self.tree?.isPartial == true, self.tree?.scanID == picture.scanID else { return }
-                self.adopt(map, wins, change, rows, for: window)
+                self.adopt(worked)
                 if self.isSearching { self.runSearch() }
                 if self.view != .map { self.refreshLive() }
             }
@@ -789,17 +830,11 @@ final class AppModel {
     /// change in one step and nothing ever reads one tree with another tree's numbers.
     private func present(_ newTree: DiskTree, transition: RingTransition) {
         if HiddenNames.isOn { HiddenNames.apply(to: newTree) }
-        let rules = self.rules
-        let window = changeWindow
-        let running = runningBundleIDs()
-        let facts = self.facts
-        let kept = plan.kept
+        let input = insightInputs
         let edits = mapEdits
         mapsOnTheirWay += 1
         Task.detached(priority: .userInitiated) {
-            let (wins, map) = Self.suggest(tree: newTree, rules: rules, running: running, facts: facts, kept: kept)
-            let change = Self.changeMap(tree: newTree, window: window, rules: rules, facts: facts)
-            let rows = change.rows(tree: newTree, rules: rules)
+            let worked = Self.workOut(newTree, from: input)
             await MainActor.run {
                 self.mapsOnTheirWay -= 1
                 // You may have picked another disk while this was being worked out.
@@ -839,7 +874,7 @@ final class AppModel {
                 // Only now, so what moving there sets off reads the new tree with the new tree's numbers.
                 if let newFocus { self.focus = newFocus }
                 self.resolvePlanSynchronously(in: newTree)
-                self.adopt(map, wins, change, rows, for: window)
+                self.adopt(worked)
                 // Copies looks again whenever there's a new map of the whole disk, remembering what hasn't changed.
                 if self.view == .copies { self.refreshCopies() }
                 // What was read for a saved map is read again once the scan after it has finished.
@@ -865,13 +900,42 @@ final class AppModel {
         return cleaning || editsThen != editsNow
     }
 
-    private func adopt(_ map: ReclaimMap, _ new: Suggestions, _ change: ChangeMap, _ rows: [ChangeRow], for window: ChangeWindow) {
-        reclaim = map
-        suggestions = new
+    /// What Free Up and Changes are worked out from, taken on the main thread for working them out off it.
+    fileprivate struct InsightInputs {
+        let rules: RuleBook
+        let window: ChangeWindow
+        let running: Set<String>
+        let facts: Facts
+        let kept: [PlanList.KeptThing]
+    }
+
+    /// Free Up's suggestions, which one each folder belongs to, and Changes, all for one tree, so they're adopted together.
+    fileprivate struct WorkedOut {
+        let suggestions: Suggestions
+        let reclaim: ReclaimMap
+        let change: ChangeMap
+        let changeRows: [ChangeRow]
+        let window: ChangeWindow
+    }
+
+    private var insightInputs: InsightInputs {
+        InsightInputs(rules: rules, window: changeWindow, running: runningBundleIDs(), facts: facts, kept: plan.kept)
+    }
+
+    nonisolated private static func workOut(_ tree: DiskTree, from input: InsightInputs) -> WorkedOut {
+        let (wins, map) = suggest(tree: tree, rules: input.rules, running: input.running, facts: input.facts, kept: input.kept)
+        let change = changeMap(tree: tree, window: input.window, rules: input.rules, facts: input.facts)
+        return WorkedOut(
+            suggestions: wins, reclaim: map, change: change, changeRows: change.rows(tree: tree, rules: input.rules), window: input.window)
+    }
+
+    private func adopt(_ worked: WorkedOut) {
+        reclaim = worked.reclaim
+        suggestions = worked.suggestions
         winsScanID = tree?.scanID
         // Another window may have been picked while this was worked out, and then that one is worked out again.
-        if window == changeWindow {
-            show(change, rows)
+        if worked.window == changeWindow {
+            show(worked.change, worked.changeRows)
         } else if let tree {
             let current = Self.changeMap(tree: tree, window: changeWindow, rules: rules, facts: facts)
             show(current, current.rows(tree: tree, rules: rules))
@@ -881,7 +945,9 @@ final class AppModel {
     }
 
     /// What could go in this tree, and which suggestion each folder belongs to. One piece of work, so the two always match.
-    nonisolated static func suggest(tree: DiskTree, rules: RuleBook, running: Set<String>, facts: Facts, kept: [PlanList.KeptThing]) -> (Suggestions, ReclaimMap) {
+    nonisolated static func suggest(
+        tree: DiskTree, rules: RuleBook, running: Set<String>, facts: Facts, kept: [PlanList.KeptThing]
+    ) -> (Suggestions, ReclaimMap) {
         let wins = Wins.build(tree: tree, rules: rules, running: running, facts: facts)
         let built = Sections.build(from: wins, tree: tree, facts: facts)
         return (built, reclaimMap(tree: tree, built, kept: kept))
@@ -892,7 +958,7 @@ final class AppModel {
         return ReclaimMap(tree: tree, rows: suggestions.rows.filter { !ids.contains($0.id) })
     }
 
-    func runningBundleIDs() -> Set<String> {
+    private func runningBundleIDs() -> Set<String> {
         var running = Set<String>()
         for app in NSWorkspace.shared.runningApplications {
             if let id = app.bundleIdentifier { running.insert(id) }
@@ -902,7 +968,7 @@ final class AppModel {
     }
 
     /// A new tree numbers its folders afresh, so the row that was open, and the folders remembered for it, mean nothing in it.
-    func forgetOpenedRow() {
+    private func forgetOpenedRow() {
         expandedRow = nil
         expandedFocus = nil
         focusBeforeExpanding = nil
@@ -938,7 +1004,11 @@ final class AppModel {
         chart.show(.empty)
         history = History.points(for: facts)
         let cached = hasFullAccess ? TreeCache.load(for: facts, rules: rules) : nil
-        if let cached { present(cached, transition: .appear) }
+        catalogues = []
+        if let cached {
+            loadCatalogue(for: cached)
+            present(cached, transition: .appear)
+        }
         scan(refreshing: cached)
     }
 
@@ -977,19 +1047,13 @@ final class AppModel {
     /// Numbers changed within the same tree, after moving something to the Trash.
     func rebuildInsights() {
         guard let tree else { return }
-        let rules = self.rules
         let version = treeVersion
-        let window = changeWindow
-        let running = runningBundleIDs()
-        let facts = self.facts
-        let kept = plan.kept
+        let input = insightInputs
         Task.detached(priority: .userInitiated) {
-            let (wins, map) = Self.suggest(tree: tree, rules: rules, running: running, facts: facts, kept: kept)
-            let change = Self.changeMap(tree: tree, window: window, rules: rules, facts: facts)
-            let rows = change.rows(tree: tree, rules: rules)
+            let worked = Self.workOut(tree, from: input)
             await MainActor.run {
                 guard self.treeVersion == version, self.tree === tree else { return }
-                self.adopt(map, wins, change, rows, for: window)
+                self.adopt(worked)
                 // What went to the Trash isn't a copy any more.
                 if self.copies != nil { self.rebuildCopies() }
                 if self.view != .map { self.relayout(.recolor) }
@@ -1025,7 +1089,7 @@ final class AppModel {
 
     /// What grew, shrank or went untouched in the folder you're in, as on the ring. The whole disk's list comes with its map.
     /// A folder's is worked out here, and quickly, because only what changed by 100 MB or more is looked into.
-    func refreshChangeRows(wholeDisk: [ChangeRow]? = nil) {
+    private func refreshChangeRows(wholeDisk: [ChangeRow]? = nil) {
         // A map made for an earlier scan numbers things differently, so its rows wait for the map of this one.
         guard let tree, let changes, changesScanID == tree.scanID else { return }
         let root = focus == 0 ? 0 : RingLayout.chainTail(tree: tree, focus)
@@ -1079,8 +1143,9 @@ final class AppModel {
     /// The ring for the disks this window shows, with what Headroom does its own way. It asks the model what it needs when it
     /// needs it, so nothing here is set again as the view or the mode changes.
     private func makeChart() -> SunburstChart<MapTree> {
-        let chart = SunburstChart(tree: MapTree.empty, name: { [weak self] in self?.displayName($0) ?? "" }, sizeText: formatBytes,
-                                  engine: engine, appears: false)
+        let chart = SunburstChart(
+            tree: MapTree.empty, name: { [weak self] in self?.displayName($0) ?? "" }, sizeText: formatBytes,
+            engine: engine, appears: false)
         chart.colours = { [weak self] tree, _ in self?.colorer(tree.disk) ?? { _ in .zero } }
         chart.showsGlow = showsGlow
         chart.namer = HeadroomNames(model: self)
@@ -1172,7 +1237,7 @@ final class AppModel {
     }
 
     /// Works out the link story for what the panel is showing. It takes a moment, so it never holds up the zoom.
-    func refreshStory() {
+    private func refreshStory() {
         guard let tree, !tree.links.isEmpty else { story = nil; return }
         let node = selected ?? focus
         guard node != 0, !tree.nodes[Int(node)].has(NodeFlag.synthetic) else { story = nil; return }
@@ -1251,7 +1316,8 @@ final class AppModel {
         // Whether its files also have another path, and when it was last used, are worked out off the main thread once
         // the pointer has rested there a moment, and the line shows them when they're ready. Pointing at something else
         // stops it, so a pointer on its way across the ring asks for nothing.
-        let wantsLinks = !info.inTrash && !p.isSmaller && !p.role.isSpace && !tree.links.isEmpty && tree.nodes[Int(p.node)].flags & NodeFlag.synthetic == 0
+        let wantsLinks =
+            !info.inTrash && !p.isSmaller && !p.role.isSpace && !tree.links.isEmpty && tree.nodes[Int(p.node)].flags & NodeFlag.synthetic == 0
         if hasFullAccess, wantsLinks || info.tellsUse {
             let node = p.node, bytes = p.size, tellsUse = info.tellsUse
             linksTask = Task { [weak self] in
@@ -1260,7 +1326,11 @@ final class AppModel {
                 let work = Task.detached(priority: .userInitiated) {
                     LastUse.find(node, bytes: bytes, links: wantsLinks, use: tellsUse, in: tree)
                 }
-                let found = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
+                let found = await withTaskCancellationHandler {
+                    await work.value
+                } onCancel: {
+                    work.cancel()
+                }
                 guard let self, found.links != nil || found.use != nil, !Task.isCancelled, self.hover?.pieceIndex == index else { return }
                 info.links = found.links
                 if let use = found.use { info.note = use }
@@ -1326,7 +1396,7 @@ final class AppModel {
         if mode == .freeUp, handlePlanKey(event) { return true }
         // Escape and Delete are the chart's: they go back, through `onBack`.
         switch event.keyCode {
-        case 49:                            // space selects; with shift, the card
+        case 49:  // space selects; with shift, the card
             if event.modifierFlags.contains(.shift) { toggleLook() } else { spaceSelect() }
         default: return false
         }
@@ -1348,18 +1418,23 @@ final class AppModel {
             if p.isStretch, index + 1 < pieces.count, pieces[index + 1].parent == Int32(index), let first = pair.places[pieces[index + 1].node] {
                 place = first
             }
-            return HoverInfo(pieceIndex: index, node: p.node, title: displayName(piece: p), bytes: p.size, share: "",
-                             note: place.title(drive: pair.driveName), links: nil)
+            return HoverInfo(
+                pieceIndex: index, node: p.node, title: displayName(piece: p), bytes: p.size, share: "",
+                note: place.title(drive: pair.driveName))
         }
         // A moved file, drawn from its note: where it is now.
         if !p.isSmaller, let ghost = tree.ghosts[p.node], tree.isGhost(p.node) {
             let connected = drive(of: ghost) != nil
-            return HoverInfo(pieceIndex: index, node: p.node, title: ghost.name, bytes: ghost.size, share: "On \(ghost.driveName)\(connected ? "" : ", not connected")",
-                             note: "Moved " + LastUse.ago(ghost.moved, now: Date()), links: nil)
+            return HoverInfo(
+                pieceIndex: index, node: p.node, title: ghost.name, bytes: ghost.size,
+                share: "On \(ghost.driveName)\(connected ? "" : ", not connected")",
+                note: "Moved " + LastUse.ago(ghost.moved, now: Date()))
         }
         // In Copies the line under the size says what it is there: an extra copy, the copy that stays, how much is extra.
-        if view == .copies, mode == .freeUp, !p.isSmaller, let copies, copies.scanID == tree.scanID, let text = copies.note(for: p.node, total: p.size, in: tree) {
-            return HoverInfo(pieceIndex: index, node: p.node, title: displayName(piece: p), bytes: p.size, share: "", note: text, links: nil)
+        if view == .copies, mode == .freeUp, !p.isSmaller, let copies, copies.scanID == tree.scanID,
+            let text = copies.note(for: p.node, total: p.size, in: tree)
+        {
+            return HoverInfo(pieceIndex: index, node: p.node, title: displayName(piece: p), bytes: p.size, share: "", note: text)
         }
         let n = tree.nodes[Int(p.node)]
         let base = tree.totals[Int(focus)]
@@ -1368,8 +1443,7 @@ final class AppModel {
         let scope = focus == 0 ? "of the disk" : "of \(displayName(focus))"
         var share = "\(percentText) \(scope)"
         if tree.isPartial, !p.isSmaller {
-            if p.node == tree.hidden { share = "not scanned yet" }
-            else if tree.isStillGrowing(p.node) { share = "so far" }
+            if p.node == tree.hidden { share = "not scanned yet" } else if tree.isStillGrowing(p.node) { share = "so far" }
         }
         var note = ""
         var tellsUse = false
@@ -1387,8 +1461,9 @@ final class AppModel {
             }
         } else if view == .changes, let changes {
             let delta = changes.value(of: p.node)
-            if delta > 0 { note = "+\(formatBytes(UInt64(delta))) \(changes.shortCaption)" }
-            else if delta < 0 {
+            if delta > 0 {
+                note = "+\(formatBytes(UInt64(delta))) \(changes.shortCaption)"
+            } else if delta < 0 {
                 note = "−\(formatBytes(UInt64(-delta))) \(changes.shortCaption)"
                 shrank = true
             }
@@ -1397,14 +1472,16 @@ final class AppModel {
             // macOS's own parts, which have nothing to add.
             share = ""
             if let path = tree.path(p.node), LastUse.isInTrash(PathMath.visible(path), home: NSHomeDirectory()) {
-                return HoverInfo(pieceIndex: index, node: p.node, title: displayName(piece: p), bytes: p.size,
-                                 share: "", note: LastUse.trashLine, links: nil, inTrash: true)
+                return HoverInfo(
+                    pieceIndex: index, node: p.node, title: displayName(piece: p), bytes: p.size,
+                    share: "", note: LastUse.trashLine, inTrash: true)
             }
             let leftAlone = n.has(NodeFlag.synthetic) || (n.rule != 0 && rules.rule(n.rule).tier == .handsOff)
             tellsUse = !leftAlone
         }
-        return HoverInfo(pieceIndex: index, node: p.node, title: displayName(piece: p), bytes: p.size,
-                         share: share, note: note, links: nil, tellsUse: tellsUse, shrank: shrank)
+        return HoverInfo(
+            pieceIndex: index, node: p.node, title: displayName(piece: p), bytes: p.size,
+            share: share, note: note, tellsUse: tellsUse, shrank: shrank)
     }
 
     /// Lights up one thing from the panel or a label, as if the pointer were on it.
@@ -1464,7 +1541,7 @@ final class AppModel {
 
     /// A name around the ring opens what it names, in every view. Selecting is for the ring itself, so that reading a name
     /// can't select anything for the Trash.
-    func openLabel(piece index: Int, count: Int = 1) {
+    private func openLabel(piece index: Int, count: Int = 1) {
         guard let tree, index < engine.layout.pieces.count else { return }
         let p = engine.layout.pieces[index]
         let meaning = noteClick(on: p, in: tree, count: count)
@@ -1493,8 +1570,11 @@ final class AppModel {
         if let pair, pair.tree === tree, focus == 0 {
             // A half is that side alone: the Mac's map, or the drive's backup folder. The middle goes back to both.
             if p.node == pair.macSide || p.node == pair.driveSide {
-                if tree.totals[Int(p.node)] == 0 { showTip(p.node == pair.driveSide ? "Nothing here on \(pair.driveName)" : "Nothing here on this Mac") }
-                else { zoom(into: p.tail, from: p) }
+                if tree.totals[Int(p.node)] == 0 {
+                    showTip(p.node == pair.driveSide ? "Nothing here on \(pair.driveName)" : "Nothing here on this Mac")
+                } else {
+                    zoom(into: p.tail, from: p)
+                }
                 return
             }
             // A folder opens as both disks again: that folder on the Mac beside its backup. A folder only on the drive opens on
@@ -1534,9 +1614,7 @@ final class AppModel {
         }
         // At the top of both disks, up is the folder the Mac's half is in, as both disks again.
         if let pair, pair.tree === tree, focus == 0, let real = bareTree, let here = focusBeforePair, here != 0 {
-            var up = real.nodes[Int(here)].parent
-            while up != 0, RingLayout.chainTail(tree: real, up) == RingLayout.chainTail(tree: real, here) { up = real.nodes[Int(up)].parent }
-            showBothDisks(of: up)
+            showBothDisks(of: Self.folder(above: here, in: real))
             return
         }
         guard let tree, focus != 0 else { return }
@@ -1544,12 +1622,14 @@ final class AppModel {
             go(to: back, keepingTrail: true)
             return
         }
-        var up = tree.nodes[Int(focus)].parent
-        // Skip folders that would draw exactly the same picture.
-        while up != 0, RingLayout.chainTail(tree: tree, up) == RingLayout.chainTail(tree: tree, focus) {
-            up = tree.nodes[Int(up)].parent
-        }
-        go(to: up, keepingTrail: true)
+        go(to: Self.folder(above: focus, in: tree), keepingTrail: true)
+    }
+
+    /// The folder this one is in, skipping folders that would draw exactly the same picture.
+    private static func folder(above node: UInt32, in tree: DiskTree) -> UInt32 {
+        var up = tree.nodes[Int(node)].parent
+        while up != 0, RingLayout.chainTail(tree: tree, up) == RingLayout.chainTail(tree: tree, node) { up = tree.nodes[Int(up)].parent }
+        return up
     }
 
     /// The folder this one is in, as the Finder's Enclosing Folder goes, however you got here. Esc instead goes back out the
@@ -1560,11 +1640,7 @@ final class AppModel {
             return
         }
         guard let tree, focus != 0 else { return }
-        var up = tree.nodes[Int(focus)].parent
-        // Skip folders that would draw exactly the same picture.
-        while up != 0, RingLayout.chainTail(tree: tree, up) == RingLayout.chainTail(tree: tree, focus) {
-            up = tree.nodes[Int(up)].parent
-        }
+        let up = Self.folder(above: focus, in: tree)
         if trail.last == up { trail.removeLast() }
         go(to: up, keepingTrail: true)
     }
@@ -1606,10 +1682,10 @@ final class AppModel {
     }
 
     /// How far the ring steps back in each view. Backed Up, Copies' place in Backup, is as bright as the map.
-    var calmForView: Float { view == .map || (view == .copies && mode == .backup) ? 1 : (view == .copies ? 0.55 : 0) }
+    private var calmForView: Float { view == .map || (view == .copies && mode == .backup) ? 1 : (view == .copies ? 0.55 : 0) }
 
     /// How much the ring glows: less in Changes, where colour says what changed.
-    var glowForView: Float { view == .changes ? 0.35 : 1 }
+    private var glowForView: Float { view == .changes ? 0.35 : 1 }
 
     /// What you're doing. Each mode keeps its own selection.
     func setMode(_ new: Lens) {
@@ -1637,7 +1713,7 @@ final class AppModel {
     /// threads, and a scan may be refreshing from it. A change is made to a copy, which `showDraft` then puts in its place.
     /// The copy has the same folder numbers, so everything that holds one carries on. Nil while a scan is still filling
     /// the map in, when nothing may be taken out of it.
-    func draftTree() -> DiskTree? {
+    private func draftTree() -> DiskTree? {
         guard let tree, !tree.isPartial else { return nil }
         if let draft, draft.scanID == tree.scanID { return draft }
         mapEdits += 1
@@ -1707,19 +1783,11 @@ final class AppModel {
     }
 
     func trashNode(in tree: DiskTree) -> UInt32? {
-        func child(of parent: UInt32, named name: String) -> UInt32? {
-            var c = tree.nodes[Int(parent)].firstChild
-            while c != 0 {
-                // The name on disk: the one shown may be made up.
-                if tree.rawName(c) == name { return c }
-                c = tree.nodes[Int(c)].nextSibling
-            }
-            return nil
-        }
-        if tree.home != 0 { return child(of: tree.home, named: ".Trash") }
+        // By the name on disk: the one shown may be made up.
+        if tree.home != 0 { return tree.child(of: tree.home, named: ".Trash") }
         // On any other disk it's a folder at the top of the disk.
         for top in tree.children(0) where tree.nodes[Int(top)].has(NodeFlag.anchor) {
-            if let trashes = child(of: top, named: ".Trashes") { return trashes }
+            if let trashes = tree.child(of: top, named: ".Trashes") { return trashes }
         }
         return nil
     }
@@ -1733,20 +1801,23 @@ final class AppModel {
         NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
     }
 
-    func openSoftwareUpdate() {
-        if let url = URL(string: "x-apple.systempreferences:com.apple.Software-Update-Settings.extension") { NSWorkspace.shared.open(url) }
-    }
+    func openSoftwareUpdate() { openSystemSettings("com.apple.Software-Update-Settings.extension") }
 
-    func openFullDiskAccess() {
-        if let url = URL(string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AllFiles") { NSWorkspace.shared.open(url) }
+    func openFullDiskAccess() { openSystemSettings("com.apple.settings.PrivacySecurity.extension?Privacy_AllFiles") }
+
+    func openAutomationSettings() { openSystemSettings("com.apple.preference.security?Privacy_Automation") }
+
+    private func openSystemSettings(_ pane: String) {
+        if let url = URL(string: "x-apple.systempreferences:" + pane) { NSWorkspace.shared.open(url) }
     }
 
     static let accessGuideDeclinedKey = "accessGuideDeclined"
 
     /// Without Full Disk Access, the guide to it opens at launch, unless you said not now to it in this version.
-    static var guideAtLaunch: Bool {
-        showsGuide(declined: UserDefaults.standard.string(forKey: accessGuideDeclinedKey), version: Updater.currentNumber,
-                   scripted: ScriptRunner.path != nil, locked: actsLocked)
+    private static var guideAtLaunch: Bool {
+        showsGuide(
+            declined: UserDefaults.standard.string(forKey: accessGuideDeclinedKey), version: Updater.currentNumber,
+            scripted: ScriptRunner.path != nil, locked: actsLocked)
     }
 
     /// A scripted check only shows it when it acts as if access were off.
@@ -1755,24 +1826,133 @@ final class AppModel {
     }
 
     /// A scripted check with --locked acts as if Full Disk Access were off, to see what that looks like.
-    static let actsLocked = ScriptRunner.path != nil && CommandLine.arguments.contains("--locked")
+    private static let actsLocked = ScriptRunner.path != nil && CommandLine.arguments.contains("--locked")
 
     /// Whether every folder may be read. Without Full Disk Access, the ones macOS guards are left alone, so no prompt ever
     /// comes up: Full Disk Access is the one thing Headroom asks for.
-    static func mayReadEverything() -> Bool { !actsLocked && DiskScan.hasFullDiskAccess() }
+    private static func mayReadEverything() -> Bool { !actsLocked && DiskScan.hasFullDiskAccess() }
 
     // MARK: Search
 
     func runSearch() {
         guard let tree else { return }
         let query = searchText.trimmingCharacters(in: .whitespaces).lowercased()
+        smallSearch?.set()
         guard query.count >= 2 else {
             searchResults = []
+            smallFound = nil
             chart.clearHighlight()
             return
         }
-        searchResults = Search.run(query, in: tree)
+        // Only what's in the folder in view, as the ring shows only that.
+        searchResults = Search.run(query, in: tree, within: Int(focus) < tree.count ? focus : 0)
         highlight(nodes: Array(searchResults.prefix(400)))
+        searchSmallFiles(query, in: tree)
+    }
+
+    /// The folder a search is narrowed to, by name: the one in view. On both disks, at their top, the folder they're of.
+    /// Nil for the whole disk.
+    var searchFolderName: String? {
+        if let pair, pair.tree === tree, focus == 0 || focus == pair.macSide {
+            return pair.realFolder == 0 ? nil : bareTree.map { $0.name(pair.realFolder) } ?? (pair.macPath as NSString).lastPathComponent
+        }
+        return focus == 0 ? nil : displayName(focus)
+    }
+
+    // MARK: Small files
+
+    /// Off the main thread, on every core. A search still going when you type again is dropped; until the next one is
+    /// done, the last one's finds stay listed.
+    private func searchSmallFiles(_ query: String, in tree: DiskTree) {
+        guard searchesSmallFiles else {
+            smallFound = nil
+            return
+        }
+        guard let (map, folder) = smallFilesPlace(on: tree) else {
+            smallFilesGap = .onDrive
+            smallFound = nil
+            return
+        }
+        guard let catalogue = catalogue(for: map) else {
+            smallFilesGap = .notRead
+            smallFound = nil
+            return
+        }
+        smallFilesGap = nil
+        let stop = StopFlag()
+        smallSearch = stop
+        Task.detached(priority: .userInitiated) {
+            let began = DispatchTime.now()
+            guard let found = catalogue.search(query, in: map, within: folder, stop: stop) else { return }
+            let milliseconds = Double(DispatchTime.now().uptimeNanoseconds - began.uptimeNanoseconds) / 1e6
+            await MainActor.run {
+                guard !stop.isSet else { return }
+                self.smallSearchMilliseconds = milliseconds
+                self.smallFound = self.placedOnScreen(found)
+            }
+        }
+    }
+
+    /// The map the small files were catalogued with, under the picture on screen, and the folder in view on it. Moved files
+    /// drawn back in are added after the map's own nodes, so the numbers are the same. Both disks number the Mac's half anew,
+    /// and the drive's half has no catalogue: nil there.
+    private func smallFilesPlace(on tree: DiskTree) -> (DiskTree, UInt32)? {
+        let folder = Int(focus) < tree.count ? focus : 0
+        guard let map = bareTree, catalogue(for: tree) == nil else { return (tree, folder) }
+        if let pair, pair.tree === tree {
+            if folder != 0 && pair.isOnDrive(folder) { return nil }
+            return (map, folder == 0 || folder == pair.macSide ? pair.realFolder : pair.realOf[folder] ?? pair.realFolder)
+        }
+        return tree.ghostBase == UInt32(map.count) && Int(folder) < map.count ? (map, folder) : (tree, folder)
+    }
+
+    /// With both disks drawn, each file's folder on the Mac's half, by its path, or the nearest folder drawn.
+    private func placedOnScreen(_ found: SmallFileResults) -> SmallFileResults {
+        guard let pair, pair.tree === tree else { return found }
+        var placed = found
+        for i in placed.top.indices {
+            var path = placed.top[i].folderPath
+            var node: UInt32?
+            while node == nil, path.count > 1 {
+                node = pair.macNode(for: path)
+                path = (path as NSString).deletingLastPathComponent
+            }
+            placed.top[i].onScreen = node ?? pair.macSide
+        }
+        return placed
+    }
+
+    /// Edit › Search Small Files. Turned on, the disk is read again from the start, quietly, because the names are
+    /// written down as it's read. Turned off, the catalogues go.
+    func setSearchesSmallFiles(_ on: Bool) {
+        guard on != searchesSmallFiles else { return }
+        searchesSmallFiles = on
+        smallSearch?.set()
+        if on {
+            if isScanning { restartScan() } else { scan(readAll: true) }
+        } else {
+            catalogues = []
+            smallFound = nil
+            SmallFiles.removeAll()
+        }
+        if isSearching { runSearch() }
+    }
+
+    func catalogue(for tree: DiskTree) -> SmallFileCatalogue? { catalogues.first { $0.matches(tree) } }
+
+    private func loadCatalogue(for tree: DiskTree) {
+        guard searchesSmallFiles, let catalogue = SmallFileCatalogue.load(volume: tree.volumeName, for: tree) else { return }
+        keep(catalogue)
+    }
+
+    /// A new map's catalogue, kept with the one for the map on screen until the new map replaces it.
+    private func keep(_ catalogue: SmallFileCatalogue) {
+        // Turned off while the scan was writing it.
+        guard searchesSmallFiles else {
+            SmallFiles.removeAll()
+            return
+        }
+        catalogues = catalogues.filter { old in tree.map(old.matches) ?? false } + [catalogue]
     }
 }
 
@@ -1860,6 +2040,8 @@ extension AppModel {
         treeVersion += 1
         if let tree { resolvePlanSynchronously(in: tree) }
         relayout(.recolor)
+        // What a search found is numbered for the picture it was made in.
+        if isSearching { runSearch() }
     }
 
     /// The folder you're in and the same folder on Backup's drive, as two halves. The drive is read in the background; the
@@ -1882,16 +2064,21 @@ extension AppModel {
             await withTaskCancellationHandler {
                 let built = await Task.detached(priority: .userInitiated) {
                     let began = CACurrentMediaTime()
-                    let made = PairPicture.build(real: real, macFolder: place.folder, macPath: place.macPath, drivePath: place.drivePath, driveName: name,
-                                                 notes: notes, ghosts: ghosts, online: online, listingID: listing, mount: mount, stop: stop)
+                    let made = PairPicture.build(
+                        real: real, macFolder: place.folder, macPath: place.macPath, drivePath: place.drivePath, driveName: name,
+                        notes: notes, ghosts: ghosts, online: online, listingID: listing, mount: mount, stop: stop)
                     if ScriptRunner.path != nil { print(String(format: "both disks built in %.0f ms", (CACurrentMediaTime() - began) * 1000)) }
                     return made
                 }.value
-                guard let self, let built, !Task.isCancelled, self.workTree === real, self.mode == .backup, self.view == .map || self.view == .copies, self.showDriveSide, !self.isCleaning else { return }
+                guard let self, let built, !Task.isCancelled, self.workTree === real, self.mode == .backup, self.view == .map || self.view == .copies,
+                    self.showDriveSide, !self.isCleaning
+                else { return }
                 self.installPair(ReadyPair(real: real, place: place, online: online, ghosts: ghosts, notes: notes.map(\.notePath), picture: built))
                 // For a check: how long both disks took to be on screen after they were asked for.
                 if ScriptRunner.path != nil { print(String(format: "both disks on screen after %.0f ms", (CACurrentMediaTime() - asked) * 1000)) }
-            } onCancel: { stop.value = true }
+            } onCancel: {
+                stop.value = true
+            }
         }
     }
 
@@ -1929,13 +2116,16 @@ extension AppModel {
         treeVersion += 1
         resolvePlanSynchronously(in: built.tree)
         relayout(.recolor)
+        // Both disks of the folder you clicked: a search lists what's in it.
+        if isSearching { runSearch() }
     }
 
     /// Both disks made a moment after the map or the folder you're in stops changing in Free Up, in the background, so
     /// they're ready when Backup is chosen.
-    func prepareBothDisks() {
+    private func prepareBothDisks() {
         guard mode == .freeUp, view == .map || view == .copies, showDriveSide, !isCleaning, let real = workTree, !real.isPartial,
-              let destination = backup.destination, connected(destination.drive) == nil, !memoryWasShort else { return }
+            let destination = backup.destination, connected(destination.drive) == nil, !memoryWasShort
+        else { return }
         if memoryWatch == nil {
             let watch = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
             watch.setEventHandler { [weak self] in MainActor.assumeIsolated { self?.letGoOfReadyPair() } }
@@ -1954,12 +2144,15 @@ extension AppModel {
                 try? await Task.sleep(for: .seconds(1))
                 guard !Task.isCancelled else { return }
                 let built = await Task.detached(priority: .utility) {
-                    PairPicture.build(real: real, macFolder: place.folder, macPath: place.macPath, drivePath: place.drivePath, driveName: name,
-                                      notes: notes, ghosts: ghosts, online: false, listingID: listing, mount: mount, stop: stop)
+                    PairPicture.build(
+                        real: real, macFolder: place.folder, macPath: place.macPath, drivePath: place.drivePath, driveName: name,
+                        notes: notes, ghosts: ghosts, online: false, listingID: listing, mount: mount, stop: stop)
                 }.value
                 guard let self, let built, !Task.isCancelled, self.workTree === real else { return }
                 self.readyPair = ReadyPair(real: real, place: place, online: false, ghosts: ghosts, notes: notes.map(\.notePath), picture: built)
-            } onCancel: { stop.value = true }
+            } onCancel: {
+                stop.value = true
+            }
         }
     }
 
@@ -1993,5 +2186,6 @@ extension AppModel {
         nameCache = [:]
         treeVersion += 1
         if let tree { resolvePlanSynchronously(in: tree) }
+        if isSearching { runSearch() }
     }
 }

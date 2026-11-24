@@ -12,7 +12,7 @@ struct CardRing<Centre: View>: View {
 
     var body: some View {
         ZStack {
-            Circle().stroke(.white.opacity(0.08), lineWidth: 6)
+            Circle().stroke(Kit.Fill.track, lineWidth: 6)
             if spins {
                 Circle()
                     .trim(from: 0, to: 0.28)
@@ -59,7 +59,9 @@ struct CardRingText: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 13, weight: .semibold, design: .rounded).monospacedDigit())
+            .font(Kit.Font.headline)
+            .fontDesign(.rounded)
+            .monospacedDigit()
             .minimumScaleFactor(0.6)
             .lineLimit(1)
     }
@@ -72,7 +74,7 @@ struct CardRingMark: View {
 
     var body: some View {
         Image(systemName: symbol)
-            .font(.system(size: 17, weight: .semibold))
+            .font(Kit.Font.title)
             .foregroundStyle(colour)
     }
 }
@@ -87,12 +89,12 @@ struct RingCard<Ring: View, Lines: View, Content: View>: View {
     @ViewBuilder let content: () -> Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 14) {
+        VStack(alignment: .leading, spacing: Kit.Space.large) {
+            HStack(spacing: Kit.Space.section) {
                 ring()
                 VStack(alignment: .leading, spacing: 3) {
                     Text(title)
-                        .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                        .font(Kit.Font.headline.monospacedDigit())
                         .lineLimit(2)
                         .contentTransition(.numericText())
                     lines()
@@ -102,8 +104,7 @@ struct RingCard<Ring: View, Lines: View, Content: View>: View {
             content()
         }
         .padding(Kit.rowInset)
-        .background(RoundedRectangle(cornerRadius: Kit.cardRadius, style: .continuous).fill(Kit.cardFill))
-        .overlay(RoundedRectangle(cornerRadius: Kit.cardRadius, style: .continuous).strokeBorder(Kit.cardStroke))
+        .card()
     }
 }
 
@@ -116,12 +117,12 @@ extension RingCard where Content == EmptyView {
 /// A line under a card's title, in the card's own grey or a colour. One line, cut in the middle, unless it's let wrap.
 struct CardLine: View {
     let text: String
-    var colour: Color = Kit.secondary
+    var colour: Color = Kit.Text.tertiary
     var wraps = false
 
     var body: some View {
         Text(text)
-            .font(.system(size: 11).monospacedDigit())
+            .font(Kit.Font.detail.monospacedDigit())
             .foregroundStyle(colour)
             .lineLimit(wraps ? 3 : 1)
             .truncationMode(.middle)
@@ -132,18 +133,18 @@ struct CardLine: View {
 /// A card's line with something to do about it at the end: a warning and Deselect, what's in the Trash and Open Trash.
 struct CardNote<Action: View>: View {
     let text: String
-    var colour: Color = Kit.secondary
+    var colour: Color = Kit.Text.tertiary
     var symbol: String? = nil
     @ViewBuilder let action: () -> Action
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
+        HStack(alignment: .firstTextBaseline, spacing: Kit.Space.medium) {
             if let symbol {
                 Image(systemName: symbol)
-                    .font(.system(size: 10))
+                    .font(Kit.Font.caption)
             }
             Text(text)
-                .font(.system(size: 11).monospacedDigit())
+                .font(Kit.Font.detail.monospacedDigit())
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 4)
@@ -166,22 +167,22 @@ struct RoomBar: View {
     /// `adds` is what leaves the disk, not what comes onto it.
     var frees = false
     let trailing: String
-    var trailingColour: Color = Kit.secondary
+    var trailingColour: Color = Kit.Text.tertiary
     var accent: Color = Kit.blue
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 5) {
                 Image(systemName: icon)
-                    .font(.system(size: 10))
-                    .foregroundStyle(.white.opacity(0.5))
+                    .font(Kit.Font.caption)
+                    .foregroundStyle(Kit.Text.tertiary)
                 Text(place)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(Kit.Font.detail.weight(.medium))
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Spacer(minLength: 6)
+                Spacer(minLength: Kit.Space.medium)
                 Text(trailing)
-                    .font(.system(size: 11).monospacedDigit())
+                    .font(Kit.Font.detail.monospacedDigit())
                     .foregroundStyle(trailingColour)
             }
             if capacity > 0 {
@@ -192,8 +193,8 @@ struct RoomBar: View {
                     let used = frees ? filled - share : filled
                     let done = landed.map { Double(min($0, adds, free)) / Double(capacity) }
                     ZStack(alignment: .leading) {
-                        Capsule().fill(.white.opacity(0.08))
-                        Capsule().fill(.white.opacity(0.28)).frame(width: max(width * (used + share), 4))
+                        Capsule().fill(Kit.Fill.track)
+                        Capsule().fill(Kit.Fill.used).frame(width: max(width * (used + share), 4))
                         // Nothing added, or nothing freed, draws nothing: a dot would say there was.
                         if adds > 0 {
                             Capsule().fill(accent.opacity(done == nil ? 1 : 0.35)).frame(width: max(width * share, 3)).offset(x: width * used)
@@ -215,11 +216,11 @@ struct AgentChip: View {
     let name: String
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: Kit.Space.small) {
             Image(systemName: "sparkles")
-                .font(.system(size: 9, weight: .semibold))
+                .font(Kit.Font.caption.weight(.semibold))
             Text(name)
-                .font(.system(size: 10.5, weight: .medium))
+                .font(Kit.Font.caption.weight(.medium))
                 .lineLimit(1)
         }
         .padding(.horizontal, 7)
@@ -227,6 +228,16 @@ struct AgentChip: View {
         .background(Capsule().fill(Kit.blue.opacity(0.16)))
         .foregroundStyle(Kit.blue)
         .padding(.top, 1)
+    }
+}
+
+extension AgentChip {
+    /// Who picked a selection, from each item's agent: the first agent, and how many it picked unless it picked them all.
+    /// Nil when no agent picked any.
+    init?(agents: [String], of total: Int) {
+        guard let first = agents.first else { return nil }
+        let count = agents.filter { $0 == first }.count
+        self.init(name: count == total ? first : "\(count) by \(first)")
     }
 }
 
@@ -239,7 +250,7 @@ struct ThinBar: View {
     var body: some View {
         GeometryReader { g in
             ZStack(alignment: .leading) {
-                Capsule().fill(.white.opacity(0.08))
+                Capsule().fill(Kit.Fill.track)
                 Capsule().fill(tint.opacity(0.9))
                     .frame(width: max(g.size.width * min(max(fraction, 0), 1), height))
                     .animation(.linear(duration: 0.15), value: fraction)
@@ -252,12 +263,12 @@ struct ThinBar: View {
 /// Something under way with no end in sight yet: a short arc going round, in the ring's own look. In place of a stock spinner.
 struct Spinner: View {
     var size: CGFloat = 11
-    var tint: Color = .white.opacity(0.7)
+    var tint: Color = Kit.Text.secondary
     @State private var turned = false
 
     var body: some View {
         ZStack {
-            Circle().stroke(.white.opacity(0.12), lineWidth: max(size / 6, 1.5))
+            Circle().stroke(Kit.Fill.control, lineWidth: max(size / 6, 1.5))
             Circle()
                 .trim(from: 0, to: 0.3)
                 .stroke(tint, style: StrokeStyle(lineWidth: max(size / 6, 1.5), lineCap: .round))

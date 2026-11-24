@@ -15,10 +15,12 @@ enum Motion {
     }
 
     /// Numbers that roll from one value to the next, or change in place.
-    static func rolling(_ value: Double? = nil) -> ContentTransition {
-        if isReduced { return .opacity }
-        return value.map { .numericText(value: $0) } ?? .numericText()
+    static func rolling() -> ContentTransition {
+        isReduced ? .opacity : .numericText()
     }
+
+    /// Switching to another view or mode, as the toolbar's pickers do it.
+    static var switching: Animation { .spring(response: 0.34, dampingFraction: 0.82) }
 
     /// What `withAnimation` does, except SwiftUI takes the change in at once instead of at the end of this turn of the run
     /// loop. A change still waiting there can meet a new window frame from the same turn (macOS tiling the window, a zoom,

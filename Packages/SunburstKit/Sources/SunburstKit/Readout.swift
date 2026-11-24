@@ -91,8 +91,10 @@ public struct SunburstNumber: View {
     @Environment(\.accessibilityReduceMotion) private var reducesMotion
     @State private var pace = RollPace()
 
-    public init(_ text: String, size: UInt64, diameter: CGFloat, color: Color = .white, widest: String? = nil,
-                about subject: AnyHashable? = nil) {
+    public init(
+        _ text: String, size: UInt64, diameter: CGFloat, color: Color = .white, widest: String? = nil,
+        about subject: AnyHashable? = nil
+    ) {
         self.text = text
         self.size = size
         self.diameter = diameter

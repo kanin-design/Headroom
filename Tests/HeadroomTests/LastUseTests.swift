@@ -1,5 +1,6 @@
-import XCTest
 import SQLite3
+import XCTest
+
 @testable import Headroom
 
 /// The line under the size in the middle of the ring.
@@ -34,7 +35,9 @@ final class LastUseTests: XCTestCase {
         let repo = try scratch()
         try FileManager.default.createDirectory(at: repo.appendingPathComponent(".git/logs"), withIntermediateDirectories: true)
         let commit = Int(daysAgo(21).timeIntervalSince1970), checkout = Int(daysAgo(2).timeIntervalSince1970)
-        let log = "0000 aaaa Someone <a@b.c> \(commit) +0100\tcommit (initial): first\n" + "aaaa aaaa Someone <a@b.c> \(checkout) +0100\tcheckout: moving from main to main\n"
+        let log =
+            "0000 aaaa Someone <a@b.c> \(commit) +0100\tcommit (initial): first\n"
+            + "aaaa aaaa Someone <a@b.c> \(checkout) +0100\tcheckout: moving from main to main\n"
         try log.write(to: repo.appendingPathComponent(".git/logs/HEAD"), atomically: true, encoding: .utf8)
         XCTAssertEqual(LastUse.lastCommit(in: repo.path).map { LastUse.ago($0, now: now) }, "3 weeks ago")
     }

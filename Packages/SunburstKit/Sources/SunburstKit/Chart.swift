@@ -33,7 +33,7 @@ public final class SunburstChart<Tree: SunburstTree> {
     }
     /// The same tree, read without SwiftUI watching: reading `tree` costs about a microsecond, too much for a lookup made once
     /// for each node, such as a name while an agent searches the whole tree.
-    @ObservationIgnored private(set) var quietTree: Tree
+    @ObservationIgnored private var quietTree: Tree
     /// The node in the middle: 0, the root, until something is zoomed into.
     public private(set) var focus: UInt32 = 0
     /// The node under the pointer, or otherwise lit as if it were, if any.
@@ -247,9 +247,11 @@ public final class SunburstChart<Tree: SunburstTree> {
     /// `valueText`, if given, is written for a node in place of its size. `parts` are the chart's parts. The first picture
     /// unfurls at once, unless `appears` is false: then nothing is drawn until the app, having set its hooks, asks
     /// (`change(_:_:)`, `redraw(_:)`).
-    public init(tree: Tree, name: @escaping (UInt32) -> String, sizeText: @escaping (UInt64) -> String = SunburstFormat.bytes,
-                valueText: ((UInt32) -> String)? = nil, parts: SunburstParts = SunburstParts(), engine: SunburstEngine = SunburstEngine(),
-                appears: Bool = true) {
+    public init(
+        tree: Tree, name: @escaping (UInt32) -> String, sizeText: @escaping (UInt64) -> String = SunburstFormat.bytes,
+        valueText: ((UInt32) -> String)? = nil, parts: SunburstParts = SunburstParts(), engine: SunburstEngine = SunburstEngine(),
+        appears: Bool = true
+    ) {
         self.tree = tree
         quietTree = tree
         self.parts = parts
@@ -362,14 +364,16 @@ public final class SunburstChart<Tree: SunburstTree> {
         let order = layout.pieces.indices.sorted { layout.pieces[$0].size > layout.pieces[$1].size }
         let items = order.prefix(max(limit, 0)).map { at -> SunburstSummary.Piece in
             let p = layout.pieces[at]
-            return SunburstSummary.Piece(node: p.node, name: pieceName(p), size: p.size, sizeText: amountText(p),
-                                         share: Double(p.size) / Double(max(whole, 1)), ring: Int(p.ring),
-                                         inside: p.parent >= 0 ? layout.pieces[Int(p.parent)].tail : focus,
-                                         from: Double(p.a0) * 180 / .pi, to: Double(p.a1) * 180 / .pi,
-                                         isGathered: p.isSmaller, isMarked: p.marked > 0)
+            return SunburstSummary.Piece(
+                node: p.node, name: pieceName(p), size: p.size, sizeText: amountText(p),
+                share: Double(p.size) / Double(max(whole, 1)), ring: Int(p.ring),
+                inside: p.parent >= 0 ? layout.pieces[Int(p.parent)].tail : focus,
+                from: Double(p.a0) * 180 / .pi, to: Double(p.a1) * 180 / .pi,
+                isGathered: p.isSmaller, isMarked: p.marked > 0)
         }
-        return SunburstSummary(focus: focus, name: name(focus), size: whole, sizeText: amountText(focus), rings: layout.rings,
-                               hovered: hovered, pieces: Array(items), more: max(layout.pieces.count - items.count, 0))
+        return SunburstSummary(
+            focus: focus, name: name(focus), size: whole, sizeText: amountText(focus), rings: layout.rings,
+            hovered: hovered, pieces: items, more: max(layout.pieces.count - items.count, 0))
     }
 
     // MARK: Pictures
@@ -408,12 +412,7 @@ public final class SunburstChart<Tree: SunburstTree> {
         hovered = nil
         pointedEmphasis = nil
         labelLight = LabelLight()
-        let flies: Bool
-        switch transition {
-        case .appear, .zoomIn, .zoomOut: flies = true
-        case .recolor, .live, .settle, .instant: flies = false
-        }
-        if flies {
+        if transition.travels {
             // Names and what's under the pointer wait until the pieces are nearly where they're going. Until then nothing is.
             placeLabels(after: 0.34)
             tellPointed(nil)
@@ -433,12 +432,14 @@ public final class SunburstChart<Tree: SunburstTree> {
     }
 }
 
-public extension SunburstChart {
+extension SunburstChart {
     /// A chart of an `ItemTree`, each piece named from its item: from the tree on the ring, so a tree shown later with
     /// `show(_:)` names its own pieces.
-    convenience init<Item>(tree: ItemTree<Item>, sizeText: @escaping (UInt64) -> String = SunburstFormat.bytes,
-                           valueText: ((UInt32) -> String)? = nil, parts: SunburstParts = SunburstParts(),
-                           engine: SunburstEngine = SunburstEngine()) where Tree == ItemTree<Item> {
+    public convenience init<Item>(
+        tree: ItemTree<Item>, sizeText: @escaping (UInt64) -> String = SunburstFormat.bytes,
+        valueText: ((UInt32) -> String)? = nil, parts: SunburstParts = SunburstParts(),
+        engine: SunburstEngine = SunburstEngine()
+    ) where Tree == ItemTree<Item> {
         self.init(tree: tree, name: { tree.name(of: $0) }, sizeText: sizeText, valueText: valueText, parts: parts, engine: engine)
         name = { [unowned self] node in self.quietTree.name(of: node) }
     }

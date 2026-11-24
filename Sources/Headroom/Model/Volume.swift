@@ -24,7 +24,7 @@ struct VolumeFacts {
         return used > known ? used - known : 0
     }
 
-    static func spaceUsed(_ path: String) -> UInt64 {
+    private static func spaceUsed(_ path: String) -> UInt64 {
         var list = attrlist()
         list.bitmapcount = u_short(ATTR_BIT_MAP_COUNT)
         list.volattr = attrgroup_t(ATTR_VOL_INFO) | attrgroup_t(ATTR_VOL_SPACEUSED)
@@ -79,17 +79,17 @@ struct VolumeFacts {
 
 /// How hard a scan pushes.
 enum ScanMode {
-    case firstLook      // nothing on screen yet: big things first, then the rest in the cheapest order, all at full power
-    case quiet          // the map is already there: low priority from the start
-    case full           // you asked for it: full power to the end
+    case firstLook  // nothing on screen yet: big things first, then the rest in the cheapest order, all at full power
+    case quiet  // the map is already there: low priority from the start
+    case full  // you asked for it: full power to the end
 }
 
 /// Starts a scan of one disk and builds the top of the tree so that the whole ring adds up to the disk.
 final class DiskScan: @unchecked Sendable {
-    let tree = DiskTree()
+    let tree: DiskTree
     let facts: VolumeFacts
     let rules: RuleBook
-    private(set) var scanner: Scanner!
+    let scanner: Scanner
     private var systemGroup: UInt32 = 0
     /// Where the disk's change journal was when this began, for the refresh after it to start from.
     var place: ChangeJournal.Place?
@@ -106,12 +106,14 @@ final class DiskScan: @unchecked Sendable {
     var watchRoots: [String] { ChangeJournal.roots(of: tree) }
 
     init(facts: VolumeFacts, rules: RuleBook, fullAccess: Bool) {
-        self.facts = facts
-        self.rules = rules
+        let tree = DiskTree()
         tree.volumeName = facts.name
         tree.capacityBytes = facts.capacity
         tree.freeBytes = facts.free
         tree.rootPath = facts.mountPath
+        self.tree = tree
+        self.facts = facts
+        self.rules = rules
         scanner = Scanner(tree: tree, rules: rules, touchGuarded: fullAccess)
         if facts.isBoot { planBootDisk() } else { planExternalDisk() }
     }
@@ -124,17 +126,22 @@ final class DiskScan: @unchecked Sendable {
         let homeInData = dataRoot + home
 
         let (homeState, homeRule) = walk(home)
-        let you = scanner.addNode(parent: 0, display: "Your files", flags: f.anchor | f.directory, rule: homeRule, path: homeInData, ruleState: homeState)
+        let you = scanner.addNode(
+            parent: 0, display: "Your files", flags: f.anchor | f.directory, rule: homeRule, path: homeInData, ruleState: homeState)
         scanner.setHome(you)
         tree.home = you
 
         let (appsState, appsRule) = walk("/Applications")
-        _ = scanner.addNode(parent: 0, display: "Apps", flags: f.anchor | f.directory, rule: appsRule, kind: .app, path: dataRoot + "/Applications", ruleState: appsState)
+        _ = scanner.addNode(
+            parent: 0, display: "Apps", flags: f.anchor | f.directory, rule: appsRule, kind: .app, path: dataRoot + "/Applications",
+            ruleState: appsState)
 
         let system = scanner.addNode(parent: 0, display: "System", flags: f.synthetic | f.directory, kind: .system)
         systemGroup = system
         _ = scanner.addNode(parent: system, display: "macOS", flags: f.synthetic, bytes: facts.system, rule: rules.macOSRule, kind: .system)
-        _ = scanner.addNode(parent: system, display: "Startup and updates", flags: f.synthetic, bytes: facts.preboot + facts.update, rule: rules.updatesRule, kind: .system)
+        _ = scanner.addNode(
+            parent: system, display: "Startup and updates", flags: f.synthetic, bytes: facts.preboot + facts.update, rule: rules.updatesRule,
+            kind: .system)
         _ = scanner.addNode(parent: system, display: "Memory swap", flags: f.synthetic, bytes: facts.vm, rule: rules.swapRule, kind: .system)
         _ = scanner.addNode(parent: system, display: "Recovery", flags: f.synthetic, bytes: facts.recovery, rule: rules.recoveryRule, kind: .system)
 
@@ -149,10 +156,12 @@ final class DiskScan: @unchecked Sendable {
                 // Only the part of /System that lives on this volume.
                 let inner = path + "/Library"
                 let (state, rule) = walk("/System/Library")
-                _ = scanner.addNode(parent: system, display: "/System", flags: f.anchor | f.directory, rule: rule, kind: .system, path: inner, ruleState: state)
+                _ = scanner.addNode(
+                    parent: system, display: "/System", flags: f.anchor | f.directory, rule: rule, kind: .system, path: inner, ruleState: state)
             } else {
                 let (state, rule) = walk("/" + name)
-                _ = scanner.addNode(parent: system, display: "/" + name, flags: f.anchor | f.directory, rule: rule, kind: .system, path: path, ruleState: state)
+                _ = scanner.addNode(
+                    parent: system, display: "/" + name, flags: f.anchor | f.directory, rule: rule, kind: .system, path: path, ruleState: state)
             }
         }
         let otherUsers = ((try? FileManager.default.contentsOfDirectory(atPath: dataRoot + "/Users")) ?? [])
@@ -191,6 +200,8 @@ final class DiskScan: @unchecked Sendable {
     private func stepNamed(_ state: UInt8, _ name: String) -> (UInt8, UInt16) {
         guard state != 0 else { return (0, 0) }
         let bytes = Array(name.utf8)
+        // An array's buffer has an address even when it's empty.
+        // swift-format-ignore: NeverForceUnwrap
         return bytes.withUnsafeBufferPointer { rules.step(state: state, name: $0.baseAddress!, length: $0.count) }
     }
 
@@ -236,11 +247,16 @@ final class DiskScan: @unchecked Sendable {
         var changed = 0, lastDay = 0, unread = 0, linked = Set<UInt32>()
         for path in changes.folders { if finder.deepest(prefix + path) != nil { changed += 1 } }
         for i in 0..<n where nodes[i].flags & NodeFlag.directory != 0 {
-            if nodes[i].flags & (NodeFlag.denied | NodeFlag.unread) != 0 { unread += 1 } else if day[i] != 0 && nodes[i].modTime >= dayAgo { lastDay += 1 }
+            if nodes[i].flags & (NodeFlag.denied | NodeFlag.unread) != 0 {
+                unread += 1
+            } else if day[i] != 0 && nodes[i].modTime >= dayAgo {
+                lastDay += 1
+            }
         }
         for r in base.links { linked.insert(r.dir) }
         for r in base.singleLinks { linked.insert(r.dir) }
-        whyRead = "\(changed) changed, \(linked.count) with linked files, \(lastDay) with something from the last day, \(unread) that couldn't be read"
+        whyRead =
+            "\(changed) changed, \(linked.count) with linked files, \(lastDay) with something from the last day, \(unread) that couldn't be read"
 
         let was = Dictionary(anchors.map { ($0.path, $0.id) }, uniquingKeysWith: { first, _ in first })
         for anchor in tree.anchors { if let old = was[anchor.path] { scanner.seed(anchor.id, was: old) } }
@@ -268,8 +284,10 @@ final class DiskScan: @unchecked Sendable {
             if let hit = known[path] { return hit }
             let bytes = Array(path.utf8)
             var best: (length: Int, id: UInt32)?
-            for anchor in anchors where bytes.count >= anchor.path.count && anchor.path.count > (best?.length ?? -1)
-                && bytes.starts(with: anchor.path) && (bytes.count == anchor.path.count || bytes[anchor.path.count] == 0x2F) {
+            for anchor in anchors
+            where bytes.count >= anchor.path.count && anchor.path.count > (best?.length ?? -1)
+                && bytes.starts(with: anchor.path) && (bytes.count == anchor.path.count || bytes[anchor.path.count] == 0x2F)
+            {
                 best = (anchor.path.count, anchor.id)
             }
             guard let best else { return nil }
@@ -290,6 +308,8 @@ final class DiskScan: @unchecked Sendable {
         private func child(of folder: UInt32, _ bytes: [UInt8], _ start: Int, _ length: Int) -> UInt32? {
             let nodes = tree.nodes, names = tree.names
             return bytes.withUnsafeBufferPointer { b -> UInt32? in
+                // Not empty: the caller passes a name of at least one byte.
+                // swift-format-ignore: NeverForceUnwrap
                 let name = b.baseAddress! + start
                 func matches(_ c: UInt32) -> Bool {
                     let n = nodes[Int(c)]
@@ -424,7 +444,7 @@ final class DiskScan: @unchecked Sendable {
 
     /// What the volume reports using, minus what the scan found, is the Hidden piece. The ring then equals the disk. It adds
     /// the totals up, and leaves them right for the new Hidden piece, so nothing has to add them up again.
-    func reconcile(_ tree: DiskTree) {
+    private func reconcile(_ tree: DiskTree) {
         tree.sumTotals()
         let nodes = tree.nodes
         let hidden = Int(tree.hidden), before = tree.totals[hidden]

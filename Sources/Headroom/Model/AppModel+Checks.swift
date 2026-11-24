@@ -1,5 +1,4 @@
 import AppKit
-import SwiftUI
 
 /// Looking at everything planned as it is on the disk right now, before anything is allowed to go.
 extension AppModel {
@@ -26,11 +25,14 @@ extension AppModel {
                 guard let nodes = byItem[item.id], !nodes.isEmpty, !item.isEmptyTrash, !tree.links.isEmpty else { continue }
                 let found = Accounting.otherCopies(of: nodes, in: tree)
                 if let first = found.folders.first, found.bytes > 1_000_000 {
-                    others[item.id] = OtherCopy(paths: found.folders.compactMap { tree.path($0).map(PathMath.visible) }, bytes: found.bytes, title: tree.friendlyPath(first))
+                    others[item.id] = OtherCopy(
+                        paths: found.folders.compactMap { tree.path($0).map(PathMath.visible) }, bytes: found.bytes, title: tree.friendlyPath(first))
                 }
             }
             let othersNow = others
-            let result = PlanChecks.run(items: items, trueBytes: bytes, otherCopy: othersNow.mapValues { (title: $0.title, bytes: $0.bytes) }, runningApps: apps, fullAccess: fullAccess, fresh: fresh)
+            let result = PlanChecks.run(
+                items: items, trueBytes: bytes, otherCopy: othersNow.mapValues { (title: $0.title, bytes: $0.bytes) }, runningApps: apps,
+                fullAccess: fullAccess, fresh: fresh)
             guard !Task.isCancelled else { return }
             await MainActor.run {
                 // A newer check has taken over, or a clean that has already ended this one.
@@ -65,9 +67,5 @@ extension AppModel {
         cleanFailures[item.id] = nil
         message = nil
         runChecks(fresh: true)
-    }
-
-    func openAutomationSettings() {
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") { NSWorkspace.shared.open(url) }
     }
 }

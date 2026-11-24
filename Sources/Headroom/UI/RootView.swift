@@ -12,7 +12,7 @@ struct RootView: View {
             ZStack(alignment: .topLeading) {
                 MapView(model: model)
                     .frame(width: geometry.size.width, height: geometry.size.height)
-                RingPlace(center: ring.center, radius: ring.radius, size: geometry.size, engine: model.engine, view: { [weak model] in model?.mapView })
+                RingPlace(center: ring.center, radius: ring.radius, size: geometry.size, engine: model.engine, view: { model.mapView })
 
                 LabelsLayer(model: model, ring: ring)
                     .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
@@ -57,7 +57,9 @@ struct RootView: View {
                 .toolbar {
                     // Just before the search field, whether the inspector is open or not, as in Apple's apps.
                     ToolbarItem(placement: .primaryAction) {
-                        Button { model.showPanel(!model.panelOpen) } label: {
+                        Button {
+                            model.showPanel(!model.panelOpen)
+                        } label: {
                             Label(model.panelOpen ? "Hide Inspector" : "Show Inspector", systemImage: "sidebar.trailing")
                         }
                         .help(model.panelOpen ? "Hide Inspector" : "Show Inspector")
@@ -70,7 +72,10 @@ struct RootView: View {
         }
         .preferredColorScheme(.dark)
         .focusEffectDisabled()
-        .alert("\(model.busyToSend?.title ?? "This") is in use", isPresented: Binding(get: { model.busyToSend != nil }, set: { if !$0 { model.busyToSend = nil } }), presenting: model.busyToSend) { busy in
+        .alert(
+            "\(model.busyToSend?.title ?? "This") is in use",
+            isPresented: Binding(get: { model.busyToSend != nil }, set: { if !$0 { model.busyToSend = nil } }), presenting: model.busyToSend
+        ) { busy in
             Button("Move to Trash Anyway", role: .destructive) { model.sendAnyway(busy) }
             Button("Cancel", role: .cancel) {}
         } message: { busy in
@@ -107,12 +112,20 @@ private struct MainToolbar: ToolbarContent {
 
     var body: some ToolbarContent {
         ToolbarItemGroup(placement: .navigation) {
-            Button { model.goBack() } label: { Label("Back", systemImage: "chevron.left") }
-                .disabled(!model.canGoBack)
-                .help("Back")
-            Button { model.goForward() } label: { Label("Forward", systemImage: "chevron.right") }
-                .disabled(!model.canGoForward)
-                .help("Forward")
+            Button {
+                model.goBack()
+            } label: {
+                Label("Back", systemImage: "chevron.left")
+            }
+            .disabled(!model.canGoBack)
+            .help("Back")
+            Button {
+                model.goForward()
+            } label: {
+                Label("Forward", systemImage: "chevron.right")
+            }
+            .disabled(!model.canGoForward)
+            .help("Forward")
         }
         // Two pickers with room between: the view, and the mode. One fixed spacer is the system's gap between groups, about 10
         // points, and the two capsules nearly touch; two make it about 18, and they read as two.
@@ -125,42 +138,39 @@ private struct MainToolbar: ToolbarContent {
             LensPicker(model: model, lenses: Lens.actions, name: "Mode")
         }
         ToolbarItem(placement: .primaryAction) {
-            Button { model.scan(hurry: true) } label: { Label("Scan Again", systemImage: "arrow.clockwise") }
-                .disabled(model.scanIsHurrying)
-                .help("Rescan everything at full speed")
+            Button {
+                model.scan(hurry: true)
+            } label: {
+                Label("Scan Again", systemImage: "arrow.clockwise")
+            }
+            .disabled(model.scanIsHurrying)
+            .help("Rescan everything at full speed")
         }
     }
 }
 
 /// One of the toolbar's two pickers: the view (Map, Changes, Copies) or the mode (Free Up, Backup). Each always has one
 /// chosen, and choosing in one leaves the other as it is.
-struct LensPicker: View {
+private struct LensPicker: View {
     let model: AppModel
     let lenses: [Lens]
     let name: String
 
     var body: some View {
         let isMode = lenses.first?.isAction == true
-        Picker(name, selection: Binding<Lens>(get: { isMode ? model.mode : model.view }, set: { lens in
-            Motion.animate(.spring(response: 0.34, dampingFraction: 0.82)) { isMode ? model.setMode(lens) : model.setView(lens) }
-        })) {
-            ForEach(lenses) { lens in
-                // In Backup, Copies is Backed Up: what's on the drive and what isn't.
-                let backedUp = lens == .copies && model.mode == .backup
-                Text(backedUp ? "Backed Up" : lens.title)
-                    .help(backedUp ? "Backed up or not" : lens.help)
-                    .tag(lens)
-            }
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .fixedSize()
+        // In Backup, Copies is Backed Up: what's on the drive and what isn't.
+        let backedUp = { (lens: Lens) in lens == .copies && model.mode == .backup }
+        Segmented(
+            name: name, options: lenses, selection: isMode ? model.mode : model.view,
+            title: { backedUp($0) ? "Backed Up" : $0.title }, help: { backedUp($0) ? "Backed up or not" : $0.help },
+            size: nil,
+            select: { lens in Motion.animate(Motion.switching) { isMode ? model.setMode(lens) : model.setView(lens) } })
     }
 }
 
 // MARK: Bottom
 
-struct BottomArea: View {
+private struct BottomArea: View {
     let model: AppModel
     let ring: RingGeometry
 
@@ -174,22 +184,20 @@ struct BottomArea: View {
             if let tip = model.tip {
                 HStack(spacing: 12) {
                     Text(tip)
-                        .font(.system(size: 12.5, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.92))
+                        .font(Kit.Font.name)
+                        .foregroundStyle(Kit.Text.primary)
                         .lineLimit(2)
                         .truncationMode(.middle)
                     if model.tipOffersUndo {
                         Button("Undo") { model.undoCommand() }
-                            .buttonStyle(.plain)
-                            .font(.system(size: 12.5, weight: .semibold))
-                            .foregroundStyle(Kit.green)
+                            .buttonStyle(.textLink(Kit.green, font: Kit.Font.strong))
                             .pointerStyle(.link)
                     }
                 }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 9)
-                    .glassEffect(.regular, in: Capsule())
-                    .transition(.opacity)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 9)
+                .glassEffect(.regular, in: Capsule())
+                .transition(.opacity)
             }
             if !model.hasFullAccess && !model.accessCardDismissed, model.volume?.isBoot == true {
                 AccessCard(model: model)
@@ -205,23 +213,21 @@ struct BottomArea: View {
     }
 }
 
-struct MessageCard: View {
+private struct MessageCard: View {
     let model: AppModel
     let message: String
 
     var body: some View {
         HStack(spacing: 10) {
             Text(message)
-                .font(.system(size: 12.5, weight: .medium))
-                .foregroundStyle(.white.opacity(0.92))
+                .font(Kit.Font.name)
+                .foregroundStyle(Kit.Text.primary)
             Button {
                 model.message = nil
             } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.5))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.symbol)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
@@ -230,18 +236,18 @@ struct MessageCard: View {
 }
 
 /// Explains the hatched piece: Headroom reads nothing until macOS lets it read everything.
-struct AccessCard: View {
+private struct AccessCard: View {
     let model: AppModel
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         HStack(alignment: .center, spacing: 14) {
             Image(systemName: "lock.fill")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.75))
+                .font(Kit.Font.headline)
+                .foregroundStyle(Kit.Text.secondary)
             Text("Needs Full Disk Access")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.95))
+                .font(Kit.Font.headline)
+                .foregroundStyle(Kit.Text.primary)
             Button("Allow…") { openWindow(id: "access") }
                 .buttonStyle(.glassProminent)
                 .controlSize(.small)
@@ -250,10 +256,8 @@ struct AccessCard: View {
                 model.accessCardDismissed = true
             } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.5))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.symbol)
             .help("Not now")
         }
         .padding(.horizontal, 18)

@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Headroom
 
 /// A look inside a real folder, against what the disk says.
@@ -6,7 +7,8 @@ final class WalkerTests: XCTestCase {
     private var root = ""
 
     override func setUpWithError() throws {
-        root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("headroom-walker-" + UUID().uuidString).resolvingSymlinksInPath().path
+        root =
+            URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("headroom-walker-" + UUID().uuidString).resolvingSymlinksInPath().path
         try FileManager.default.createDirectory(atPath: root + "/a/b/c", withIntermediateDirectories: true)
         try FileManager.default.createDirectory(atPath: root + "/empty", withIntermediateDirectories: true)
     }

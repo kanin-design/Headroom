@@ -33,13 +33,15 @@ struct AgentPick {
 /// Selecting for an agent, as rules over the map, the disk and the list alone, so they can be tested without the app.
 enum AgentPicks {
     /// Files smaller than this never get a place of their own on the map.
-    static let smallestOnMap: Int64 = 1 << 20
+    private static let smallestOnMap: Int64 = 1 << 20
 
     /// Selects what an agent found, the way a click on the ring selects it: one path each, moved to the Trash when you
     /// clean, marked with the agent's name and its reason. The same rules as for a click decide what can go. What the
     /// agent found is what's on the disk, so a path the map doesn't have yet is taken at its word when it's there.
-    static func select(_ references: [String], in tree: DiskTree, plan: inout PlanList, by agent: String, reason: String,
-                       title: (UInt32) -> String) -> [AgentPick] {
+    static func select(
+        _ references: [String], in tree: DiskTree, plan: inout PlanList, by agent: String, reason: String,
+        title: (UInt32) -> String
+    ) -> [AgentPick] {
         let note = oneLine(reason, most: 140)
         return references.map { reference in
             let node = try? AgentLook.node(reference, in: tree)
@@ -55,26 +57,33 @@ enum AgentPicks {
                 }
                 // It's counted, and shows as selected, through the folder it's in. A folder the map has never seen can't.
                 guard tree.find(visible: (path as NSString).deletingLastPathComponent) != nil else {
-                    return AgentPick(path: path, outcome: .refused("Headroom's map doesn't have the folder this is in yet. It is reading the disk again: try again shortly."),
-                                     isNewerThanMap: true)
+                    return AgentPick(
+                        path: path,
+                        outcome: .refused("Headroom's map doesn't have the folder this is in yet. It is reading the disk again: try again shortly."),
+                        isNewerThanMap: true)
                 }
             }
             if plan.covers(path) { return AgentPick(path: path, outcome: .asItWas("already selected"), node: node) }
             // Something taken back from a selected folder comes back with it, as a click would have it.
-            if plan.items.contains(where: { $0.excluded.contains(path) }) {
-                for at in plan.items.indices { plan.items[at].excluded.removeAll { $0 == path } }
+            if plan.excludes(path) {
+                plan.restoreExcluded(path)
                 return AgentPick(path: path, outcome: .selected, node: node)
             }
             guard Safety.canTrash(path) else { return AgentPick(path: path, outcome: .refused("Protected: Headroom never removes this.")) }
             let isSmallFile = node == nil && onDisk.st_mode & S_IFMT == S_IFREG && onDisk.st_size < smallestOnMap
-            plan.add(PlanItem(id: PlanItem.id(pickedByHand: path), title: node.map(title) ?? (path as NSString).lastPathComponent,
-                              note: note.isEmpty ? DiskTree.friendly(path) : note, tierRaw: Tier.yourCall.rawValue, paths: [path], byHand: true,
-                              lastKnownBytes: node.map { tree.totals[Int($0)] } ?? UInt64(max(onDisk.st_blocks, 0)) * 512,
-                              diskID: Cleaner.diskID(of: path), agent: agent))
+            plan.add(
+                PlanItem(
+                    id: PlanItem.id(pickedByHand: path), title: node.map(title) ?? (path as NSString).lastPathComponent,
+                    note: note.isEmpty ? DiskTree.friendly(path) : note, tierRaw: Tier.yourCall.rawValue, paths: [path], byHand: true,
+                    lastKnownBytes: node.map { tree.totals[Int($0)] } ?? UInt64(max(onDisk.st_blocks, 0)) * 512,
+                    diskID: Cleaner.diskID(of: path), agent: agent))
             if node != nil { return AgentPick(path: path, outcome: .selected, node: node) }
-            return AgentPick(path: path, outcome: .selected,
-                             note: isSmallFile ? "Too small to be drawn on the map by itself. It is selected and counted." : "Newer than Headroom's map. It is selected, and shows once the disk is read again.",
-                             isNewerThanMap: !isSmallFile)
+            return AgentPick(
+                path: path, outcome: .selected,
+                note: isSmallFile
+                    ? "Too small to be drawn on the map by itself. It is selected and counted."
+                    : "Newer than Headroom's map. It is selected, and shows once the disk is read again.",
+                isNewerThanMap: !isSmallFile)
         }
     }
 
@@ -84,10 +93,14 @@ enum AgentPicks {
         let yours = "The user selected this in Headroom, so it's theirs to deselect."
         let byPath = paths.map { reference -> AgentPick in
             let written = AgentLook.written(reference)
-            let path = (try? AgentLook.node(reference, in: tree)).flatMap { tree.path($0) }.map(PathMath.visible) ?? PathMath.visible(AgentLook.real(written) ?? written)
-            guard let owner = plan.items.first(where: { item in
-                item.paths.contains { PathMath.isInside(path, $0) } && !item.excluded.contains { PathMath.isInside(path, $0) }
-            }) else { return AgentPick(path: path, outcome: .asItWas("not selected")) }
+            let path =
+                (try? AgentLook.node(reference, in: tree)).flatMap { tree.path($0) }.map(PathMath.visible)
+                ?? PathMath.visible(AgentLook.real(written) ?? written)
+            guard
+                let owner = plan.items.first(where: { item in
+                    item.paths.contains { PathMath.isInside(path, $0) } && !item.excluded.contains { PathMath.isInside(path, $0) }
+                })
+            else { return AgentPick(path: path, outcome: .asItWas("not selected")) }
             guard owner.agent != nil else { return AgentPick(path: path, outcome: .refused(yours)) }
             plan.takeBack(path)
             return AgentPick(path: path, outcome: .deselected)
