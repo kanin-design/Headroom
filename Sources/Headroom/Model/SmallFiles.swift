@@ -16,6 +16,10 @@ enum SmallFiles {
     static let limit: UInt64 = 1 << 20
     /// How many a search lists.
     static let shown = 120
+    /// How many stretches a search reads at once. More answer sooner, but add more work than they save time.
+    static let slices = 4
+    /// Up to how many matches a search keeps, so that text typed on from it looks only among them.
+    static let kept = 20_000
 
     /// The app's own folder in Caches. A scripted check keeps its catalogues apart, as it keeps its data (`AppData`).
     static let folder: URL = {
@@ -46,6 +50,17 @@ enum SmallFiles {
     fileprivate static let indexHeader = 64
     /// What a map is known by: when it was finished, and how many nodes it has.
     fileprivate static func stamp(_ tree: DiskTree) -> UInt64 { tree.finishedAt.timeIntervalSince1970.bitPattern }
+
+    /// The top bit of each byte in a word.
+    static let tops: UInt64 = 0x8080_8080_8080_8080
+
+    /// The top bit of each zero byte among a word's first few (1 to 8), as they lie in memory. Exact: no carry runs from
+    /// one byte into the next.
+    @inline(__always) static func zeros(in word: UInt64, first n: Int) -> UInt64 {
+        let rest = ~tops
+        let z = ~(((word & rest) &+ rest) | word | rest)
+        return n >= 8 ? z : z & ((1 &<< UInt64(8 &* n)) &- 1)
+    }
 
     /// How many bytes a folder's block takes, from its first eight.
     @inline(__always) fileprivate static func blockSize(_ p: UnsafeRawPointer) -> Int {
@@ -79,6 +94,31 @@ enum SmallFilesGap {
 struct SmallFileResults: Sendable {
     var count = 0
     var top: [SmallFile] = []
+    /// Every match, when there are few enough to keep.
+    fileprivate var kept: KeptMatches?
+}
+
+/// A search's matches, and what they were found for: text that holds this text can only be in these names.
+private struct KeptMatches: Sendable {
+    let text: String
+    let scope: UInt32
+    let catalogue: UInt64
+    let hits: [Hit]
+
+    /// Whether a search for this text, here, can look only among them.
+    func cover(_ wanted: String, scope: UInt32, catalogue: UInt64) -> Bool {
+        scope == self.scope && catalogue == self.catalogue && Search.narrows(wanted, from: text)
+    }
+}
+
+/// A match: the file's size in KB, its folder, and where in the names it matched, which is a byte of its name: enough to
+/// order it and to find the name again.
+private struct Hit: Sendable {
+    var kb: UInt16
+    var folder: UInt32
+    var at: UInt64
+    /// Bigger first, then in the order they were written, so the same search always lists the same files.
+    static func isBefore(_ a: Hit, _ b: Hit) -> Bool { a.kb != b.kb ? a.kb > b.kb : a.at < b.at }
 }
 
 /// Set from anywhere, read by a search between folders.
@@ -122,6 +162,8 @@ final class SmallFileCatalogue: @unchecked Sendable {
     let count: Int
     /// Files in it.
     let files: UInt64
+    /// What it's known by: its names and its map.
+    private var identity: UInt64 { storeID ^ stamp }
 
     private init?(volume: String, names: MappedFile, index: MappedFile) {
         let h = index.base
@@ -159,6 +201,13 @@ final class SmallFileCatalogue: @unchecked Sendable {
         tree.count == count && abs(Double(bitPattern: stamp) - tree.finishedAt.timeIntervalSince1970) < 0.001 && tree.volumeName == volume
     }
 
+    /// Has both files read into memory, so that a search about to start doesn't wait on the disk. It takes some
+    /// milliseconds, so not on the main thread.
+    func warm() {
+        madvise(UnsafeMutableRawPointer(mutating: names.base), names.length, MADV_WILLNEED)
+        madvise(UnsafeMutableRawPointer(mutating: index.base), index.length, MADV_WILLNEED)
+    }
+
     /// Where a folder's block starts in the names, in eighths, or 0.
     @inline(__always) fileprivate func entry(_ id: Int) -> UInt32 {
         index.base.load(fromByteOffset: SmallFiles.indexHeader + id * 4, as: UInt32.self)
@@ -166,31 +215,38 @@ final class SmallFileCatalogue: @unchecked Sendable {
 
     /// Names holding the text, biggest first. Capitals don't matter, for any alphabet, as on the map. With a folder, only
     /// what's in it and in the folders inside it. Nil when stopped.
-    func search(_ query: String, in tree: DiskTree, within folder: UInt32 = 0, stop: StopFlag) -> SmallFileResults? {
+    /// With what an earlier search found, text that holds its text looks only among its matches, when it kept them.
+    func search(
+        _ query: String, in tree: DiskTree, within folder: UInt32 = 0, after earlier: SmallFileResults? = nil, stop: StopFlag
+    ) -> SmallFileResults? {
         let wanted = query.precomposedStringWithCanonicalMapping.lowercased()
         let needle = Array(wanted.utf8).filter { $0 != 0 }
         guard !needle.isEmpty else { return SmallFileResults() }
+        // A small letter matches both cases of itself with 0x20 added to the name's byte; anything else must be equal.
+        let fold = needle.map { $0 &- 0x61 < 26 ? UInt8(0x20) : 0 }
         let n = min(count, tree.count)
         let scope = Int(folder) < n ? folder : 0
-        let slices = 64
+        if let kept = earlier?.kept, kept.cover(wanted, scope: scope, catalogue: identity) {
+            return narrow(kept.hits, to: wanted, needle, fold, scope: scope, in: tree, stop: stop)
+        }
+        let slices = SmallFiles.slices
         let found = UnsafeMutableBufferPointer<Slice>.allocate(capacity: slices)
         found.initialize(repeating: Slice())
         defer { found.deinitialize().deallocate() }
         let nodes = tree.nodes
         needle.withUnsafeBufferPointer { needle in
-            DispatchQueue.concurrentPerform(iterations: slices) { s in
-                var slice = Slice()
-                for id in (n * s / slices)..<(n * (s + 1) / slices) {
-                    if id & 1023 == 0, stop.isSet { return }
-                    let at = entry(id)
-                    // Trashed since it was read: not on the disk to be found.
-                    if at == 0 || nodes[id].flags & NodeFlag.gone != 0 { continue }
-                    if scope != 0, !tree.isInside(UInt32(id), scope) { continue }
-                    let block = names.base + Int(at) * 8
-                    if Int(at) * 8 + 8 > Int(namesLength) { continue }
-                    search(block, in: UInt32(id), needle: needle, wanted: wanted, into: &slice)
+            fold.withUnsafeBufferPointer { fold in
+                DispatchQueue.concurrentPerform(iterations: slices) { s in
+                    var slice = Slice()
+                    for id in (n * s / slices)..<(n * (s + 1) / slices) {
+                        if id & 1023 == 0, stop.isSet { return }
+                        let at = Int(entry(id)) * 8
+                        if at == 0 || at + 8 > Int(namesLength) { continue }
+                        if scope != 0, !tree.isInside(UInt32(id), scope) { continue }
+                        search(names.base + at, in: UInt32(id), nodes: nodes, needle: needle, fold: fold, wanted: wanted, into: &slice)
+                    }
+                    found[s] = slice
                 }
-                found[s] = slice
             }
         }
         if stop.isSet { return nil }
@@ -200,29 +256,83 @@ final class SmallFileCatalogue: @unchecked Sendable {
             results.count += slice.count
             for hit in slice.top.items { best.offer(hit) }
         }
-        results.top = best.items.sorted(by: Hit.isBefore).map { hit in
-            let p = (names.base + Int(hit.nameAt)).assumingMemoryBound(to: UInt8.self)
-            let name = String(decoding: UnsafeBufferPointer(start: p, count: Int(hit.length)), as: UTF8.self)
-            let kind = Kind(rawValue: ExtensionTable.shared.kind(name: p, length: Int(hit.length))) ?? .other
-            let path = tree.path(hit.folder).map(PathMath.visible) ?? ""
-            return SmallFile(folder: hit.folder, folderPath: path, name: name, bytes: UInt64(hit.kb) << 10, kind: kind, onScreen: hit.folder)
+        results.top = listed(best, in: tree)
+        if results.count <= SmallFiles.kept {
+            let hits = found.flatMap(\.kept)
+            results.kept = KeptMatches(text: wanted, scope: scope, catalogue: identity, hits: hits)
         }
         return results
     }
 
-    /// What one stretch of folders found.
+    /// Only among an earlier search's matches: each name looked at again for the longer text, and what's been trashed
+    /// since left out.
+    private func narrow(
+        _ earlier: [Hit], to wanted: String, _ needle: [UInt8], _ fold: [UInt8], scope: UInt32, in tree: DiskTree, stop: StopFlag
+    ) -> SmallFileResults? {
+        let nodes = tree.nodes
+        let plain = needle.allSatisfy { $0 < 0x80 }
+        var results = SmallFileResults()
+        var best = Top(SmallFiles.shown)
+        var hits: [Hit] = []
+        for (k, hit) in earlier.enumerated() {
+            if k & 1023 == 0, stop.isSet { return nil }
+            guard nodes[Int(hit.folder)].flags & NodeFlag.gone == 0 else { continue }
+            let (p, length) = name(around: hit)
+            let holds =
+                plain
+                ? Self.holds(needle, fold, in: p, length: length)
+                : String(decoding: UnsafeBufferPointer(start: p, count: length), as: UTF8.self).precomposedStringWithCanonicalMapping
+                    .lowercased().contains(wanted)
+            guard holds else { continue }
+            results.count += 1
+            best.offer(hit)
+            hits.append(hit)
+        }
+        results.top = listed(best, in: tree)
+        results.kept = KeptMatches(text: wanted, scope: scope, catalogue: identity, hits: hits)
+        return results
+    }
+
+    /// Whether a name holds plain text, capitals or not.
+    private static func holds(_ needle: [UInt8], _ fold: [UInt8], in p: UnsafePointer<UInt8>, length: Int) -> Bool {
+        let m = needle.count
+        guard length >= m else { return false }
+        for at in 0...(length - m) {
+            var j = 0
+            while j < m, p[at + j] | fold[j] == needle[j] { j += 1 }
+            if j == m { return true }
+        }
+        return false
+    }
+
+    /// The biggest found, as files to list.
+    private func listed(_ best: Top, in tree: DiskTree) -> [SmallFile] {
+        best.items.sorted(by: Hit.isBefore).map { hit in
+            let (p, length) = name(around: hit)
+            let name = String(decoding: UnsafeBufferPointer(start: p, count: length), as: UTF8.self)
+            let kind = Kind(rawValue: ExtensionTable.shared.kind(name: p, length: length)) ?? .other
+            let path = tree.path(hit.folder).map(PathMath.visible) ?? ""
+            return SmallFile(folder: hit.folder, folderPath: path, name: name, bytes: UInt64(hit.kb) << 10, kind: kind, onScreen: hit.folder)
+        }
+    }
+
+    /// The whole name a hit is in: back to the zero before it, or its block's first name, and on to the zero after it.
+    private func name(around hit: Hit) -> (UnsafePointer<UInt8>, Int) {
+        let block = names.base + Int(entry(Int(hit.folder))) * 8
+        let first = (block + 8 + 2 * Int(block.load(as: UInt32.self))).assumingMemoryBound(to: UInt8.self)
+        let end = names.base.assumingMemoryBound(to: UInt8.self) + Int(namesLength)
+        var from = names.base.assumingMemoryBound(to: UInt8.self) + Int(hit.at)
+        while from > first && from[-1] != 0 { from -= 1 }
+        var to = from
+        while to < end && to[0] != 0 { to += 1 }
+        return (from, to - from)
+    }
+
+    /// What one stretch of folders found: how many, the biggest, and all of them while there are few.
     private struct Slice {
         var count = 0
         var top = Top(SmallFiles.shown)
-    }
-
-    private struct Hit {
-        var kb: UInt16
-        var length: UInt16
-        var folder: UInt32
-        var nameAt: UInt64
-        /// Bigger first, then in the order they were written, so the same search always lists the same files.
-        static func isBefore(_ a: Hit, _ b: Hit) -> Bool { a.kb != b.kb ? a.kb > b.kb : a.nameAt < b.nameAt }
+        var kept: [Hit] = []
     }
 
     /// The biggest few, in a heap with the smallest of them on top.
@@ -258,54 +368,43 @@ final class SmallFileCatalogue: @unchecked Sendable {
         }
     }
 
-    /// One folder's block. A to Z compare as bytes in one pass over its names; any other letter needs the name as text, as
-    /// on the map (`Search`).
+    /// One folder's block. Plain ASCII text is found by its first and last byte, sixteen places at a time, then checked in
+    /// full; text with any other letter needs each name as text, as on the map (`Search`).
     @inline(__always)
-    private func search(_ block: UnsafeRawPointer, in folder: UInt32, needle: UnsafeBufferPointer<UInt8>, wanted: String, into slice: inout Slice) {
+    private func search(
+        _ block: UnsafeRawPointer, in folder: UInt32, nodes: UnsafeMutablePointer<Node>, needle: UnsafeBufferPointer<UInt8>,
+        fold: UnsafeBufferPointer<UInt8>, wanted: String, into slice: inout Slice
+    ) {
         let count = Int(block.load(as: UInt32.self)), nameBytes = Int(block.load(fromByteOffset: 4, as: UInt32.self))
         let sizes = block + 8
-        let p = (block + 8 + 2 * count).assumingMemoryBound(to: UInt8.self)
-        let start = UInt64(p - names.base.assumingMemoryBound(to: UInt8.self))
-        guard nameBytes > 0, Int(start) + nameBytes <= Int(namesLength) else { return }
-        func record(_ i: Int, _ from: Int, _ to: Int) {
-            guard i < count else { return }
+        let start = block + 8 + 2 * count
+        let p = start.assumingMemoryBound(to: UInt8.self)
+        let offset = start - names.base
+        guard nameBytes > 0, offset + nameBytes <= Int(namesLength) else { return }
+        // The i-th name, matched at q.
+        func record(_ i: Int, _ q: Int) {
+            // Trashed since it was read: not on the disk to be found.
+            guard i < count, nodes[Int(folder)].flags & NodeFlag.gone == 0 else { return }
             slice.count += 1
-            let kb = sizes.loadUnaligned(fromByteOffset: 2 * i, as: UInt16.self)
-            slice.top.offer(Hit(kb: kb, length: UInt16(min(to - from, Int(UInt16.max))), folder: folder, nameAt: start + UInt64(from)))
+            let hit = Hit(kb: sizes.loadUnaligned(fromByteOffset: 2 * i, as: UInt16.self), folder: folder, at: UInt64(offset + q))
+            slice.top.offer(hit)
+            if slice.kept.count < SmallFiles.kept { slice.kept.append(hit) }
         }
         let m = needle.count
-        let first = needle[0]
-        if needle.allSatisfy({ $0 < 0x80 }) {
-            let upper = first &- 0x61 < 26 ? first - 0x20 : first
-            var at = 0, i = 0
-            while at < nameBytes {
-                let c = p[at]
-                if c == 0 {
-                    i += 1
-                } else if c == first || c == upper {
-                    // A name ends with a zero, which no letter of the text matches, so this never reads past it.
-                    var j = 1
-                    while j < m {
-                        var x = p[at + j]
-                        if x &- 0x41 < 26 { x |= 0x20 }
-                        if x != needle[j] { break }
-                        j += 1
-                    }
-                    if j == m {
-                        var from = at
-                        while from > 0 && p[from - 1] != 0 { from -= 1 }
-                        var to = at + m
-                        while to < nameBytes && p[to] != 0 { to += 1 }
-                        record(i, from, to)
-                        at = to + 1
-                        i += 1
-                        continue
-                    }
-                }
-                at += 1
+        guard needle.allSatisfy({ $0 < 0x80 }) else {
+            // Only a name with a byte beyond ASCII can hold such text, and most folders have none: they're passed over
+            // sixteen bytes at a time.
+            var at = 0
+            while at &+ 16 <= nameBytes,
+                (start.loadUnaligned(fromByteOffset: at, as: UInt64.self) | start.loadUnaligned(fromByteOffset: at &+ 8, as: UInt64.self))
+                    & SmallFiles.tops == 0
+            {
+                at &+= 16
             }
-        } else {
-            var at = 0, i = 0
+            while at < nameBytes, p[at] < 0x80 { at &+= 1 }
+            guard at < nameBytes else { return }
+            at = 0
+            var i = 0
             while at < nameBytes {
                 var to = at, wide = false
                 while to < nameBytes && p[to] != 0 {
@@ -316,11 +415,82 @@ final class SmallFileCatalogue: @unchecked Sendable {
                     String(decoding: UnsafeBufferPointer(start: p + at, count: to - at), as: UTF8.self).precomposedStringWithCanonicalMapping
                         .lowercased().contains(wanted)
                 {
-                    record(i, at, to)
+                    record(i, at)
                 }
                 at = to + 1
                 i += 1
             }
+            return
+        }
+        // The last place a match can start, and how far sixteen bytes can be read from here: past this block's names
+        // are the next block's, up to what the catalogue wrote.
+        let last = nameBytes - m
+        guard last >= 0 else { return }
+        let readable = Int(namesLength) - offset
+        let first = needle[0], firstFold = fold[0], end = needle[m - 1], endFold = fold[m - 1]
+        let n0 = SIMD16(repeating: first), f0 = SIMD16(repeating: firstFold)
+        let n1 = SIMD16(repeating: end), f1 = SIMD16(repeating: endFold)
+        // Names counted so far, up to where; and where the last name found ends.
+        var i = 0, counted = 0, skip = 0
+        var at = 0
+        while at <= last {
+            // A bit at the top of each byte of each half where the text could start.
+            var low: UInt64 = 0, high: UInt64 = 0
+            if at &+ 15 &+ m <= readable {
+                let a = start.loadUnaligned(fromByteOffset: at, as: SIMD16<UInt8>.self)
+                let b = start.loadUnaligned(fromByteOffset: at &+ m &- 1, as: SIMD16<UInt8>.self)
+                let halves = unsafeBitCast(((a | f0) .== n0) .& ((b | f1) .== n1), to: SIMD2<UInt64>.self)
+                low = halves[0] & SmallFiles.tops
+                high = halves[1] & SmallFiles.tops
+            } else {
+                // The end of the catalogue: a byte at a time.
+                for k in 0..<16 where at &+ k <= last && p[at &+ k] | firstFold == first && p[at &+ k &+ m &- 1] | endFold == end {
+                    if k < 8 { low |= 0x80 &<< UInt64(8 &* k) } else { high |= 0x80 &<< UInt64(8 &* (k &- 8)) }
+                }
+            }
+            while low | high != 0 {
+                let q: Int
+                if low != 0 {
+                    q = at &+ low.trailingZeroBitCount >> 3
+                    low &= low &- 1
+                } else {
+                    q = at &+ 8 &+ high.trailingZeroBitCount >> 3
+                    high &= high &- 1
+                }
+                if q > last { break }
+                if q < skip { continue }
+                // The text holds no zero, so a match never runs from one name into the next.
+                var j = 1
+                while j < m - 1, p[q &+ j] | fold[j] == needle[j] { j &+= 1 }
+                guard j >= m - 1 else { continue }
+                // Which name it is: the zeros before it, eight bytes at a time.
+                while counted &+ 8 <= q {
+                    i &+= SmallFiles.zeros(in: start.loadUnaligned(fromByteOffset: counted, as: UInt64.self), first: 8).nonzeroBitCount
+                    counted &+= 8
+                }
+                if counted < q, counted &+ 8 <= readable {
+                    i &+= SmallFiles.zeros(in: start.loadUnaligned(fromByteOffset: counted, as: UInt64.self), first: q &- counted).nonzeroBitCount
+                } else {
+                    for k in counted..<max(counted, q) where p[k] == 0 { i &+= 1 }
+                }
+                record(i, q)
+                // On past the zero that ends it.
+                var to = q &+ m
+                while to &+ 8 <= readable {
+                    let z = SmallFiles.zeros(in: start.loadUnaligned(fromByteOffset: to, as: UInt64.self), first: 8)
+                    if z != 0 {
+                        to &+= z.trailingZeroBitCount >> 3
+                        break
+                    }
+                    to &+= 8
+                }
+                to = min(to, nameBytes)
+                while to < nameBytes && p[to] != 0 { to &+= 1 }
+                i &+= 1
+                counted = to &+ 1
+                skip = counted
+            }
+            at = max(at &+ 16, skip)
         }
     }
 }

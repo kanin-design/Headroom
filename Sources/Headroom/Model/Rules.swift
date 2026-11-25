@@ -331,6 +331,31 @@ final class RuleBook: @unchecked Sendable {
         return h | 1
     }
 
+    /// `hash` of a path, worked out a name at a time: the folder's part once, then each thing in it from there, with no
+    /// path written out. `PathHash("a/b").adding("c").key` is `hash("a/b/c")`, and `PathHash("").adding("c").key` is
+    /// `hash("c")`.
+    struct PathHash {
+        private var h: UInt64 = 0xCBF2_9CE4_8422_2325
+        private var isEmpty = true
+
+        init(_ path: String) { add(path) }
+
+        private mutating func add(_ text: String) {
+            for byte in text.utf8 { h = (h ^ UInt64(byte)) &* 0x0000_0100_0000_01B3 }
+            if !text.utf8.isEmpty { isEmpty = false }
+        }
+
+        /// With one more name after a slash, or the name alone when there's no path yet.
+        func adding(_ name: String) -> PathHash {
+            var next = self
+            if !isEmpty { next.h = (next.h ^ 0x2F) &* 0x0000_0100_0000_01B3 }
+            next.add(name)
+            return next
+        }
+
+        var key: UInt64 { isEmpty ? 1 : h | 1 }
+    }
+
     /// Follows the path table one folder down. Returns the next state and the rule found there, if any.
     /// State 0 is both the top and "no match", so only a step that says it's from the very top of the scan may leave it.
     @inline(__always) func step(state: UInt8, name: UnsafePointer<UInt8>, length: Int, fromRoot: Bool = false) -> (state: UInt8, rule: UInt16) {

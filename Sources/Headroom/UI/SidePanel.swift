@@ -167,15 +167,21 @@ private struct SearchPanel: View {
                         subtitle: model.searchResults.count > 120 ? "Top 120 shown" : nil
                     )
                     .padding(.horizontal, Kit.rowInset)
-                    let top = model.searchResults.prefix(120)
-                    let biggest = Double(max(top.first.map { tree.totals[Int($0)] } ?? 1, 1))
+                    // The biggest, in the order chosen.
+                    let top = tree.ordered(Array(model.searchResults.prefix(120)), by: model.sortBy)
+                    let biggest = Double(max(model.searchResults.first.map { tree.totals[Int($0)] } ?? 1, 1))
+                    // Names cut as the ring cuts them, among the rows in the same folder (DESIGN.md, Names).
+                    let parents = top.map { tree.path(tree.nodes[Int($0)].parent) ?? "" }
+                    let cut = ListNames.forms(top.map { tree.name($0) }, inFolders: parents)
+                    let forms = Dictionary(zip(top, cut), uniquingKeysWith: { a, _ in a })
                     LazyVStack(spacing: 0) {
                         ForEach(top, id: \.self) { node in
                             let n = tree.nodes[Int(node)]
                             let colour = Palette.color(tree.dominantKind(node)).swiftUI
+                            let folder = tree.path(n.parent).map(DiskTree.friendly).flatMap { $0.isEmpty ? nil : $0 }
                             ListRow(
-                                title: tree.name(node), detail: tree.path(n.parent).map(DiskTree.friendly).flatMap { $0.isEmpty ? nil : $0 },
-                                trailing: formatBytes(tree.totals[Int(node)]),
+                                title: tree.name(node), titles: forms[node] ?? [], detail: folder,
+                                details: folder.map { ListNames.folderForms($0) } ?? [], trailing: formatBytes(tree.totals[Int(node)]),
                                 markWidth: ListDot.size, share: (Double(tree.totals[Int(node)]) / biggest, colour),
                                 onHover: { inside in
                                     if inside { model.highlight(node: node) } else { model.highlight(nodes: Array(model.searchResults.prefix(400))) }
@@ -225,12 +231,22 @@ private struct SmallFilesFound: View {
     @ViewBuilder
     private func rows(_ found: SmallFileResults) -> some View {
         if found.count == 0 { EmptyNote(title: "None found") }
+        // The biggest, in the order chosen.
+        let files =
+            model.sortBy == .name
+            ? found.top.sorted {
+                let order = NameOrder.compare($0.name, $1.name)
+                return order != 0 ? order < 0 : $0.folderPath < $1.folderPath
+            } : found.top
         let biggest = Double(max(found.top.first?.bytes ?? 1, 1))
+        let forms = ListNames.forms(files.map(\.name), inFolders: files.map(\.folderPath))
         LazyVStack(spacing: 0) {
-            ForEach(found.top, id: \.self) { file in
+            ForEach(Array(files.enumerated()), id: \.element) { index, file in
                 let colour = Palette.color(file.kind).swiftUI
+                let folder = DiskTree.friendly(file.folderPath)
                 ListRow(
-                    title: file.name, detail: DiskTree.friendly(file.folderPath), trailing: formatBytes(file.bytes),
+                    title: file.name, titles: forms[index], detail: folder, details: ListNames.folderForms(folder),
+                    trailing: formatBytes(file.bytes),
                     markWidth: ListDot.size, share: (Double(file.bytes) / biggest, colour),
                     onHover: { inside in
                         if inside {

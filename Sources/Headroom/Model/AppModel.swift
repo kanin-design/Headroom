@@ -168,6 +168,19 @@ final class AppModel {
     var panelOpen = true { didSet { if oldValue != panelOpen { rememberWindow() } } }
     @ObservationIgnored var inspectorWidthTask: Task<Void, Never>?
     /// How the rings are sized, picked in View › Rings and kept for the next launch.
+    /// How what's in a folder is ordered, on the ring and in its lists: View › Sort By, and the toolbar's button. Kept for
+    /// next time, as the rings are.
+    var sortBy = AppModel.savedSortBy {
+        didSet {
+            guard sortBy != oldValue else { return }
+            if Self.remembersWindow { UserDefaults.standard.set(sortBy.rawValue, forKey: Self.sortKey) }
+            relayout(.settle)
+        }
+    }
+    private static let sortKey = "sortBy"
+    private static var savedSortBy: SortBy {
+        remembersWindow ? UserDefaults.standard.string(forKey: sortKey).flatMap(SortBy.init) ?? .size : .size
+    }
     var ringSizes = RingSizes.saved {
         didSet {
             guard ringSizes != oldValue else { return }
@@ -369,8 +382,15 @@ final class AppModel {
 
     // Search
     var searchText = ""
-    /// Whether the search field in the toolbar has the keyboard, as ⌘F gives it.
-    var searchActive = false
+    /// Whether the search field in the toolbar has the keyboard, as ⌘F gives it. The small files' names are read in
+    /// then, while the text is typed.
+    var searchActive = false {
+        didSet {
+            guard searchActive, !oldValue, !catalogues.isEmpty else { return }
+            let catalogues = catalogues
+            Task.detached(priority: .userInitiated) { for catalogue in catalogues { catalogue.warm() } }
+        }
+    }
     var searchResults: [UInt32] = []
     /// Something is typed in the search field, so the inspector lists what it finds, wherever the keyboard is.
     var isSearching: Bool { !searchText.isEmpty }
@@ -384,8 +404,16 @@ final class AppModel {
     var smallFound: SmallFileResults?
     /// The catalogues of the map on screen and of the one about to replace it.
     @ObservationIgnored var catalogues: [SmallFileCatalogue] = []
-    @ObservationIgnored private var smallSearch: StopFlag?
-    /// How long the last search of the small files took, in milliseconds.
+    /// The search going on, to stop when there's a newer one.
+    @ObservationIgnored private var searchStop: StopFlag?
+    /// What the last search started was for, and what the one listed was for: typing on from it looks only among what
+    /// it found.
+    @ObservationIgnored private var searchStarted: SearchKey?
+    @ObservationIgnored private var searchShown: SearchKey?
+    /// Whether a search is still going, for a script to wait on.
+    @ObservationIgnored private(set) var isSearchRunning = false
+    /// How long the last search took, all of it and the small files' part, in milliseconds.
+    @ObservationIgnored var searchMilliseconds = 0.0
     @ObservationIgnored var smallSearchMilliseconds = 0.0
     private static let smallFilesKey = "searchSmallFiles"
     private static var savedSearchesSmallFiles: Bool {
@@ -428,6 +456,8 @@ final class AppModel {
     /// to Backup shows them at once. Only with the drive unplugged, when its half is what was read there last: one plugged
     /// in is read when Backup asks, not again and again as you go through folders in Free Up.
     @ObservationIgnored private var readyPair: ReadyPair?
+    /// How many things the both-disks picture made ahead holds, if it's made: for a script to check.
+    var readyPairCount: Int? { readyPair?.picture.tree.count }
     @ObservationIgnored private var readyPairTask: Task<Void, Never>?
     /// The picture of both disks on screen, and what it was made from.
     @ObservationIgnored private var pairShown: ReadyPair?
@@ -476,6 +506,9 @@ final class AppModel {
     @ObservationIgnored private var ringColours: RingColours?
     @ObservationIgnored private let colourMemory = ColourMemory()
     @ObservationIgnored var cacheLoadMilliseconds = 0.0
+    /// When the first scan was started, for a script to say how long after the app started that was: a script's own first
+    /// look comes later, once the window has been laid out.
+    @ObservationIgnored private(set) var firstScanBegan: Date?
     /// How the last scan went about it, for a scripted check.
     @ObservationIgnored var lastScanNote = ""
     @ObservationIgnored private var nameCache: [UInt32: String] = [:]
@@ -491,7 +524,8 @@ final class AppModel {
         loadBackup()
         // Asking for each folder is gone: it brought up a prompt per folder, and still left the rest needing Full Disk Access.
         UserDefaults.standard.removeObject(forKey: "askPerFolder")
-        hasFullAccess = Self.mayReadEverything()
+        // Asked while the window was being made, like the saved map below.
+        hasFullAccess = LaunchReads.takeFullDiskAccess().map { !Self.actsLocked && $0 } ?? Self.mayReadEverything()
         volumes = VolumeFacts.available()
         volume = volumes.first
         guard let volume else { return }
@@ -503,7 +537,8 @@ final class AppModel {
         let launch = DispatchTime.now()
         var saved: DiskTree?
         // Without Full Disk Access nothing is read, the saved map included: whatever it names would be looked at.
-        if hasFullAccess, !CommandLine.arguments.contains("--no-cache"), let cached = TreeCache.load(for: volume, rules: rules) {
+        let readAhead = LaunchReads.takeSavedMap(for: volume, rules: rules)
+        if hasFullAccess, !CommandLine.arguments.contains("--no-cache"), let cached = readAhead ?? TreeCache.load(for: volume, rules: rules) {
             loadCatalogue(for: cached)
             present(cached, transition: .appear)
             cacheLoadMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - launch.uptimeNanoseconds) / 1e6
@@ -511,7 +546,7 @@ final class AppModel {
             saved = cached
         }
         restoreWindow()
-        scan(refreshing: saved)
+        scan(refreshing: saved, accessKnown: true)
         readOtherDisksQuietly()
     }
 
@@ -540,7 +575,7 @@ final class AppModel {
     /// works like any other map. With a map on screen, the scan stays out of the way and the map glides to the new numbers
     /// at the end, and it only reads what has changed since that map, when it can. `hurry` is for when you asked: it runs at
     /// full power and reads everything, even if a quiet scan is already under way. `readAll` reads everything quietly.
-    func scan(hurry: Bool = false, readAll: Bool = false, refreshing given: DiskTree? = nil) {
+    func scan(hurry: Bool = false, readAll: Bool = false, refreshing given: DiskTree? = nil, accessKnown: Bool = false) {
         if isScanning {
             if hurry {
                 scanIsHurrying = true
@@ -556,7 +591,8 @@ final class AppModel {
         guard let volume else { return }
         guard let facts = VolumeFacts.read(path: volume.mountPath) else { return }
         self.volume = facts
-        hasFullAccess = Self.mayReadEverything()
+        // At launch it was asked a moment ago, and asking takes 5 ms.
+        if !accessKnown { hasFullAccess = Self.mayReadEverything() }
         guard hasFullAccess else {
             showWithoutAccess(facts)
             // Asking to read the disk again, with nothing allowed to be read, brings up the way to allow it.
@@ -566,6 +602,7 @@ final class AppModel {
         let scan = DiskScan(facts: facts, rules: rules, fullAccess: hasFullAccess)
         activeScan = scan
         isScanning = true
+        if firstScanBegan == nil { firstScanBegan = Date() }
         scanIsHurrying = hurry
         scanFiles = 0
         scanGeneration += 1
@@ -1000,6 +1037,7 @@ final class AppModel {
         changesScanID = nil
         reclaim = nil
         searchResults = []
+        searchShown = nil
         // Nothing of the last disk's is drawn, pointed at or lit: its node numbers mean other things.
         chart.show(.empty)
         history = History.points(for: facts)
@@ -1117,7 +1155,7 @@ final class AppModel {
         chart.change(transition) {
             chart.tree = MapTree(tree, after: after)
             // On both disks, Backed Up colours by where things are, so a folder's stretches show their place's colour.
-            chart.parts = tree.parts(ringSizes, byPlace: showsPair && view == .copies)
+            chart.parts = tree.parts(ringSizes, byPlace: showsPair && view == .copies, by: sortBy)
             chart.isMarked = after == nil ? planned : nil
             chart.calmsTinyPieces = view == .map || showsPair
             if repoint { chart.refreshPointer() }
@@ -1834,20 +1872,80 @@ final class AppModel {
 
     // MARK: Search
 
-    func runSearch() {
+    /// What a search was for, on which map as it was then.
+    private struct SearchKey: Equatable {
+        let query: String
+        let tree: ObjectIdentifier
+        let version: Int
+        let count: Int
+        let folder: UInt32
+
+        /// Whether what this found is all there is to look among for the next: the same map, unchanged, the same folder,
+        /// and text that holds this text.
+        func narrows(_ next: SearchKey) -> Bool {
+            tree == next.tree && version == next.version && count == next.count && folder == next.folder
+                && Search.narrows(next.query, from: query)
+        }
+    }
+
+    /// The map and the small files, at once and off the main thread, shown together when both are done. A search still
+    /// going when there's a newer one is dropped, and until the newer one is done the last one's finds stay shown.
+    /// `typed` when only the text may have changed: the same text again is left alone, and text that holds the last looks
+    /// only among what it found. Anything else that changes what's found searches it all again.
+    func runSearch(typed: Bool = false) {
         guard let tree else { return }
         let query = searchText.trimmingCharacters(in: .whitespaces).lowercased()
-        smallSearch?.set()
+        // Only what's in the folder in view, as the ring shows only that.
+        let folder = Int(focus) < tree.count ? focus : 0
+        let key = SearchKey(query: query, tree: ObjectIdentifier(tree), version: treeVersion, count: tree.count, folder: folder)
+        if typed, key == searchStarted { return }
+        searchStop?.set()
         guard query.count >= 2 else {
+            searchStarted = nil
+            searchShown = nil
+            isSearchRunning = false
             searchResults = []
             smallFound = nil
             chart.clearHighlight()
             return
         }
-        // Only what's in the folder in view, as the ring shows only that.
-        searchResults = Search.run(query, in: tree, within: Int(focus) < tree.count ? focus : 0)
-        highlight(nodes: Array(searchResults.prefix(400)))
-        searchSmallFiles(query, in: tree)
+        searchStarted = key
+        let earlier = typed && searchShown?.narrows(key) == true ? searchResults : nil
+        let small = smallFilesPlan(on: tree)
+        let earlierSmall = smallFound
+        let stop = StopFlag()
+        searchStop = stop
+        isSearchRunning = true
+        Task.detached(priority: .userInitiated) {
+            let began = DispatchTime.now()
+            async let onMap =
+                earlier.map { Search.narrow($0, to: query, in: tree) } ?? Search.run(query, in: tree, within: folder, stop: stop)
+            let smallFiles: SmallFileResults?
+            if case .search(let catalogue, let map, let place) = small {
+                guard let found = catalogue.search(query, in: map, within: place, after: earlierSmall, stop: stop) else { return }
+                smallFiles = found
+            } else {
+                smallFiles = nil
+            }
+            let smallDone = DispatchTime.now()
+            let found = await onMap
+            let done = DispatchTime.now()
+            await MainActor.run {
+                guard !stop.isSet else { return }
+                self.isSearchRunning = false
+                // Another map took its place meanwhile: that one is searched.
+                guard self.tree === tree else {
+                    if self.isSearching { self.runSearch() }
+                    return
+                }
+                self.searchMilliseconds = Double(done.uptimeNanoseconds - began.uptimeNanoseconds) / 1e6
+                self.smallSearchMilliseconds = Double(smallDone.uptimeNanoseconds - began.uptimeNanoseconds) / 1e6
+                self.searchShown = key
+                self.searchResults = found
+                self.highlight(nodes: Array(found.prefix(400)))
+                self.show(smallFiles, for: small)
+            }
+        }
     }
 
     /// The folder a search is narrowed to, by name: the one in view. On both disks, at their top, the folder they're of.
@@ -1861,36 +1959,29 @@ final class AppModel {
 
     // MARK: Small files
 
-    /// Off the main thread, on every core. A search still going when you type again is dropped; until the next one is
-    /// done, the last one's finds stay listed.
-    private func searchSmallFiles(_ query: String, in tree: DiskTree) {
-        guard searchesSmallFiles else {
-            smallFound = nil
-            return
+    /// How a search finds small files: not at all, not here and why, or in this catalogue, of this map, in this folder.
+    private enum SmallFilesPlan: Sendable {
+        case off
+        case gap(SmallFilesGap)
+        case search(SmallFileCatalogue, DiskTree, UInt32)
+    }
+
+    private func smallFilesPlan(on tree: DiskTree) -> SmallFilesPlan {
+        guard searchesSmallFiles else { return .off }
+        guard let (map, folder) = smallFilesPlace(on: tree) else { return .gap(.onDrive) }
+        guard let catalogue = catalogue(for: map) else { return .gap(.notRead) }
+        return .search(catalogue, map, folder)
+    }
+
+    /// What a search found among the small files, or why it found nothing. Each is set only when it changes, as setting
+    /// it at all redraws the inspector.
+    private func show(_ found: SmallFileResults?, for plan: SmallFilesPlan) {
+        switch plan {
+        case .off: break
+        case .gap(let gap): if smallFilesGap != gap { smallFilesGap = gap }
+        case .search: if smallFilesGap != nil { smallFilesGap = nil }
         }
-        guard let (map, folder) = smallFilesPlace(on: tree) else {
-            smallFilesGap = .onDrive
-            smallFound = nil
-            return
-        }
-        guard let catalogue = catalogue(for: map) else {
-            smallFilesGap = .notRead
-            smallFound = nil
-            return
-        }
-        smallFilesGap = nil
-        let stop = StopFlag()
-        smallSearch = stop
-        Task.detached(priority: .userInitiated) {
-            let began = DispatchTime.now()
-            guard let found = catalogue.search(query, in: map, within: folder, stop: stop) else { return }
-            let milliseconds = Double(DispatchTime.now().uptimeNanoseconds - began.uptimeNanoseconds) / 1e6
-            await MainActor.run {
-                guard !stop.isSet else { return }
-                self.smallSearchMilliseconds = milliseconds
-                self.smallFound = self.placedOnScreen(found)
-            }
-        }
+        if found != nil || smallFound != nil { smallFound = found.map(placedOnScreen) }
     }
 
     /// The map the small files were catalogued with, under the picture on screen, and the folder in view on it. Moved files
@@ -1927,7 +2018,7 @@ final class AppModel {
     func setSearchesSmallFiles(_ on: Bool) {
         guard on != searchesSmallFiles else { return }
         searchesSmallFiles = on
-        smallSearch?.set()
+        searchStop?.set()
         if on {
             if isScanning { restartScan() } else { scan(readAll: true) }
         } else {
@@ -2103,7 +2194,7 @@ extension AppModel {
         // What's picked on the drive stays picked: in this folder as it is now, or dropped if it's gone; elsewhere as it was.
         driveSelection = driveSelection.compactMap { file in
             guard file.path.hasPrefix(built.drivePath + "/") else { return file }
-            return built.driveNodes[String(file.path.dropFirst(built.drivePath.count + 1))].flatMap { built.driveFile($0) }
+            return built.driveNode(path: file.path).flatMap { built.driveFile($0) }
         }
         tree = built.tree
         bareTree = ready.real

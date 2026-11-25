@@ -864,18 +864,7 @@ private struct LeaderLine: Shape {
     func path(in rect: CGRect) -> Path {
         var path = Path()
         path.move(to: anchor)
-        // The corner is rounded, as far as both legs allow: a line that turns is easier to follow than one that snaps.
-        let up = hypot(elbow.x - anchor.x, elbow.y - anchor.y), across = hypot(end.x - elbow.x, end.y - elbow.y)
-        let round = min(12, up / 2, across / 2)
-        guard round > 1 else {
-            path.addLine(to: elbow)
-            path.addLine(to: end)
-            return path
-        }
-        path.addLine(to: CGPoint(x: elbow.x + (anchor.x - elbow.x) * round / up, y: elbow.y + (anchor.y - elbow.y) * round / up))
-        path.addQuadCurve(
-            to: CGPoint(x: elbow.x + (end.x - elbow.x) * round / across, y: elbow.y + (end.y - elbow.y) * round / across),
-            control: elbow)
+        path.addLine(to: elbow)
         path.addLine(to: end)
         return path
     }

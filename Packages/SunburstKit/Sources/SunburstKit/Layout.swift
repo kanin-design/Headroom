@@ -84,7 +84,7 @@ public struct RingLayout: Sendable {
         marked: Marker? = nil
     ) -> RingLayout {
         let plan = LevelPlan(tree: tree, focus: focus, parts: parts)
-        let lists = ChildLists()
+        let lists = ChildLists(before: parts.rings.before)
         let style = parts.rings.sizes.style
         let fill = measure(tree: tree, focus: focus, parts: parts, plan: plan, lists: lists)
         let reach = fill.prefix { $0 > 0 && $0 >= style.leastFill }.count
@@ -109,7 +109,9 @@ public struct RingLayout: Sendable {
     /// making the picture. With fewer rings, every ring sits further out, so each goes at least as far around then as here.
     @inlinable
     public static func fill<T: SunburstTree>(tree: T, focus: UInt32, parts: SunburstParts = SunburstParts()) -> [Float] {
-        measure(tree: tree, focus: focus, parts: parts, plan: LevelPlan(tree: tree, focus: focus, parts: parts), lists: ChildLists())
+        measure(
+            tree: tree, focus: focus, parts: parts, plan: LevelPlan(tree: tree, focus: focus, parts: parts),
+            lists: ChildLists(before: parts.rings.before))
     }
 
     @inlinable

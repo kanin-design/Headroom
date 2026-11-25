@@ -24,8 +24,10 @@ struct CopiesPanel: View {
                     .padding(.horizontal, Kit.rowInset)
                     .padding(.top, 3)
                     .padding(.bottom, 9)
-                ForEach(sets.prefix(Self.most)) { set in
-                    CopySetRow(model: model, group: set, scale: scale)
+                let shown = Array(sets.prefix(Self.most))
+                let forms = ListNames.forms(shown.map(\.title))
+                ForEach(Array(shown.enumerated()), id: \.element.id) { index, set in
+                    CopySetRow(model: model, group: set, scale: scale, titles: forms[index])
                 }
                 if sets.count > Self.most {
                     MoreLine(text: "\((sets.count - Self.most).formatted()) more, smaller")
@@ -132,6 +134,8 @@ private struct CopySetRow: View {
     let model: AppModel
     let group: CopyGroup
     let scale: UInt64
+    /// Shorter ways to write its title, worked out among the list's.
+    let titles: [String]
     @State private var isHovered = false
 
     private var isOpen: Bool { model.copiesOpen.contains(group.id) }
@@ -149,7 +153,7 @@ private struct CopySetRow: View {
     }
 
     private func head(_ state: TickState, _ colour: Color, _ isLit: Bool) -> some View {
-        BoxHead(title: group.title) {
+        BoxHead(title: group.title, titles: titles) {
             TickMark(state: state, color: colour, size: 20, isLit: isLit)
         } value: {
             BoxValue(text: formatBytes(group.back), isLarge: true)
@@ -346,13 +350,15 @@ private struct CopyLine: View {
 private struct FoldedRow: View {
     let model: AppModel
     let group: CopyGroup
+    /// Shorter ways to write its title, worked out among the list's.
+    let titles: [String]
     let subtitle: String
     let value: String
     let open: () -> Void
 
     var body: some View {
         ListRow(
-            title: group.title, detail: subtitle.isEmpty ? nil : subtitle, trailing: value, isLit: model.litCopyGroup.isLit(group.id),
+            title: group.title, titles: titles, detail: subtitle.isEmpty ? nil : subtitle, trailing: value, isLit: model.litCopyGroup.isLit(group.id),
             markWidth: ListDot.size, onHover: { inside in model.pointAtCopyGroup(inside ? group : nil) }, onTap: open,
             mark: { ListDot(colour: group.colour.swiftUI) })
     }
@@ -375,9 +381,11 @@ private struct Folded: View {
                 if now { model.copiesOpen.insert(id) } else { model.copiesOpen.remove(id) }
             })
         Fold(title: title, count: groups.count.formatted(), trailing: total.map(formatBytes), isOpen: isOpen) {
+            let shown = Array(groups.prefix(80))
+            let forms = ListNames.forms(shown.map(\.title))
             LazyVStack(spacing: 0) {
-                ForEach(groups.prefix(80)) { group in
-                    FoldedRow(model: model, group: group, subtitle: subtitle(group), value: value(group)) { open(group) }
+                ForEach(Array(shown.enumerated()), id: \.element.id) { index, group in
+                    FoldedRow(model: model, group: group, titles: forms[index], subtitle: subtitle(group), value: value(group)) { open(group) }
                 }
             }
             .padding(.leading, Kit.Space.regular)

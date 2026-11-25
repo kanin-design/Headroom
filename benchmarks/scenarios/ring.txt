@@ -1,0 +1,13 @@
+size 1400 900 40 40
+float
+scanned
+wait 3
+pacing start
+sweep ring 4
+pacing sweep
+memory moving
+wait 2
+memory still
+sweep ring 1
+gpucost
+quit

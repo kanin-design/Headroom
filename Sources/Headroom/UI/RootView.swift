@@ -39,16 +39,8 @@ struct RootView: View {
         .toolbar(removing: .title)
         .toolbar { MainToolbar(model: model) }
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
-        .searchable(text: $model.searchText, isPresented: $model.searchActive, placement: .toolbar, prompt: "Search")
-        .onChange(of: model.searchText) { _, text in
-            model.runSearch()
-            // What's found is listed in the inspector.
-            if !text.isEmpty { model.showPanel(true) }
-        }
-        // Done searching: the keyboard goes back to the map, so Esc and Space work on it again.
-        .onChange(of: model.searchActive) { _, active in
-            if !active { model.mapView?.window?.makeFirstResponder(model.mapView) }
-        }
+        // The search field, on an empty view of its own: see `SearchField`.
+        .background { Color.clear.modifier(SearchField(model: model)) }
         .inspector(isPresented: Binding(get: { model.panelOpen }, set: { model.showPanel($0) })) {
             SidePanel(model: model)
                 .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { _, width in model.noteInspectorWidth(width) }
@@ -102,6 +94,29 @@ struct RootView: View {
     }
 }
 
+/// The toolbar's search field, and what typing in it does. It goes on an empty view behind the window's, not on the
+/// window's own: SwiftUI keeps a search's state in the environment of everything under the field, so on the whole window
+/// each key made the toolbar's buttons again, laid the toolbar out, and updated the map, the middle and the path bar.
+/// And it's a modifier of its own because whatever reads the search text is worked out again on every key: here that's
+/// this alone, not `RootView`. The field is the same one, in the same place in the toolbar.
+private struct SearchField: ViewModifier {
+    @Bindable var model: AppModel
+
+    func body(content: Content) -> some View {
+        content
+            .searchable(text: $model.searchText, isPresented: $model.searchActive, placement: .toolbar, prompt: "Search")
+            .onChange(of: model.searchText) { _, text in
+                model.runSearch(typed: true)
+                // What's found is listed in the inspector.
+                if !text.isEmpty { model.showPanel(true) }
+            }
+            // Done searching: the keyboard goes back to the map, so Esc and Space work on it again.
+            .onChange(of: model.searchActive) { _, active in
+                if !active { model.mapView?.window?.makeFirstResponder(model.mapView) }
+            }
+    }
+}
+
 // MARK: Top
 
 /// Back and forward at the start of the toolbar, the three views in the middle, and Scan Again at the end, before the search
@@ -137,7 +152,9 @@ private struct MainToolbar: ToolbarContent {
         ToolbarItem(placement: .principal) {
             LensPicker(model: model, lenses: Lens.actions, name: "Mode")
         }
-        ToolbarItem(placement: .primaryAction) {
+        // How a folder's contents are ordered, as the Finder's toolbar offers it, beside Scan Again.
+        ToolbarItemGroup(placement: .primaryAction) {
+            SortMenu(model: model)
             Button {
                 model.scan(hurry: true)
             } label: {
@@ -146,6 +163,23 @@ private struct MainToolbar: ToolbarContent {
             .disabled(model.scanIsHurrying)
             .help("Rescan everything at full speed")
         }
+    }
+}
+
+/// Sort By: what's in a folder by name or biggest first, on the ring and in the inspector's lists.
+struct SortMenu: View {
+    let model: AppModel
+
+    var body: some View {
+        Menu {
+            Picker("Sort By", selection: Binding(get: { model.sortBy }, set: { model.sortBy = $0 })) {
+                ForEach(SortBy.allCases, id: \.self) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.inline)
+        } label: {
+            Label("Sort By", systemImage: "arrow.up.arrow.down")
+        }
+        .help("Sort by name or size")
     }
 }
 

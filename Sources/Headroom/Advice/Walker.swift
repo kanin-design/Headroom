@@ -42,25 +42,36 @@ enum Walker {
     /// Beyond this many threads the disk can't give any more.
     private static let threads = min(ProcessInfo.processInfo.activeProcessorCount, 6)
 
-    static func look(at path: String, limit: Int) -> Look {
-        var total = Look()
-        var info = stat()
-        guard lstat(path, &info) == 0 else { return total }
-        total.seen = 1
-        total.newest = info.st_mtimespec.tv_sec
-        switch info.st_mode & S_IFMT {
-        case S_IFDIR:
-            let pool = Pool(path, limit: limit)
-            DispatchQueue.concurrentPerform(iterations: threads) { _ in pool.work() }
-            total.add(pool.total)
-        case S_IFREG:
-            total.size = UInt64(info.st_size)
-            total.largestFile = total.size
-            if info.st_nlink > 1 { total.linkedBytes = UInt64(info.st_blocks) * 512 }
-        default:
-            break
+    static func look(at path: String, limit: Int) -> Look { looks(at: [path], limit: limit)[0] }
+
+    /// Many looks at once, each with its own limit and its own answer: the same threads read them all, taking folders
+    /// from whichever still has some. One after another, each look started its threads again and then mostly waited,
+    /// as a small folder has little to read at any one time.
+    static func looks(at paths: [String], limit: Int) -> [Look] {
+        var totals = [Look](repeating: Look(), count: paths.count)
+        var folders: [(path: String, root: Int)] = []
+        for (root, path) in paths.enumerated() {
+            var info = stat()
+            guard lstat(path, &info) == 0 else { continue }
+            totals[root].seen = 1
+            totals[root].newest = info.st_mtimespec.tv_sec
+            switch info.st_mode & S_IFMT {
+            case S_IFDIR:
+                folders.append((path, root))
+            case S_IFREG:
+                totals[root].size = UInt64(info.st_size)
+                totals[root].largestFile = totals[root].size
+                if info.st_nlink > 1 { totals[root].linkedBytes = UInt64(info.st_blocks) * 512 }
+            default:
+                break
+            }
         }
-        return total
+        guard !folders.isEmpty else { return totals }
+        // The first folders read are the ones asked about, in the order they were asked.
+        let pool = Pool(folders.reversed(), roots: paths.count, limit: limit)
+        DispatchQueue.concurrentPerform(iterations: threads) { _ in pool.work() }
+        for root in 0..<paths.count { totals[root].add(pool.totals[root]) }
+        return totals
     }
 
     // MARK: Remembering
@@ -84,19 +95,46 @@ enum Walker {
         return fresh
     }
 
+    /// The same for many at once: what's known and new enough is used, and the rest are read together.
+    static func recentLooks(at paths: [String], limit: Int, maxAge: TimeInterval) -> [Look] {
+        var out = [Look?](repeating: nil, count: paths.count)
+        memoLock.lock()
+        for (i, path) in paths.enumerated() {
+            if let known = memo[path], known.limit >= limit || known.look.complete, -known.at.timeIntervalSinceNow < maxAge { out[i] = known.look }
+        }
+        memoLock.unlock()
+        let unknown = paths.indices.filter { out[$0] == nil }
+        guard !unknown.isEmpty else { return out.map { $0 ?? Look() } }
+        let fresh = looks(at: unknown.map { paths[$0] }, limit: limit)
+        let now = Date()
+        memoLock.lock()
+        if memo.count > 5000 { memo.removeAll() }
+        for (i, look) in zip(unknown, fresh) {
+            memo[paths[i]] = (look, now, limit)
+            out[i] = look
+        }
+        memoLock.unlock()
+        return out.map { $0 ?? Look() }
+    }
+
     // MARK: Reading
 
     /// Threads taking folders from one list. A thread only waits when the list is empty and another one may still add to it.
+    /// Each folder belongs to one of the looks under way, and counts towards that look alone.
     private final class Pool: @unchecked Sendable {
         private let condition = NSCondition()
-        private var folders: [String]
+        private var folders: [(path: String, root: Int)]
         private var reading = 0
         private let limit: Int
-        private(set) var total = Look()
+        private(set) var totals: [Look]
+        /// Looks that reached their limit: nothing more of theirs is read.
+        private var stopped: [Bool]
 
-        init(_ path: String, limit: Int) {
-            folders = [path]
+        init(_ folders: [(path: String, root: Int)], roots: Int, limit: Int) {
+            self.folders = folders
             self.limit = limit
+            totals = [Look](repeating: Look(), count: roots)
+            stopped = [Bool](repeating: false, count: roots)
         }
 
         func work() {
@@ -110,12 +148,12 @@ enum Walker {
             var found: [String] = []
             while let folder = next() {
                 found.removeAll(keepingCapacity: true)
-                let look = read(folder, &list, buffer, size, &found)
-                finished(look, found)
+                let look = read(folder.path, &list, buffer, size, &found)
+                finished(look, found, of: folder.root)
             }
         }
 
-        private func next() -> String? {
+        private func next() -> (path: String, root: Int)? {
             condition.lock()
             defer { condition.unlock() }
             while folders.isEmpty && reading > 0 { condition.wait() }
@@ -124,14 +162,19 @@ enum Walker {
             return folder
         }
 
-        private func finished(_ look: Look, _ found: [String]) {
+        private func finished(_ look: Look, _ found: [String], of root: Int) {
             condition.lock()
-            total.add(look)
-            if total.seen < limit {
-                folders.append(contentsOf: found)
+            totals[root].add(look)
+            if stopped[root] {
+                if !found.isEmpty { totals[root].complete = false }
+            } else if totals[root].seen < limit {
+                for path in found { folders.append((path, root)) }
             } else {
-                if !found.isEmpty || !folders.isEmpty { total.complete = false }
-                folders.removeAll()
+                // At its limit: what's still waiting to be read for this look is let go, and the others carry on.
+                stopped[root] = true
+                let before = folders.count
+                folders.removeAll { $0.root == root }
+                if !found.isEmpty || folders.count != before { totals[root].complete = false }
             }
             reading -= 1
             condition.broadcast()

@@ -1,0 +1,14 @@
+size 1400 900 40 40
+scanned
+wait 3
+search md
+found
+search zz
+found
+search readme
+found
+search pa
+found
+search blå
+found
+quit

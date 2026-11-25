@@ -5,6 +5,9 @@ import SwiftUI
 /// top of a list, small inside an open box. Each says what fills it and what pointing at it and clicking it do.
 struct BoxHead<Mark: View, Value: View, Line: View, Accessory: View, Bar: View>: View {
     let title: String
+    /// Shorter ways to write the title, longest first, after the title itself, worked out among the list's titles
+    /// (`ListNames`): the longest that fits is used.
+    var titles: [String] = []
     /// An app's icon before its name, by the app's path.
     var app: String? = nil
     var isLarge = true
@@ -46,11 +49,8 @@ struct BoxHead<Mark: View, Value: View, Line: View, Accessory: View, Bar: View>:
     }
 
     private var titleText: some View {
-        Text(title)
-            .font(isLarge ? Kit.Font.headline : Kit.Font.name)
+        FittedText(forms: titles.count > 1 ? titles : [title], font: isLarge ? FittedText.headline : FittedText.title)
             .foregroundStyle(Kit.Text.primary)
-            .lineLimit(1)
-            .truncationMode(.middle)
     }
 }
 

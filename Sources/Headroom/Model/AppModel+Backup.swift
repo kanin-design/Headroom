@@ -21,7 +21,8 @@ extension AppModel {
     // MARK: Drives
 
     func refreshDrives() {
-        var now = DriveInfo.connected()
+        // At launch they were listed while the window was being made.
+        var now = LaunchReads.takeConnectedDrives() ?? DriveInfo.connected()
         // A location chosen on a drive the Finder doesn't list, such as a server's share mounted out of sight, is connected too
         // while it's mounted.
         for place in backup.usedLocations where !now.contains(where: { $0.isSame(as: place.drive) }) {
@@ -396,7 +397,7 @@ extension AppModel {
     func toggleBackupFolder(_ node: UInt32) {
         guard let tree, Int(node) < tree.count else { return }
         if let pair, pair.tree === tree, pair.isOnDrive(node) {
-            let files = pair.driveRel.keys.filter { tree.isInside($0, node) }.compactMap { pair.driveFile($0) }
+            let files = pair.driveFiles.filter { tree.isInside($0, node) }.compactMap { pair.driveFile($0) }
             guard !files.isEmpty else { return }
             let picked = Set(driveSelection.map(\.path))
             if files.allSatisfy({ picked.contains($0.path) }) {
@@ -414,9 +415,9 @@ extension AppModel {
         // On this Mac: the files in it big enough for Backup. What else it won't take, it says no to.
         var paths: [String] = []
         if let pair, pair.tree === tree {
-            for (file, rel) in pair.macRel
+            for file in pair.macFiles
             where tree.isInside(file, node) && max(tree.nodes[Int(file)].bytes, tree.nodes[Int(file)].aliasBytes) >= BackupState.smallest {
-                paths.append(pair.onMac(rel))
+                if let rel = pair.rel(of: file) { paths.append(pair.onMac(rel)) }
             }
         } else {
             let start = tree.dfsIn[Int(node)], size = tree.dfsSize[Int(node)]
@@ -727,9 +728,7 @@ extension AppModel {
         }
         // And on the drive's half, what's picked there.
         if let pair, showsBoth {
-            nodes += driveSelection.compactMap { file in
-                file.path.hasPrefix(pair.drivePath + "/") ? pair.driveNodes[String(file.path.dropFirst(pair.drivePath.count + 1))] : nil
-            }
+            nodes += driveSelection.compactMap { pair.driveNode(path: $0.path) }
         }
         guard !nodes.isEmpty else { return { _ in false } }
         let set = NodeSet(nodes, in: tree)

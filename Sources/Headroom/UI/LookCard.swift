@@ -178,8 +178,9 @@ private struct LookFolder: View {
     var body: some View {
         if let tree = model.tree {
             let rows = model.lookRows(of: node, in: tree)
-            let top = Array(rows.prefix(300))
-            let biggest = Double(max(top.first.map { tree.totals[Int($0)] } ?? 1, 1))
+            // The biggest, in the order the ring has them.
+            let top = node == 0 ? Array(rows.prefix(300)) : tree.ordered(Array(rows.prefix(300)), by: model.sortBy)
+            let biggest = Double(max(rows.first.map { tree.totals[Int($0)] } ?? 1, 1))
             let own = node == 0 ? 0 : tree.nodes[Int(RingLayout.chainTail(tree: tree, node))].bytes
             let pictures = model.lookMedia(of: node)
             ScrollViewReader { proxy in
@@ -188,11 +189,14 @@ private struct LookFolder: View {
                         if !pictures.isEmpty {
                             LookPictures(model: model, files: pictures, height: pictureHeight)
                         }
+                        // Names cut as the ring cuts them, among this folder's (DESIGN.md, Names).
+                        let forms = ListNames.forms(top.map { model.displayName($0) }, around: [tree.name(node)])
                         LazyVStack(spacing: 0) {
                             ForEach(Array(top.enumerated()), id: \.element) { index, row in
                                 let colour = model.listColor(row, in: tree)
                                 ListRow(
-                                    title: model.displayName(row), trailing: tree.sizeText(row), isLit: model.lookCursor == index,
+                                    title: model.displayName(row), titles: forms[index], trailing: tree.sizeText(row),
+                                    isLit: model.lookCursor == index,
                                     markWidth: ListDot.size, share: (Double(tree.totals[Int(row)]) / biggest, colour),
                                     onHover: { inside in model.highlight(node: inside ? row : nil) },
                                     onTap: { model.showInLook(row) }

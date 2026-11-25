@@ -21,6 +21,21 @@ final class BackupTests: XCTestCase {
         try? FileManager.default.removeItem(atPath: folder)
     }
 
+    /// Both disks are put together by the number of each path, worked out a name at a time: it has to be the number of
+    /// the path written out, which is how a thing is looked up afterwards.
+    func testAPathsNumberWorkedOutByNameIsThatOfThePathWrittenOut() {
+        let folders = ["", "Films", "Films/Season 01", "blåbær/ø", "a//b"], names = ["a.mkv", "Season 01", "ø.txt", "", "x/y"]
+        for folder in folders {
+            let inFolder = RuleBook.PathHash(folder)
+            XCTAssertEqual(inFolder.key, RuleBook.hash(folder), "the folder itself: '\(folder)'")
+            for name in names {
+                let written = folder.isEmpty ? name : folder + "/" + name
+                XCTAssertEqual(inFolder.adding(name).key, RuleBook.hash(written), "'\(name)' in '\(folder)'")
+                XCTAssertEqual(inFolder.adding(name).adding("deeper").key, RuleBook.hash(written.isEmpty ? "deeper" : written + "/deeper"))
+            }
+        }
+    }
+
     private func file(_ path: String, bytes: Int, seed: UInt8 = 7) throws -> String {
         var data = Data(count: bytes)
         data.withUnsafeMutableBytes { raw in

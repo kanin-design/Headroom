@@ -96,12 +96,17 @@ final class ChildLists {
 
     @usableFromInline var buffer: [UInt32] = []
     @usableFromInline var known: [UInt64: Visible] = [:]
+    /// The order of what's in a folder, if not biggest first (`SunburstParts.Rings.before`).
+    @usableFromInline let before: ((UInt32, UInt32) -> Bool)?
     /// A quick test of whether a node might be in `known`, so the many small folders never pay for a dictionary lookup.
     @usableFromInline var maybeKnown = [UInt64](repeating: 0, count: 1024)
     /// Lists this long or longer are kept for the second pass; shorter ones cost less to make again than to keep.
     @usableFromInline static let worthKeeping = 24
 
-    @inlinable init() { buffer.reserveCapacity(1 << 14) }
+    @inlinable init(before: ((UInt32, UInt32) -> Bool)? = nil) {
+        self.before = before
+        buffer.reserveCapacity(1 << 14)
+    }
 
     @inlinable @inline(__always)
     func bit(_ node: UInt32) -> (word: Int, mask: UInt64) {
@@ -216,11 +221,15 @@ final class ChildLists {
                 buffer.replaceSubrange(start..., with: kids)
                 descending = true
             }
+            // Kept biggest first even in another order: what's drawn is found from the front, and only that is put in the
+            // order (`RingBuilder.place`). Cut by group, though, the groups come first.
             if byGroup, parent != 0 {
-                // By the tree's groups first, then biggest first. Things of the same size keep the order they're listed in.
+                // By the tree's groups first, then in the order asked for, or biggest first. Things of the same size keep the
+                // order they're listed in.
                 let sorted = buffer[start...].enumerated().sorted { x, y in
                     let rx = tree.group(of: x.element) ?? .max, ry = tree.group(of: y.element) ?? .max
                     if rx != ry { return rx < ry }
+                    if let before { return before(x.element, y.element) }
                     let sx = total(x.element), sy = total(y.element)
                     return sx != sy ? sx > sy : x.offset < y.offset
                 }
@@ -361,6 +370,24 @@ struct RingBuilder<Tree: SunburstTree> {
         // Biggest first, nothing kept however thin: the first thing too small to draw means all the rest are too.
         let canStop = visible.descending && only == nil && rings.keep == nil && !special
         let keep = rings.keep
+        // In another order than biggest first: in a list that is biggest first, what's big enough to draw is its front, and
+        // only that is put in the order, for this folder's pieces; the rest go into "smaller items" whatever their order.
+        // Any other list is put in the order whole. Either is put back after, as the next picture finds it.
+        var putBack: [UInt32] = []
+        if let before = rings.before, only == nil, !special, !isSplit, !measuring {
+            var drawn = kids.upperBound
+            if canStop {
+                drawn = kids.lowerBound
+                while drawn < kids.upperBound, Float(total(lists.buffer[drawn])) * perByte * midArc >= RingLayout.minimumArc {
+                    drawn += 1
+                }
+            }
+            if drawn - kids.lowerBound > 1 {
+                putBack = Array(lists.buffer[kids.lowerBound..<drawn])
+                lists.buffer[kids.lowerBound..<drawn].sort(by: before)
+            }
+        }
+        defer { if !putBack.isEmpty { lists.buffer.replaceSubrange(kids.lowerBound..<kids.lowerBound + putBack.count, with: putBack) } }
         var angle = a0
         var smallerBytes: UInt64 = 0
         var smallerCount: Int32 = only == nil ? 0 : restCount

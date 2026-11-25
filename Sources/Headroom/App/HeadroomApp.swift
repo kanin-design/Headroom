@@ -76,6 +76,20 @@ private struct SendToTrashCommand: View {
 
 /// How many rings the map draws, and how wide each is. More rings reach deeper into folders. The tick is on how many the
 /// picture has now, and numbers it couldn't fill are off.
+/// View › Sort By, with the Finder's keys for the same orders.
+private struct SortCommand: View {
+    let model = AppModel.shared
+
+    var body: some View {
+        Menu("Sort By") {
+            Toggle("Name", isOn: Binding(get: { model.sortBy == .name }, set: { _ in model.sortBy = .name }))
+                .keyboardShortcut("1", modifiers: [.control, .option, .command])
+            Toggle("Size", isOn: Binding(get: { model.sortBy == .size }, set: { _ in model.sortBy = .size }))
+                .keyboardShortcut("7", modifiers: [.control, .option, .command])
+        }
+    }
+}
+
 private struct RingsCommand: View {
     let model = AppModel.shared
 
@@ -266,6 +280,7 @@ struct HeadroomApp: App {
                 EnclosingFolderCommand()
                 Button("Back to the Whole Disk") { AppModel.shared.go(to: 0) }
                     .keyboardShortcut(.upArrow, modifiers: [.command, .shift])
+                SortCommand()
                 RingsCommand()
                 PaletteCommand()
                 GlowCommand()

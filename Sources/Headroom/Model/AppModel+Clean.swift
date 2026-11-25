@@ -309,7 +309,7 @@ extension AppModel {
         if let moved {
             // The card moves on to what's next, so that you can go through a whole row of things.
             let looking = look?.node == node ? look : nil
-            let next = looking == nil ? nil : LookContents.next(after: node, in: tree)
+            let next = looking == nil ? nil : LookContents.next(after: node, in: tree, by: sortBy)
             didMove(path, to: moved.place, identity: moved.identity, item: item, trueBytes: share, tree: tree)
             putOnRecord(takePending())
             if plan.covers(path) { plan.takeBack(path) }

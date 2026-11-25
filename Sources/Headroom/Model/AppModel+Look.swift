@@ -42,14 +42,14 @@ enum LookContents {
     }
 
     /// The things next to this one, in the order the ring has them.
-    static func siblings(of node: UInt32, in tree: DiskTree) -> [UInt32] {
+    static func siblings(of node: UInt32, in tree: DiskTree, by order: SortBy) -> [UInt32] {
         guard node != 0 else { return [] }
-        return biggestFirst(tree.children(tree.nodes[Int(node)].parent), in: tree)
+        return tree.ordered(biggestFirst(tree.children(tree.nodes[Int(node)].parent), in: tree), by: order)
     }
 
     /// What to show once this has gone: the next one along, then the one before, then what held it.
-    static func next(after node: UInt32, in tree: DiskTree) -> UInt32? {
-        let row = siblings(of: node, in: tree)
+    static func next(after node: UInt32, in tree: DiskTree, by order: SortBy) -> UInt32? {
+        let row = siblings(of: node, in: tree, by: order)
         if let at = row.firstIndex(of: node) {
             if at + 1 < row.count { return row[at + 1] }
             if at > 0 { return row[at - 1] }
@@ -201,7 +201,7 @@ extension AppModel {
 
     private func stepLook(by step: Int) {
         guard let current = look, let tree else { return }
-        let row = LookContents.siblings(of: current.node, in: tree)
+        let row = LookContents.siblings(of: current.node, in: tree, by: sortBy)
         guard let at = row.firstIndex(of: current.node), row.indices.contains(at + step) else { return }
         showInLook(row[at + step], steppingIn: false)
     }

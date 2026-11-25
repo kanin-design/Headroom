@@ -30,7 +30,8 @@ import SwiftUI
 ///     meter start, meter name  how busy the main thread was between the two, and its longest stall
 ///     pacing start, pacing name  whether every frame of the ring reached the screen on time between the two, what each
 ///                              cost, and how busy the main thread was
-///     sweep ring 5             the pointer travelling over the ring or the inspector, without your real one moving
+///     gpucost                  what a frame of the ring costs the GPU, drawn back to back at the screen's size
+///     sweep ring 5            the pointer travelling over the ring or the inspector, without your real one moving
 ///     back, forward            the arrows in the toolbar
 ///     select ~/some/file       as if it had been clicked: the inspector shows it
 ///     hover ~/some/folder
@@ -110,6 +111,8 @@ import SwiftUI
 ///     carddrag x y dx dy       a press on the card's window that drags the pointer this far
 ///     cardframe x y w h        as if the card's window had been dragged and sized there
 ///     keydown 49 [cmd opt ...] a key as the app gets it, by key code. 49 is space, and keydown 123 cmd is ⌘←
+///     type text                each letter as a key to whatever has the keyboard in the window, such as the search field
+///                              after ⌘F. Nothing after it: says what has the keyboard
 ///     volume /Volumes/Name     switch to another disk
 ///     shot file.png
 ///     clock, at 3.25           start a director's clock; wait until 3.25 s after it (late steps run at once, so nothing drifts)
@@ -151,7 +154,10 @@ enum ScriptRunner {
     }
 
     /// How evenly the ring's frames reached the screen. A frame that came a refresh or more late is one you'd see as a hitch.
-    private static func pacing(_ notes: [RingDrawer.FrameNote], interval: Double, since start: CFTimeInterval, label: String) -> String {
+    private static func pacing(_ all: [RingDrawer.FrameNote], interval: Double, since start: CFTimeInterval, label: String) -> String {
+        // The last frames drawn may still be on their way to the screen: only those meant for it 100 ms ago or earlier count.
+        let cutoff = CACurrentMediaTime() - 0.1
+        let notes = Array(all.prefix { $0.target <= cutoff })
         func percentile(_ values: [Double], _ p: Double) -> Double {
             let sorted = values.sorted()
             return sorted.isEmpty ? 0 : sorted[Int(Double(sorted.count - 1) * p)]
@@ -174,14 +180,24 @@ enum ScriptRunner {
             if abs(notes[i].dt - gap) > interval * 0.5 { uneven += 1 }
         }
         let runs = notes.filter(\.restarted).count
-        let unseen = notes.filter { $0.presented == 0 }.count
-        let cpu = notes.map(\.cpu), gpu = notes.map(\.gpu).filter { $0 > 0 }
+        let unseenAt = notes.indices.filter { notes[$0].presented == 0 }
+        let unseen = unseenAt.count
+        // A run's frames drawn before its first one reached the screen leave no gap between frames that did.
+        var atStart = 0, waiting = true
+        for note in notes {
+            if note.restarted { waiting = true }
+            if note.presented > 0 { waiting = false } else if waiting { atStart += 1 }
+        }
+        let cpu = notes.map(\.cpu), wait = notes.map(\.wait), gpu = notes.map(\.gpu).filter { $0 > 0 }
         return String(
             format:
-                "pacing %@: %d frames in %d runs, %d hitches (%d refreshes missed), longest gap %.1f ms, %d never shown, %d uneven; each frame cpu %.2f/%.2f/%.2f ms, gpu %.2f/%.2f/%.2f ms (median/95%%/most)",
-            label as NSString, notes.count, runs, hitches, missed, longest * 1000, unseen, uneven,
-            percentile(cpu, 0.5), percentile(cpu, 0.95), cpu.max() ?? 0, percentile(gpu, 0.5), percentile(gpu, 0.95), gpu.max() ?? 0)
+                "pacing %@: %d frames in %d runs, %d hitches (%d refreshes missed), longest gap %.1f ms, %d never shown (%d at a run's start), %d uneven; each frame cpu %.2f/%.2f/%.2f ms, drawable wait %.2f/%.2f/%.2f ms, gpu %.2f/%.2f/%.2f ms (median/95%%/most)",
+            label as NSString, notes.count, runs, hitches, missed, longest * 1000, unseen, atStart, uneven,
+            percentile(cpu, 0.5), percentile(cpu, 0.95), cpu.max() ?? 0, percentile(wait, 0.5), percentile(wait, 0.95),
+            wait.max() ?? 0, percentile(gpu, 0.5), percentile(gpu, 0.95), gpu.max() ?? 0)
             + (when.isEmpty ? "" : "\n  hitches at " + when.joined(separator: ", "))
+            + (unseenAt.isEmpty || unseen == notes.count
+                ? "" : "\n  never shown: frames " + unseenAt.prefix(20).map(String.init).joined(separator: ", ") + " of \(notes.count)")
             + "\n  runs start at "
             + notes.indices.filter { notes[$0].restarted }.map { String(format: "%.0f ms", (notes[$0].target - start) * 1000) }.joined(
                 separator: ", ")
@@ -206,7 +222,7 @@ enum ScriptRunner {
     /// Every step there is, and the part that does it.
     private static let groupOfStep: [String: StepGroup] = [
         "wait": .timing, "clock": .timing, "at": .timing, "mark": .timing, "scanned": .timing, "quit": .timing,
-        "report": .timing,
+        "report": .timing, "launch": .timing, "rescan": .timing, "cpu": .timing,
         "copies": .copies, "copyset": .copies, "copyrow": .copies, "copyopen": .copies, "copyopenrow": .copies, "copyline": .copies,
         "copykeep": .copies, "copylink": .copies, "copyact": .copies, "filekind": .copies, "copyhelp": .copies,
         "copytick": .copies, "benchcopy": .copies,
@@ -215,17 +231,18 @@ enum ScriptRunner {
         "back": .map, "forward": .map,
         "rings": .map, "changeinfo": .map, "ringbench": .map, "piece": .map, "pointer": .map, "labelpoint": .map,
         "labelleave": .map, "panelhover": .map, "ringpoint": .map, "ringat": .map, "ringclick": .map, "labelclick": .map, "window": .map,
-        "search": .map, "found": .map, "smallfiles": .map, "volume": .map, "sizes": .map,
+        "search": .map, "found": .map, "smallfiles": .map, "sort": .map, "volume": .map, "sizes": .map,
         "titlemenu": .menus, "menu": .menus, "action": .menus, "clipboard": .menus, "menubar": .menus, "key": .menus,
-        "menuitem": .menus, "copyroute": .menus, "keydown": .menus, "keys": .menus,
+        "menuitem": .menus, "copyroute": .menus, "keydown": .menus, "type": .menus, "keys": .menus,
         "tick": .plan, "plan": .plan, "recommended": .plan, "boxes": .plan, "box": .plan, "point": .plan, "pointat": .plan,
         "open": .plan, "review": .plan, "checked": .plan, "clean": .plan, "empty": .plan, "undo": .plan,
         "othercopies": .plan, "refreshcheck": .plan, "othercopy": .plan, "moveplan": .plan, "tryagain": .plan,
         "uninstallplan": .plan, "keep": .plan, "after": .plan, "expand": .plan, "busy": .plan, "cleananyway": .plan,
         "button": .plan,
-        "speed": .measuring, "meter": .measuring, "pacing": .measuring, "touch": .measuring, "sweep": .measuring,
+        "speed": .measuring, "meter": .measuring, "pacing": .measuring, "gpucost": .measuring, "touch": .measuring, "sweep": .measuring,
         "bench": .measuring, "memory": .measuring, "footprint": .measuring, "gpu": .measuring, "headroom": .measuring,
-        "frames": .measuring, "layers": .measuring, "names": .measuring, "labels": .measuring, "memoryshort": .measuring, "palette": .measuring,
+        "frames": .measuring, "layers": .measuring, "names": .measuring, "labels": .measuring, "memoryshort": .measuring,
+        "readypair": .measuring, "palette": .measuring,
         "glow": .measuring, "exporttree": .measuring, "middle": .measuring, "stretches": .measuring, "state": .measuring, "pointon": .measuring,
         "clickon": .measuring, "clickplace": .measuring, "mapkey": .measuring, "menufor": .measuring, "leaks": .measuring, "format": .measuring,
         "panel": .window, "scrolls": .window, "voiceover": .window, "size": .window, "jiggle": .window, "collide": .window,
@@ -376,7 +393,8 @@ enum ScriptRunner {
             }
         case "drivepick":
             // drivepick name: picks a file on the drive's half, as a click on it does.
-            guard let pair = model.pair, let node = pair.driveRel.first(where: { $0.value == argument || $0.value.hasSuffix("/" + argument) })?.key
+            guard let pair = model.pair,
+                let node = pair.driveFiles.first(where: { pair.rel(of: $0).map { $0 == argument || $0.hasSuffix("/" + argument) } ?? false })
             else {
                 print("drivepick \(argument): not on the drive's half"); return
             }
@@ -501,6 +519,64 @@ enum ScriptRunner {
                 try? await Task.sleep(for: .milliseconds(100))
             }
             try? await Task.sleep(for: .milliseconds(400))
+        case "launch":
+            // How the first look came together: when the scan began, counted from when the app started, then from that
+            // moment the first picture with the disk's numbers, when half the disk's used bytes were placed, how much was
+            // placed one second in, and when everything was read. With a saved scan, the first picture is that scan and the
+            // rest is its refresh. For the benchmarks: run it first. A second line says when the scan was really started,
+            // which is before this step can first look.
+            let since = processStarted()
+            var began: Double?, first: Double?, half: Double?, atOne: Double?
+            var now = Date().timeIntervalSince(since)
+            while now < 180 {
+                now = Date().timeIntervalSince(since)
+                if began == nil, model.isScanning { began = now }
+                if let tree = model.tree {
+                    if first == nil { first = now }
+                    let used = Double(tree.totals[0] &- tree.totals[Int(tree.free)])
+                    let unread = tree.isPartial ? Double(tree.totals[Int(tree.hidden)]) : 0
+                    let placed = used > 0 ? 1 - unread / used : 0
+                    let scanning = now - (began ?? now)
+                    if half == nil, began != nil, placed >= 0.5 { half = scanning }
+                    if atOne == nil, began != nil, scanning >= 1 { atOne = placed }
+                }
+                if model.tree != nil, !model.isScanning, model.mapsOnTheirWay == 0 { break }
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+            let start = began ?? 0
+            print(
+                String(
+                    format:
+                        "launch scan began %.0f ms in, first picture %.0f ms in; from the scan's start: half placed %.2f s, placed at 1 s %.0f%%, everything read %.2f s",
+                    start * 1000, (first ?? -1) * 1000, half ?? -1, (atOne ?? 1) * 100, now - start))
+            // The scan began before this step first looked: steps only run once the window has been laid out. When it was
+            // really started, and the same times counted from then.
+            if let really = model.firstScanBegan.map({ $0.timeIntervalSince(since) }), let began {
+                let late = began - really
+                print(
+                    String(
+                        format:
+                            "launch really: the scan was started %.0f ms in, %.0f ms before this step first looked; from then: half placed %.2f s, everything read %.2f s",
+                        really * 1000, late * 1000, half.map { $0 + late } ?? -1, now - really))
+            }
+        case "rescan":
+            // ⌘R: everything read again at full power, timed to the new map being in place.
+            let began = ProcessInfo.processInfo.systemUptime
+            model.scan(hurry: true)
+            try? await Task.sleep(for: .milliseconds(100))
+            while model.isScanning || model.mapsOnTheirWay > 0 { try? await Task.sleep(for: .milliseconds(20)) }
+            print(String(format: "rescan %.2f s", ProcessInfo.processInfo.systemUptime - began))
+        case "cpu":
+            // cpu 5: how much of one core the app used over that many seconds, asked to do nothing.
+            guard let seconds = seconds(argument.isEmpty ? "5" : argument, for: "cpu") else { return }
+            func used() -> Double {
+                var u = rusage()
+                getrusage(RUSAGE_SELF, &u)
+                return Double(u.ru_utime.tv_sec + u.ru_stime.tv_sec) + Double(u.ru_utime.tv_usec + u.ru_stime.tv_usec) / 1e6
+            }
+            let before = used()
+            try? await Task.sleep(for: .seconds(seconds))
+            print(String(format: "cpu over %.0f s: %.2f%% of a core", seconds, (used() - before) / seconds * 100))
         case "mark":
             // mark name: a moment another program can wait for and line up with, on the clock every process shares.
             print(String(format: "mark %@ at %.4f", argument, ProcessInfo.processInfo.systemUptime))
@@ -867,18 +943,21 @@ enum ScriptRunner {
             guard let d = Int(argument), d != .min else { print("window \(argument): needs a number of days"); return }
             model.setChangeWindow(d == 0 ? .lastScan : d < 0 ? .untouched(-d) : .days(d))
         case "search":
+            // As typing does: searched once, among what the last search found when the text holds its text.
             model.searchActive = true
             model.searchText = argument
-            model.runSearch()
+            model.runSearch(typed: true)
         case "found":
-            // The small files are searched off the main thread: wait a moment for them.
+            // Searched off the main thread: wait for it.
             let started = CFAbsoluteTimeGetCurrent()
-            while model.smallFilesGap == nil, model.smallFound == nil, CFAbsoluteTimeGetCurrent() - started < 5 {
+            while model.isSearchRunning, CFAbsoluteTimeGetCurrent() - started < 5 {
                 try? await Task.sleep(for: .milliseconds(20))
             }
             try? await Task.sleep(for: .milliseconds(200))
             guard let tree = model.tree else { break }
-            print("found on the map: \(model.searchResults.count)" + (model.searchFolderName.map { " in \($0)" } ?? ""))
+            print(
+                "found on the map: \(model.searchResults.count)" + (model.searchFolderName.map { " in \($0)" } ?? "")
+                    + String(format: ", searched in %.1f ms", model.searchMilliseconds))
             for node in model.searchResults.prefix(5) {
                 let half = model.pair.map { $0.tree === tree ? ($0.isOnDrive(node) ? " · drive's half" : " · Mac's half") : "" } ?? ""
                 print("  \(tree.friendlyPath(node)) · \(formatBytes(tree.totals[Int(node)]))\(half)")
@@ -895,6 +974,10 @@ enum ScriptRunner {
             for file in found.top.prefix(5) {
                 print("  \(file.name) · \(DiskTree.friendly(file.folderPath)) · \(formatBytes(file.bytes))")
             }
+        case "sort":
+            // sort name, sort size: as View › Sort By does.
+            if let order = SortBy(rawValue: argument) { model.sortBy = order }
+            print("sort: \(model.sortBy.rawValue)")
         case "smallfiles":
             if argument == "on" || argument == "off" {
                 model.setSearchesSmallFiles(argument == "on")
@@ -1106,6 +1189,16 @@ enum ScriptRunner {
             )
         case "keys":
             for character in argument { model.handleScriptKey(character) }
+        case "type":
+            // Text typed into whatever has the keyboard in the window, a key at a time, given to the window alone.
+            guard let w = mainWindow else { return }
+            if argument.isEmpty {
+                print("type: the keyboard is with \(w.firstResponder.map { String(describing: type(of: $0)) } ?? "nothing")")
+                return
+            }
+            for character in argument {
+                if let event = keyDown(0, typing: String(character), flags: [], in: w) { w.sendEvent(event) }
+            }
         case "keydown":
             // A key as the app gets it, not the menu bar: keydown 49 is space, keydown 123 cmd is ⌘←.
             let words = argument.split(separator: " ")
@@ -1340,6 +1433,16 @@ enum ScriptRunner {
                     view.drawer.endNotes(), interval: mainWindow?.screen?.minimumRefreshInterval ?? 1.0 / 60, since: pacingStarted, label: argument))
             meter?.report(argument)
             meter = nil
+        case "gpucost":
+            // The ring as it is now, drawn back to back so the GPU runs at full clock: what a frame costs it. A frame's own
+            // GPU time in `pacing` is longer, because a GPU drawing one frame a refresh runs at a low clock.
+            guard let view = model.mapView else { print("gpucost: no map"); return }
+            let costs = view.drawer.gpuCost(frames: 60, batches: 5).sorted()
+            guard let median = costs.isEmpty ? nil : costs[costs.count / 2] else { print("gpucost: nothing drawn"); return }
+            print(
+                String(
+                    format: "gpucost: %.2f ms a frame (median of %d batches of 60, %.2f to %.2f), drawn at %.0f x %.0f", median,
+                    costs.count, costs.first ?? 0, costs.last ?? 0, view.drawer.drawableSize.width, view.drawer.drawableSize.height))
         case "touch":
             // So that something outside can tell how far this has got.
             FileManager.default.createFile(atPath: argument, contents: nil)
@@ -1642,6 +1745,9 @@ enum ScriptRunner {
         case "glow":
             // glow off, glow on.
             model.showsGlow = argument != "off"
+        case "readypair":
+            // Whether Backup's both-disks picture is made ahead, and how big it is.
+            print("readypair: " + (model.readyPairCount.map { "made, \($0) things" } ?? "not made"))
         case "memoryshort":
             // What happens when macOS says memory is short, without making it short: what was made ahead is let go.
             model.letGoOfReadyPair()
@@ -2404,6 +2510,16 @@ enum ScriptRunner {
         out.append("whole disk by kind and date, read:    \((0..<DiskTree.statStride).map { String(rowB[$0]) }.joined(separator: " "))")
         out.append("links \(a.links.count) and \(a.singleLinks.count) single in the refresh, \(b.links.count) and \(b.singleLinks.count) in the read")
         return out.joined(separator: "\n")
+    }
+
+    /// When this process started, as the kernel has it.
+    private static func processStarted() -> Date {
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()]
+        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0 else { return Date() }
+        let t = info.kp_proc.p_starttime
+        return Date(timeIntervalSince1970: Double(t.tv_sec) + Double(t.tv_usec) / 1e6)
     }
 
     private static func report(_ model: AppModel) {

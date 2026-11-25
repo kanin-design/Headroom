@@ -115,18 +115,28 @@ struct ListRowValue: View {
     }
 }
 
-/// A row's share of the biggest in its list, as a hairline in its colour.
+/// A row's share of the biggest in its list, as a hairline in its colour. One shape that draws its part of the row's
+/// width: read with a `GeometryReader`, the width cost every row a layout of its own each time the list was made.
 private struct ShareLine: View {
     let fraction: Double
     let colour: Color
+    @Environment(\.displayScale) private var scale
 
     var body: some View {
-        GeometryReader { g in
-            Capsule()
-                .fill(colour.opacity(0.75))
-                .frame(width: max(g.size.width * min(fraction, 1), 2), height: 2)
+        Hairline(fraction: fraction, scale: scale)
+            .fill(colour.opacity(0.75))
+            .frame(height: 2)
+    }
+
+    private struct Hairline: Shape {
+        let fraction: Double
+        let scale: CGFloat
+
+        func path(in rect: CGRect) -> Path {
+            // To a whole pixel, as a view of that width is laid out.
+            let width = (max(rect.width * min(fraction, 1), 2) * scale).rounded() / scale
+            return Capsule().path(in: CGRect(x: rect.minX, y: rect.minY, width: width, height: rect.height))
         }
-        .frame(height: 2)
     }
 }
 
@@ -156,6 +166,8 @@ struct FittedText: View {
 
     /// A name in a list, and the line under it: `Kit.Font.name` and `Kit.Font.detail`, as AppKit measures them.
     static let title = NSFont.systemFont(ofSize: Kit.Font.Size.body, weight: .medium)
+    /// The title of a box at the top of a list: `Kit.Font.headline`.
+    static let headline = NSFont.systemFont(ofSize: Kit.Font.Size.headline, weight: .semibold)
     static let detail = NSFont.systemFont(ofSize: Kit.Font.Size.detail)
 
     var body: some View {
@@ -180,12 +192,19 @@ struct FittedText: View {
         return forms.first { Self.width($0, font) <= room } ?? forms[forms.count - 1]
     }
 
-    private static var widths: [String: CGFloat] = [:]
+    /// A text's width in a font. The fonts are the few above, so each is told apart by which one it is, not by its name
+    /// written out: making that text for every look cost more than the look.
+    private struct Measured: Hashable {
+        let font: ObjectIdentifier
+        let text: String
+    }
+
+    private static var widths: [Measured: CGFloat] = [:]
 
     private static func width(_ text: String, _ font: NSFont) -> CGFloat {
-        let key = "\(font.pointSize) \(font.fontName) \(text)"
+        let key = Measured(font: ObjectIdentifier(font), text: text)
         if let known = widths[key] { return known }
-        if widths.count > 4000 { widths.removeAll() }
+        if widths.count > 4000 { widths.removeAll(keepingCapacity: true) }
         let w = ceil((text as NSString).size(withAttributes: [.font: font]).width)
         widths[key] = w
         return w
@@ -224,6 +243,20 @@ enum ListNames {
         let made = ShortNames.forms(of: names, around: around)
         known[key] = made
         return made
+    }
+
+    /// For names from many folders, such as a search's finds, in order: each cut as the ring cuts it, among the others in
+    /// the same folder and leaving out what that folder and the one around it say. Grouped this way, a season's episodes
+    /// listed beside their show's folder and other files of the same name still read `Show…S01E02…mkv`.
+    static func forms(_ names: [String], inFolders folders: [String]) -> [[String]] {
+        var groups: [String: [Int]] = [:]
+        for (i, folder) in folders.enumerated() { groups[folder, default: []].append(i) }
+        var result = names.map { [$0] }
+        for (folder, members) in groups {
+            let around = folder.split(separator: "/").suffix(2).map(String.init)
+            for (i, list) in zip(members, forms(members.map { names[$0] }, around: around)) { result[i] = list }
+        }
+        return result
     }
 
     /// Each item's name cut where the others in its folder say the same, by the item.

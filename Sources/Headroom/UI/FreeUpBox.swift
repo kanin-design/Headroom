@@ -160,8 +160,10 @@ struct BoxView: View {
             } else {
                 if box.rows.count > 1, !box.isShortlist { selectAll }
                 let limit = showAll ? box.rows.count : 10
-                ForEach(box.rows.prefix(limit)) { row in
-                    ThingRow(model: model, row: row, color: box.color, box: box)
+                let shown = Array(box.rows.prefix(limit))
+                let forms = ListNames.forms(shown.map(\.title))
+                ForEach(Array(shown.enumerated()), id: \.element.id) { index, row in
+                    ThingRow(model: model, row: row, color: box.color, box: box, titles: forms[index])
                 }
                 if box.rows.count > limit {
                     let rest = box.rows.dropFirst(limit)

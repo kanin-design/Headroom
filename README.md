@@ -26,7 +26,7 @@ Measured on an M5 MacBook Air with 2.1 million files on a 494 GB disk:
 | A first launch | Half of the disk is on the map in 0.4 s, and about three quarters within a second |
 | Rescanning the whole disk (⌘R) | 6.9 s. `du` takes 40 s on the same disk, and collects less |
 | Searching every file and folder name | 2 to 14 ms per keystroke, across about 324,000 folders and files |
-| Searching the small files | 4 to 13 ms per keystroke, across 1.6 million files under 1 MiB |
+| Searching the small files | 2 to 7 ms, then under 1.5 ms for each letter typed on, across 1.6 million files under 1 MiB |
 | Sizing up `~/Library`, 376,000 files | 1.7 s |
 | Checking 47 items before a clean | 0.35 s, then 9 ms for each one you add |
 | Finding duplicates among 465 files of the same sizes, 5.6 GB | 1.3 s, reading straight from the disk at 4.2 GB/s. Later checks reuse the results |
@@ -71,6 +71,10 @@ Clicking a folder on the map opens it, in every view and mode. Clicking a file s
 Each folder is a segment of the map, sized by the space it uses and coloured by the group it belongs to, so related
 folders stay together. Point to an item to see its name, size and when it was last used. Click a folder to open it, and
 click the centre of the map to go back up.
+
+What's in a folder goes round from 12 o'clock biggest first, or by name: the **Sort By** button beside Scan Again, or
+**View › Sort By**. By name, a season's episodes go round in order, as the Finder lists them, and the lists of a folder
+and of what a search finds follow.
 
 ### Free Up
 
@@ -118,9 +122,8 @@ Press ⌘F and type. Matches are listed as you type, largest first, with their p
 Search ignores case and accents, in any alphabet.
 
 Files under 1 MiB are too small to be pieces on the map, so they're listed apart, under **Small Files**. Their names are
-written to a catalogue in `~/Library/Caches` as the disk is scanned, and searched there on every core, so they take no
-memory. Pointing at one lights its folder on the map. **Edit › Search Small Files** turns this off and deletes the
-catalogue.
+written to a catalogue in `~/Library/Caches` as the disk is scanned, and searched there, so they take no memory.
+Pointing at one lights its folder on the map. **Edit › Search Small Files** turns this off and deletes the catalogue.
 
 ### Quick Look
 
@@ -210,6 +213,7 @@ click **Clean**.
 | ⇧⌘↑ | Back to the whole disk |
 | ⌃⌘I | Show or hide the inspector |
 | ⌘F | Search |
+| ⌃⌥⌘1, ⌃⌥⌘7 | Sort by name, by size |
 | Space | Select or deselect the item you're pointing to (in Backup, a folder's files) |
 | Shift-Space | Quick Look |
 | Esc | Back out, the way you came in |
@@ -245,6 +249,9 @@ How Headroom is designed, with every measurement, is in [DESIGN.md](DESIGN.md).
 | `App/Updater.swift` | New versions from GitHub's releases, taken only when signed with the same certificate |
 
 - `swift test` runs the tests, on made-up disks. `swift test --package-path Packages/SunburstKit` runs the ring's own.
+- `benchmarks/run.py` measures what Headroom costs on this Mac (launch, scans, memory, search, typing, the ring) and keeps
+  each run in `benchmarks/results.jsonl`; `benchmarks/run.py --view` shows them over time. How, and what each number
+  means: [BENCHMARKS.md](BENCHMARKS.md).
 - `build/Headroom.app/Contents/MacOS/Headroom --script steps.txt` drives the whole app from a script, without touching
   the mouse. The steps are listed at the top of `App/ScriptRunner.swift`, and a scripted run can only ever clean a
   throwaway disk image named `HeadroomTest`.

@@ -100,9 +100,10 @@ private struct TuckedAway: View {
             title: title, count: counted(rows.count, "item"),
             trailing: formatBytes(rows.reduce(UInt64(0)) { $0 &+ $1.gain }), help: promise
         ) {
+            let forms = ListNames.forms(rows.map(\.title))
             VStack(spacing: 0) {
-                ForEach(rows) { row in
-                    ThingRow(model: model, row: row, color: Palette.Box.other)
+                ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                    ThingRow(model: model, row: row, color: Palette.Box.other, titles: forms[index])
                 }
             }
         }

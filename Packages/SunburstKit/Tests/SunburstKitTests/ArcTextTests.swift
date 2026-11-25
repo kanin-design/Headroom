@@ -22,6 +22,19 @@ struct ArcTextTests {
         #expect(GlyphLine.make("Media 12", font: font).width == line.width)
     }
 
+    @Test("The same letter standing the same way is one outline in every line it's in, and still its own shape")
+    func sharedOutlines() throws {
+        let one = GlyphLine.make("oxo", font: font), other = GlyphLine.make("xo", font: font)
+        let last = try #require(one.glyphs[2].outline)
+        #expect(try #require(other.glyphs[1].outline) === last, "the o that ends each line is the same outline")
+        #expect(try #require(GlyphLine.make("o", font: font).glyphs[0].outline) === last)
+        let x = try #require(one.glyphs[1].outline)
+        #expect(x !== last && x.boundingBoxOfPath != last.boundingBoxOfPath, "an x is another outline")
+        #expect(abs(last.boundingBoxOfPath.midX) < 1.5, "and each still sits around its own middle")
+        let bigger = GlyphLine.make("o", font: NSFont.systemFont(ofSize: font.pointSize * 2, weight: .semibold))
+        #expect(try #require(bigger.glyphs[0].outline).boundingBoxOfPath.width > last.boundingBoxOfPath.width * 1.5, "a font has its own")
+    }
+
     @Test("At the top it reads clockwise with its top outwards, on the circle it's given")
     func top() {
         let line = GlyphLine.make("Hxx", font: font)

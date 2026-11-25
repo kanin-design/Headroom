@@ -8,6 +8,8 @@ struct ThingRow: View {
     let color: Lab
     var box: Box? = nil
     var scale: UInt64? = nil
+    /// Shorter ways to write its title, worked out among the list's.
+    var titles: [String] = []
     @State private var isHovered = false
 
     private var isLarge: Bool { scale != nil }
@@ -18,7 +20,7 @@ struct ThingRow: View {
         let state = model.rowStates[row.id] ?? .none
         let tint = color.swiftUI
         VStack(alignment: .leading, spacing: Kit.Space.small) {
-            BoxHead(title: row.title, app: row.appPath, isLarge: isLarge) {
+            BoxHead(title: row.title, titles: titles, app: row.appPath, isLarge: isLarge) {
                 leading(state, tint)
             } value: {
                 number(state)

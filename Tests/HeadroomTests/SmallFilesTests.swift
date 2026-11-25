@@ -130,6 +130,90 @@ final class SmallFilesTests: XCTestCase {
         XCTAssertEqual(try search("blæbær", catalogue, tree).count, 0)
     }
 
+    /// The search looks at sixteen bytes at once and then checks each place the text could start, so it has to find
+    /// exactly what checking every name finds: names of every length, both cases, other letters, the catalogue's end.
+    func testTheSearchFindsWhatCheckingEveryNameFinds() throws {
+        // Matched as bytes, an a with its ring stored after it holds an a; as text, it doesn't.
+        try FileManager.default.removeItem(atPath: root + "/letters")
+        let letters = ["a", "A", "b", "B", ".", "_", "0", "é", "Ø", "-"]
+        var seed: UInt64 = 7
+        func next(_ n: Int) -> Int {
+            seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+            return Int((seed >> 33) % UInt64(n))
+        }
+        for folder in 0..<30 {
+            try FileManager.default.createDirectory(atPath: root + "/mixed/\(folder)", withIntermediateDirectories: true)
+            for _ in 0...next(60) {
+                let name = (0...next(40)).map { _ in letters[next(letters.count)] }.joined()
+                // Not . or .., nor what a listing leaves out though the scan reads it: ._ files.
+                if name.allSatisfy({ $0 == "." }) || name.hasPrefix("._") { continue }
+                // Sizes apart, so a size read for the wrong name shows.
+                try write("mixed/\(folder)/\(name)", bytes: 4096 * next(8))
+            }
+        }
+        // Most folders have no letter beyond A to Z, and are passed over for such text: one that has, far into its names, is
+        // still read.
+        for at in 0..<20 { try write("plain/plain-name-\(at).txt", bytes: 4096) }
+        try write("plain/zebra-ø.txt", bytes: 4096)
+        let (tree, catalogue) = try fullRead()
+        let onDisk = smallOnDisk()
+        let texts = [
+            "a", "B", ".", "_", "0", "é", "ø", "-", "ab", "Ba", "a.", "._", "aa", "bb", "a_b", "abab", "aba.b", "øa", "aaaa", "b0",
+            "small", "notes-1", "md",
+        ]
+        for text in texts {
+            let wanted = text.lowercased()
+            let expected = onDisk.filter { ($0.key as NSString).lastPathComponent.lowercased().contains(wanted) }
+            let found = try search(text, catalogue, tree)
+            XCTAssertEqual(found.count, expected.count, text)
+            let shown = listed(found, tree)
+            XCTAssertEqual(shown.count, min(expected.count, SmallFiles.shown), text)
+            XCTAssertTrue(shown.allSatisfy { expected[$0.key] == $0.value }, text)
+        }
+    }
+
+    /// Typing on looks only among what the last search found: it has to come out with what searching everything does.
+    func testTypingOnFindsWhatSearchingEverythingFinds() throws {
+        for at in 0..<40 { try write("typed/Package-\(at).json", bytes: 4096 * (1 + at % 5)) }
+        try write("typed/package.json.bak", bytes: 4096)
+        try write("typed/pack.txt", bytes: 4096)
+        let (tree, catalogue) = try fullRead()
+        var earlier: SmallFileResults?
+        for text in ["pa", "pac", "pack", "package", "package-1", "package-1.", "PACKAGE-1.JSON"] {
+            let narrowed = try XCTUnwrap(catalogue.search(text, in: tree, after: earlier, stop: StopFlag()))
+            let full = try search(text, catalogue, tree)
+            XCTAssertEqual(narrowed.count, full.count, text)
+            XCTAssertEqual(narrowed.top.map(\.name), full.top.map(\.name), text)
+            XCTAssertEqual(narrowed.top.map(\.bytes), full.top.map(\.bytes), text)
+            earlier = narrowed
+        }
+        // Shorter text, another folder, or text with other letters: everything is searched again.
+        let fewer = try XCTUnwrap(catalogue.search("pa", in: tree, after: earlier, stop: StopFlag()))
+        XCTAssertEqual(fewer.count, try search("pa", catalogue, tree).count)
+        let folder = try XCTUnwrap(tree.find(path: root + "/typed"))
+        let inFolder = try XCTUnwrap(catalogue.search("package-1", in: tree, within: folder, after: earlier, stop: StopFlag()))
+        XCTAssertEqual(inFolder.count, 11)
+        let wide = try XCTUnwrap(catalogue.search("bla", in: tree, stop: StopFlag()))
+        XCTAssertEqual(try XCTUnwrap(catalogue.search("blå", in: tree, after: wide, stop: StopFlag())).count, 2)
+        // What's trashed since the last search isn't found by the next.
+        let pack = try XCTUnwrap(catalogue.search("pack", in: tree, stop: StopFlag()))
+        tree.remove(folder)
+        XCTAssertEqual(try XCTUnwrap(catalogue.search("package", in: tree, after: pack, stop: StopFlag())).count, 0)
+    }
+
+    func testTypingOnNarrowsTheMapsSearch() throws {
+        let (tree, _) = try fullRead()
+        let earlier = Search.run("folder", in: tree)
+        for text in ["folder-1", "FOLDER-1", "older-1"] {
+            XCTAssertEqual(Search.narrow(earlier, to: text, in: tree), Search.run(text, in: tree), text)
+        }
+        XCTAssertTrue(Search.narrows("package", from: "pack"))
+        XCTAssertTrue(Search.narrows("PACKAGE", from: "ack"))
+        XCTAssertFalse(Search.narrows("pack", from: "package"))
+        XCTAssertFalse(Search.narrows("blå", from: "bla"), "å can be one letter, with no a in its bytes")
+        XCTAssertTrue(Search.narrows("blåbær", from: "blå"))
+    }
+
     func testOnlyMostAreListedButAllAreCounted() throws {
         for at in 0..<200 { try write("many/file-\(at).log", bytes: 4096 * (1 + at % 7)) }
         let (tree, catalogue) = try fullRead()

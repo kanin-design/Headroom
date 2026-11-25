@@ -40,9 +40,7 @@ struct GlyphLine: Sendable {
             CTRunGetAdvances(run, CFRange(location: 0, length: count), &advances)
             for i in 0..<count {
                 let half = advances[i].width / 2
-                // Around its own middle, so it turns about that when it's set on the arc.
-                var toMiddle = CGAffineTransform(translationX: -half, y: 0)
-                glyphs.append(Glyph(outline: CTFontCreatePathForGlyph(runFont, ids[i], &toMiddle), middle: positions[i].x + half))
+                glyphs.append(Glyph(outline: outline(of: ids[i], in: runFont, half: half), middle: positions[i].x + half))
             }
         }
         let made = GlyphLine(glyphs: glyphs, width: CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil)))
@@ -59,6 +57,43 @@ struct GlyphLine: Sendable {
     }
 
     private static let cache = OSAllocatedUnfairLock(initialState: [Key: GlyphLine]())
+
+    /// A glyph's outline around its own middle, so it turns about that when it's set on the arc. One outline for each glyph
+    /// of a font, shared by every line it's in: an outline is never changed, and a few hundred names are the same hundred
+    /// letters. With an outline made for each letter of each name, the names around one ring kept 13 MB of them.
+    private static func outline(of glyph: CGGlyph, in font: CTFont, half: CGFloat) -> CGPath? {
+        let key = OutlineKey(font: font, glyph: glyph, half: half)
+        if let known = outlines.withLock({ $0[key] }) { return known.path }
+        var toMiddle = CGAffineTransform(translationX: -half, y: 0)
+        let made = Outline(path: CTFontCreatePathForGlyph(font, glyph, &toMiddle))
+        outlines.withLock { known in
+            if known.count > 4096 { known.removeAll(keepingCapacity: true) }
+            known[key] = made
+        }
+        return made.path
+    }
+
+    /// A glyph of a font, moved back by half its advance: kerning can give the same glyph another advance.
+    private struct OutlineKey: Hashable, @unchecked Sendable {
+        let font: CTFont
+        let glyph: CGGlyph
+        let half: CGFloat
+
+        static func == (a: OutlineKey, b: OutlineKey) -> Bool { a.glyph == b.glyph && a.half == b.half && CFEqual(a.font, b.font) }
+
+        func hash(into hasher: inout Hasher) {
+            hasher.combine(glyph)
+            hasher.combine(half)
+            hasher.combine(CFHash(font))
+        }
+    }
+
+    /// Nil for a glyph with nothing to draw, such as a space, which is worth remembering too.
+    private struct Outline: @unchecked Sendable {
+        let path: CGPath?
+    }
+
+    private static let outlines = OSAllocatedUnfairLock(initialState: [OutlineKey: Outline]())
 }
 
 /// A line of text set along an arc of the ring: each glyph stands on a circle around the ring's middle, upright to it. It

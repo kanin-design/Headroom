@@ -33,14 +33,15 @@ final class LookTests: XCTestCase {
     func testNextGoesOnThenBackThenUp() {
         let disk = disk()
         let big = disk.node(shows + "/big.mkv"), middle = disk.node(shows + "/middle.mkv"), small = disk.node(shows + "/small.mkv")
-        XCTAssertEqual(LookContents.next(after: big, in: disk.tree), middle, "The next one along")
-        XCTAssertEqual(LookContents.next(after: small, in: disk.tree), middle, "The last one goes to the one before")
+        XCTAssertEqual(LookContents.next(after: big, in: disk.tree, by: .size), middle, "The next one along")
+        XCTAssertEqual(LookContents.next(after: small, in: disk.tree, by: .size), middle, "The last one goes to the one before")
 
         let alone = FakeDisk()
         alone.file(shows + "/only.mkv", megabyte, kind: .video)
         alone.finish()
         XCTAssertEqual(
-            LookContents.next(after: alone.node(shows + "/only.mkv"), in: alone.tree), alone.node(shows), "Nothing next to it, so what held it")
+            LookContents.next(after: alone.node(shows + "/only.mkv"), in: alone.tree, by: .size), alone.node(shows),
+            "Nothing next to it, so what held it")
     }
 
     func testPicturesOnlyWhenThatsMostlyWhatAFolderIs() {

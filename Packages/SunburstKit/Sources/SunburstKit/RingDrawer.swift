@@ -280,6 +280,9 @@ private final class RingThread: Thread {
             // Nothing to draw into, but time still passes.
             return engine.frame(dt: Float(dt), viewport: .zero, scale: scale, headroom: headroom, encode: nil)
         }
+        // The layer hands out a drawable only once an earlier frame is done with it: time spent waiting for one isn't the
+        // frame's own work.
+        let acquired = CACurrentMediaTime()
         let (frame, old): (Int, [IOSurfaceRef]) = lock.withLock {
             drawn &+= 1
             wakeSurfacesLocked()
@@ -322,8 +325,13 @@ private final class RingThread: Thread {
             commands.commit()
         }
         if let entry {
-            let cpu = (CACurrentMediaTime() - began) * 1000
-            lock.withLock { if let count = notes?.count, entry < count { notes?[entry].cpu = cpu } }
+            let cpu = (CACurrentMediaTime() - acquired) * 1000, wait = (acquired - began) * 1000
+            lock.withLock {
+                if let count = notes?.count, entry < count {
+                    notes?[entry].cpu = cpu
+                    notes?[entry].wait = wait
+                }
+            }
         }
         return moving
     }
@@ -335,7 +343,10 @@ private final class RingThread: Thread {
         public var target: CFTimeInterval
         public var dt: Double
         public var restarted: Bool
+        /// The frame's own work on the CPU, from getting a drawable to sending the frame, in milliseconds.
         public var cpu: Double = 0
+        /// How long the frame waited for a drawable before that, in milliseconds.
+        public var wait: Double = 0
         public var gpu: Double = 0
         public var presented: CFTimeInterval = 0
     }
@@ -346,6 +357,44 @@ private final class RingThread: Thread {
         lock.withLock {
             defer { notes = nil }; return notes ?? []
         }
+    }
+
+    /// The size, in pixels, the ring is drawn at on screen.
+    public var drawableSize: CGSize { layer.drawableSize }
+
+    /// What one frame of the ring costs the GPU: the picture as it is now, drawn `frames` times back to back into a texture
+    /// the size of the screen's, timed from the first frame's start on the GPU to the last one's end, for each of `batches`
+    /// batches after one to warm up. A frame drawn in step with the display reads several times this in its own GPU time,
+    /// because a GPU that's mostly idle runs at a low clock.
+    public func gpuCost(frames: Int = 60, batches: Int = 5) -> [Double] {
+        drawing.lock()
+        defer { drawing.unlock() }
+        let (scale, headroom) = lock.withLock { (self.scale, self.headroom) }
+        let size = layer.drawableSize
+        guard let renderer = engine.renderer, frames > 0, size.width >= 1, size.height >= 1 else { return [] }
+        let d = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: layer.pixelFormat, width: Int(size.width), height: Int(size.height), mipmapped: false)
+        d.usage = [.renderTarget]
+        d.storageMode = .private
+        guard let target = renderer.device.makeTexture(descriptor: d) else { return [] }
+        var costs: [Double] = []
+        for batch in 0...max(batches, 0) {
+            var sent: [MTLCommandBuffer] = []
+            for _ in 0..<frames {
+                guard let commands = renderer.commandQueue.makeCommandBuffer() else { return costs }
+                // Nothing moves on: each frame is the same picture.
+                _ = engine.frame(dt: 0, viewport: size, scale: scale, headroom: headroom) { uniforms in
+                    renderer.encode(into: commands, target: target, uniforms: uniforms)
+                }
+                commands.commit()
+                sent.append(commands)
+            }
+            sent.last?.waitUntilCompleted()
+            if batch > 0, let first = sent.first, let last = sent.last, last.gpuEndTime > first.gpuStartTime {
+                costs.append((last.gpuEndTime - first.gpuStartTime) * 1000 / Double(frames))
+            }
+        }
+        return costs
     }
 
     private func noteFrame(drawable: CAMetalDrawable, commands: MTLCommandBuffer, target: CFTimeInterval, dt: Double, restarted: Bool) -> Int? {

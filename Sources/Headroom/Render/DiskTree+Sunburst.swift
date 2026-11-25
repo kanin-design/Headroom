@@ -42,10 +42,17 @@ extension DiskTree {
     ///
     /// A folder cut by place is drawn as one stretch for each place. Coloured by place (`byPlace`), each stretch shows its
     /// place's colour; otherwise each is in the folder's own colour, as the folder it is.
-    func parts(_ sizes: RingSizes, byPlace: Bool = false) -> SunburstParts {
+    ///
+    /// What's in a folder goes round biggest first, or by name (`SortBy`). The band around the disk keeps its order.
+    func parts(_ sizes: RingSizes, byPlace: Bool = false, by sort: SortBy = .size) -> SunburstParts {
+        var before: (@Sendable (UInt32, UInt32) -> Bool)?
+        if sort == .name {
+            let tree = self
+            before = { a, b in tree.comesFirst(byName: a, b) }
+        }
         if twoSides {
             return SunburstParts(
-                split: .band, rings: .init(sizes, order: .byGroup, stretchColours: byPlace ? .contents : .folder),
+                split: .band, rings: .init(sizes, order: .byGroup, before: before, stretchColours: byPlace ? .contents : .folder),
                 dial: .init(counts: .eachSide))
         }
         // While a scan is running, the big groups keep their places instead of swapping as they fill up.
@@ -54,7 +61,7 @@ extension DiskTree {
             let ranks = Dictionary(children(0).map { ($0, partialRank(of: $0)) }, uniquingKeysWith: { a, _ in a })
             band.order = .ranked { ranks[$0] ?? 2 }
         }
-        return SunburstParts(bands: [band], rings: .init(sizes, order: order.isEmpty ? .bySize : .byGroup))
+        return SunburstParts(bands: [band], rings: .init(sizes, order: order.isEmpty ? .bySize : .byGroup, before: before))
     }
 
     @inline(__always) private func partialRank(of node: UInt32) -> Int {

@@ -1,0 +1,6 @@
+launch
+scanned
+size 1400 900 40 40
+memory refreshed
+report
+quit

@@ -1,0 +1,10 @@
+launch
+scanned
+size 1400 900 40 40
+memory launched
+wait 20
+readypair
+memory settled
+cpu 5
+report
+quit

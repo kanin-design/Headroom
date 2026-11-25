@@ -26,6 +26,19 @@ struct PartsTests {
         return tree
     }
 
+    @Test("A folder's things go round biggest first, or in the order asked for")
+    func order() {
+        let tree = TestTree([("Mine/c", 100 * mb), ("Mine/a", 50 * mb), ("Mine/b", 300 * mb)])
+        let mine = tree.node("Mine")
+        let names = Dictionary(uniqueKeysWithValues: ["a", "b", "c"].map { (tree.node("Mine/" + $0), $0) })
+        func round(_ parts: SunburstParts) -> [String] {
+            let layout = RingLayout.build(tree: tree, focus: mine, parts: parts, colorer: none)
+            return layout.pieces.filter { tree.parent(of: $0.node) == mine }.sorted { $0.a0 < $1.a0 }.compactMap { names[$0.node] }
+        }
+        #expect(round(SunburstParts()) == ["b", "c", "a"])
+        #expect(round(SunburstParts(rings: .init(before: { (names[$0] ?? "") < (names[$1] ?? "") }))) == ["a", "b", "c"])
+    }
+
     @Test("A band keeps its width however many rings there are")
     func bandWidth() {
         let tree = disk()

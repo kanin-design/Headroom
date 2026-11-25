@@ -269,15 +269,19 @@ final class DuplicateMemory: @unchecked Sendable {
     }
 
     private let lock = NSLock()
-    private var entries: [String: Entry]
-    private var nextSet: Int
+    /// Read from the file the first time anything is asked: read as the app started, it held up the window by 10 ms for
+    /// something only Copies uses.
+    private lazy var entries: [String: Entry] = {
+        let loaded = file.flatMap { try? JSONDecoder().decode([String: Entry].self, from: Data(contentsOf: $0)) } ?? [:]
+        nextSet = (loaded.values.map(\.set).max() ?? 0) + 1
+        return loaded
+    }()
+    /// Set when `entries` is read, which everything that uses it does first.
+    private var nextSet = 1
     private let file: URL?
 
     init(file: URL? = AppData.folder.appendingPathComponent("copies.json")) {
         self.file = file
-        let loaded = file.flatMap { try? JSONDecoder().decode([String: Entry].self, from: Data(contentsOf: $0)) } ?? [:]
-        entries = loaded
-        nextSet = (loaded.values.map(\.set).max() ?? 0) + 1
     }
 
     /// The sets this group was in last time, if nothing about it has changed. Nil: it has to be read.
@@ -296,6 +300,7 @@ final class DuplicateMemory: @unchecked Sendable {
     func note(_ work: Duplicates.Work, found: [Duplicates.Found]) {
         lock.lock()
         defer { lock.unlock() }
+        _ = entries
         var setOf: [UInt32: Int] = [:]
         for set in found {
             let number = nextSet

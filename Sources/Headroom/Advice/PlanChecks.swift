@@ -11,6 +11,8 @@ struct OpenFiles: Sendable {
     private var open: [(path: String, holder: Holder)] = []
     private var running: [(path: String, holder: Holder)] = []
 
+    /// Every process is asked about each file it has open, one call a file: thousands of calls, so the processes are shared
+    /// out over the cores. What each says is put together in the order the system listed them, as when one thread asked.
     static func snapshot() -> OpenFiles {
         var out = OpenFiles()
         let me = getpid()
@@ -19,31 +21,56 @@ struct OpenFiles: Sendable {
         var pids = [pid_t](repeating: 0, count: Int(count) * 2)
         let found = proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.size))
         guard found > 0 else { return out }
-        for pid in pids.prefix(Int(found)) where pid > 0 && pid != me {
-            var buffer = [CChar](repeating: 0, count: 4096)
-            guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { continue }
-            let executable = PathMath.visible(String(cString: buffer))
-            let holder = Holder(process: Self.name(of: executable), pid: pid)
-            out.running.append((executable, holder))
-            let size = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, nil, 0)
-            guard size > 0 else { continue }
-            var fds = [proc_fdinfo](repeating: proc_fdinfo(), count: Int(size) / MemoryLayout<proc_fdinfo>.stride)
-            let used = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, &fds, size)
-            guard used > 0 else { continue }
-            for fd in fds.prefix(Int(used) / MemoryLayout<proc_fdinfo>.stride) where fd.proc_fdtype == UInt32(PROX_FDTYPE_VNODE) {
-                var info = vnode_fdinfowithpath()
-                guard proc_pidfdinfo(pid, fd.proc_fd, PROC_PIDFDVNODEPATHINFO, &info, Int32(MemoryLayout<vnode_fdinfowithpath>.size)) > 0 else {
-                    continue
-                }
-                // As you'd write it first: a path that comes with the data volume's prefix is under /Users all the same.
-                let path = PathMath.visible(
-                    withUnsafePointer(to: &info.pvip.vip_path) { $0.withMemoryRebound(to: CChar.self, capacity: 1024) { String(cString: $0) } })
-                if path.hasPrefix("/Users/") || path.hasPrefix("/Volumes/") || path.hasPrefix("/Applications/") { out.open.append((path, holder)) }
+        let asked = pids.prefix(Int(found)).filter { $0 > 0 && $0 != me }
+        let share = 8
+        var said = [Said](repeating: Said(), count: asked.count)
+        said.withUnsafeMutableBufferPointer { said in
+            // Each share writes only its own places.
+            nonisolated(unsafe) let said = said
+            DispatchQueue.concurrentPerform(iterations: (asked.count + share - 1) / share) { part in
+                var buffer = [CChar](repeating: 0, count: 4096)
+                var fds: [proc_fdinfo] = []
+                for i in (part * share)..<min((part + 1) * share, asked.count) { said[i] = ask(asked[i], &buffer, &fds) }
             }
+        }
+        for one in said {
+            if let running = one.running { out.running.append(running) }
+            out.open.append(contentsOf: one.open)
         }
         out.open.sort { $0.path < $1.path }
         out.running.sort { $0.path < $1.path }
         return out
+    }
+
+    /// What one process runs from and has open.
+    private struct Said {
+        var running: (path: String, holder: Holder)?
+        var open: [(path: String, holder: Holder)] = []
+    }
+
+    private static func ask(_ pid: pid_t, _ buffer: inout [CChar], _ fds: inout [proc_fdinfo]) -> Said {
+        var said = Said()
+        guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return said }
+        let executable = PathMath.visible(String(cString: buffer))
+        let holder = Holder(process: Self.name(of: executable), pid: pid)
+        said.running = (executable, holder)
+        let size = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, nil, 0)
+        guard size > 0 else { return said }
+        let room = Int(size) / MemoryLayout<proc_fdinfo>.stride
+        if fds.count < room { fds = [proc_fdinfo](repeating: proc_fdinfo(), count: room) }
+        let used = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, &fds, Int32(room * MemoryLayout<proc_fdinfo>.stride))
+        guard used > 0 else { return said }
+        for fd in fds.prefix(Int(used) / MemoryLayout<proc_fdinfo>.stride) where fd.proc_fdtype == UInt32(PROX_FDTYPE_VNODE) {
+            var info = vnode_fdinfowithpath()
+            guard proc_pidfdinfo(pid, fd.proc_fd, PROC_PIDFDVNODEPATHINFO, &info, Int32(MemoryLayout<vnode_fdinfowithpath>.size)) > 0 else {
+                continue
+            }
+            // As you'd write it first: a path that comes with the data volume's prefix is under /Users all the same.
+            let path = PathMath.visible(
+                withUnsafePointer(to: &info.pvip.vip_path) { $0.withMemoryRebound(to: CChar.self, capacity: 1024) { String(cString: $0) } })
+            if path.hasPrefix("/Users/") || path.hasPrefix("/Volumes/") || path.hasPrefix("/Applications/") { said.open.append((path, holder)) }
+        }
+        return said
     }
 
     /// A process goes by the app it's part of, not its helper's name.
@@ -170,6 +197,10 @@ enum PlanChecks {
         var name: String
     }
 
+    /// How far the look inside a planned thing goes. While you're ticking things, or coming back to the list, a quick look
+    /// will do. The look before a clean, or at something that's about to be copied whole, reads all of it.
+    private static func lookLimit(for item: PlanItem, thorough: Bool) -> Int { thorough || item.isMove ? Walker.most : Walker.quick }
+
     /// Looks at every planned thing as it is right now. Nothing is changed.
     /// `otherCopy` names what else holds the same files, and how much.
     /// A `fresh` check looks at everything again. The rest are for while you're ticking things, when a look from a moment ago is
@@ -184,6 +215,16 @@ enum PlanChecks {
         var out: [String: ItemCheck] = [:]
         let fm = FileManager.default
         let maxAge: TimeInterval = fresh ? 0 : 60
+        // Whether anything changed inside each planned folder: all of them read at once, before they're gone through.
+        var looked: [String: Walker.Look] = [:]
+        for limit in [Walker.quick, Walker.most] {
+            let paths = items.filter {
+                !$0.isEmptyTrash && ($0.tier >= .redownload || $0.byHand) && Self.lookLimit(for: $0, thorough: thorough) == limit
+            }
+            .flatMap(\.paths)
+            guard !paths.isEmpty, !Task.isCancelled else { continue }
+            for (path, look) in zip(paths, Walker.recentLooks(at: paths, limit: limit, maxAge: maxAge)) { looked[path] = look }
+        }
         for item in items {
             // Nobody is waiting for this one any more.
             if Task.isCancelled { break }
@@ -247,11 +288,9 @@ enum PlanChecks {
             if item.tier >= .redownload || item.byHand {
                 var newest: Date?
                 var sawAll = true
-                // While you're ticking things, or coming back to the list, a quick look will do. The look before a clean, or
-                // at something that's about to be copied whole, reads all of it.
-                let limit = thorough || item.isMove ? Walker.most : Walker.quick
+                let limit = lookLimit(for: item, thorough: thorough)
                 for path in present {
-                    let look = Walker.recentLook(at: path, limit: limit, maxAge: maxAge)
+                    let look = looked[path] ?? Walker.recentLook(at: path, limit: limit, maxAge: maxAge)
                     newest = max(newest ?? .distantPast, look.newestDate)
                     if !look.complete { sawAll = false }
                 }

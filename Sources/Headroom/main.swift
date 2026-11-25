@@ -66,4 +66,5 @@ if ScriptRunner.path != nil {
     arguments["NSTreatUnknownArgumentsAsOpen"] = false
     UserDefaults.standard.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
 }
+LaunchReads.begin()
 HeadroomApp.main()

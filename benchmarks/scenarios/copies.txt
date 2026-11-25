@@ -1,0 +1,6 @@
+size 1400 900 40 40
+scanned
+wait 2
+lens copies
+copies
+quit

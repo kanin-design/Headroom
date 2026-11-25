@@ -65,8 +65,8 @@ sunburst in the reference:
 
 - **Starts where the answer is.** A chain like `/ → Users → you` wastes rings. The inner band splits the
   disk into Your files, Apps, System, Hidden and Free, and your folders start on the next ring.
-- **Sorted clockwise from 12 o'clock,** biggest first, so position gives you the rank. Free space closes
-  the circle.
+- **Sorted clockwise from 12 o'clock,** biggest first, so position gives you the rank, or by name when that
+  reads better (*Sort By*, in Specs). Free space closes the circle.
 - **Rings that don't lie about area.** In a normal sunburst the same angle covers more area further out.
   Rings get thinner as they go out to offset that. Free space and what's hidden have nothing inside them to
   draw, so they reach as far out as the rest of the disk does on average, and cover the same share of the
@@ -628,6 +628,25 @@ information you can click, in plain text, and looks the same at rest and while p
 | 2026-11-23 | "Both disks" and the drive's step never fold; no step for the Mac's disk when pointing from both disks; 160 points kept for the way on | Found in the recheck: "Both disks" folded away, "Macintosh HD" came right after its own selector, and paths folded with room to spare |
 | 2026-11-23 | No "Both disks" step | "[Macintosh HD ▾] › Both disks" read as both disks inside Macintosh HD; the owner: "drop for now" |
 
+### Sort By
+
+What's in each folder goes round the ring biggest first, or by name. The choice is a button beside Scan Again with a menu
+of the two, as the Finder's toolbar has one, and **View › Sort By** with the Finder's keys (⌃⌥⌘1 Name, ⌃⌥⌘7 Size). It's
+kept for next time.
+
+- **By name** is the Finder's order: capitals or not, and numbers by their value, so `Episode 2` comes before
+  `Episode 10`.
+- **What follows it**: the ring, from 12 o'clock clockwise, and the lists of what's on it: the card's list of a folder,
+  its arrow keys, and a search's finds. A list that shows only the biggest (a search's first 120) shows those, in the order.
+- **What doesn't**: the band around the disk (Your files, Apps, System, Hidden, Free), and the lists that rank what to do
+  (Free Up, Backup, Copies).
+- **Fast either way.** Only what's big enough to be drawn is put in order; everything else goes into "smaller items"
+  as before. A picture by name takes as long as one by size (0.5 to 0.6 ms on a 2-million-file disk).
+
+| Date | Decision | Why |
+|---|---|---|
+| 2026-11-24 | Sort By Name or Size, beside Scan Again | The owner: "For a lot of use cases sort by name is much better as for example episodes would be sorted in the disk too" and "I would put it next to the refresh button. For now size, name is enough, we want to keep it super fast" |
+
 ### The window's title
 
 Not shown. The window is still named for where you are (the folder you're in, or at the top of a disk the disk's name),
@@ -691,6 +710,7 @@ On the ring and in lists, a name that doesn't fit is handled the same way.
 | 2026-11-23 | Lists use the same cut forms | Backup's Large Files showed ten rows cut to the same text, the episode number cut out |
 | 2026-11-23 | Folder paths in lists cut between folders | Found in the recheck: the same flaw in the line under each name, cut inside a bracket and a word |
 | 2026-11-23 | A fix, not a change: names at the side are measured in the font they're drawn in (12 points, medium) | They were measured in the inside names' font, so a cut form that fit was turned down and the whole name was cut in the middle, losing the episode number |
+| 2026-11-24 | A fix, not a change: every list uses the cut forms (a search's finds, the card, Free Up's files and rows, Copies' sets), and a search's finds are cut among the others in their own folder | The owner's screenshot: a search listed ten episodes as `Show (2025) - S0…- 4K DV WEB-DL.mkv`. Among the show's folder and same-named files elsewhere, the only thing all of them shared was the first word, so nothing was cut |
 
 ### Pointing at a piece
 

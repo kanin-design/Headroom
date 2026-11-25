@@ -1,0 +1,31 @@
+size 1400 900 40 40
+scanned
+wait 4
+search p
+wait 1
+meter start
+search pa
+wait 0.25
+search pac
+wait 0.25
+search pack
+wait 0.25
+search packa
+wait 0.25
+search packag
+wait 0.25
+search package
+wait 0.25
+search package.
+wait 0.25
+search package.j
+wait 0.25
+search package.js
+wait 0.25
+search package.jso
+wait 0.25
+search package.json
+wait 0.75
+meter typing
+memory typed
+quit

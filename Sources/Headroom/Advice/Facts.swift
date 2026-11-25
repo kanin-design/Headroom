@@ -375,18 +375,22 @@ extension Facts {
             }
         }
         let library = home + "/Library"
-        for path in candidates {
+        // Listed once for all the apps, not once for each.
+        let groupContainers = fullAccess ? ((try? fm.contentsOfDirectory(atPath: library + "/Group Containers")) ?? []) : []
+        let me = Bundle.main.bundleIdentifier
+        /// What one app's own files and Spotlight say about it. Nothing here depends on another app.
+        func read(_ path: String) -> AppFact? {
             // An entry that's only a link into the system is part of macOS, like Safari.
             var link = stat()
-            guard lstat(path, &link) == 0, link.st_mode & S_IFMT != S_IFLNK else { continue }
+            guard lstat(path, &link) == 0, link.st_mode & S_IFMT != S_IFLNK else { return nil }
             guard let plist = NSDictionary(contentsOfFile: path + "/Contents/Info.plist"), let id = plist["CFBundleIdentifier"] as? String else {
-                continue
+                return nil
             }
             let name = Titles.withoutAppEnding((path as NSString).lastPathComponent)
             let fromAppStore = fm.fileExists(atPath: path + "/Contents/_MASReceipt/receipt")
             // Apple's apps only if the App Store can give them back.
-            if id.hasPrefix("com.apple."), !fromAppStore { continue }
-            if id == Bundle.main.bundleIdentifier { continue }
+            if id.hasPrefix("com.apple."), !fromAppStore { return nil }
+            if id == me { return nil }
 
             var signs: [Date] = []
             var settings: [String] = []
@@ -415,10 +419,8 @@ extension Facts {
                 if let date = newest(container + "/Data/Library/Saved Application State") { signs.append(date) }
                 if let date = newest(container + "/Data/Library/Caches") { signs.append(date) }
             }
-            if fullAccess {
-                for name in (try? fm.contentsOfDirectory(atPath: library + "/Group Containers")) ?? [] where name.hasSuffix("." + id) {
-                    data.append(library + "/Group Containers/" + name)
-                }
+            for name in groupContainers where name.hasSuffix("." + id) {
+                data.append(library + "/Group Containers/" + name)
             }
 
             if let item = MDItemCreateWithURL(nil, URL(fileURLWithPath: path) as CFURL) {
@@ -440,10 +442,25 @@ extension Facts {
                     }
                 }
             }
-            facts.apps.append(
-                AppFact(
-                    path: path, name: name, bundleID: id, fromAppStore: fromAppStore, newestSign: signs.max(), signCount: signs.count,
-                    isRunning: running.contains { $0.bundleID == id }, makerNote: makerNote, settings: settings, data: data))
+            return AppFact(
+                path: path, name: name, bundleID: id, fromAppStore: fromAppStore, newestSign: signs.max(), signCount: signs.count,
+                isRunning: running.contains { $0.bundleID == id }, makerNote: makerNote, settings: settings, data: data)
+        }
+        // Each app is a few dozen small reads and a question to Spotlight, which mostly wait: all the apps at once, kept in
+        // the order they were listed.
+        facts.apps += inParallel(candidates.count) { read(candidates[$0]) }.compactMap { $0 }
+    }
+
+    /// `work` for each of `count` things, on every core at once, and what each gave, in order.
+    private static func inParallel<T>(_ count: Int, _ work: (Int) -> T) -> [T] {
+        guard count > 0 else { return [] }
+        return withoutActuallyEscaping(work) { work in
+            nonisolated(unsafe) let work = work
+            return [T](unsafeUninitializedCapacity: count) { buffer, used in
+                nonisolated(unsafe) let buffer = buffer
+                DispatchQueue.concurrentPerform(iterations: count) { i in (buffer.baseAddress.unsafelyUnwrapped + i).initialize(to: work(i)) }
+                used = count
+            }
         }
     }
 
@@ -483,6 +500,7 @@ extension Facts {
         let gitAvailable = Git.isAvailable
         var videos = 0
         var modelFolders: [String] = []
+        var repos: [String] = [], frameFolders: [String] = [], asked: [String] = []
         for i in 1..<max(tree.count, 1) {
             let n = nodes[i]
             let id = UInt32(i)
@@ -500,10 +518,8 @@ extension Facts {
                     let path = tree.path(n.parent)
                 {
                     // Worked on lately, or not yours to move: it won't be suggested, whatever git would say.
-                    if tree.statRow(n.parent)[DiskTree.statRecent30] == 0, Safety.canTrash(path),
-                        let fact = earlier?.repos[path] ?? Git.read(path)
-                    {
-                        facts.repos[path] = fact
+                    if tree.statRow(n.parent)[DiskTree.statRecent30] == 0, Safety.canTrash(path) {
+                        if let fact = earlier?.repos[path] { facts.repos[path] = fact } else { repos.append(path) }
                     }
                     continue
                 }
@@ -511,7 +527,7 @@ extension Facts {
                 if n.fileCount >= 100, tree.totals[i] >= 200_000_000 {
                     let images = DiskTree.bytes(units: tree.statRow(i)[Int(Kind.image.rawValue)])
                     if Double(images) >= Double(tree.totals[i]) * 0.8, let path = tree.path(id) {
-                        if let frames = earlier?.frames[path] ?? frameFolder(path) { facts.frames[path] = frames }
+                        if let frames = earlier?.frames[path] { facts.frames[path] = frames } else { frameFolders.append(path) }
                     }
                 }
             } else if n.kind == Kind.video.rawValue, max(n.bytes, n.aliasBytes) >= 100_000_000, videos < 800, let path = tree.path(id) {
@@ -522,15 +538,23 @@ extension Facts {
                     facts.lastOpened[visible] = earlier.lastOpened[visible]
                     continue
                 }
-                // A new file gets a "last used" date just from being indexed. Only a use count means someone opened it.
-                if let item = MDItemCreateWithURL(nil, URL(fileURLWithPath: visible) as CFURL),
-                    let count = MDItemCopyAttribute(item, "kMDItemUseCount" as CFString) as? Int, count > 0,
-                    let used = MDItemCopyAttribute(item, kMDItemLastUsedDate) as? Date
-                {
-                    facts.lastOpened[visible] = used
-                }
+                asked.append(visible)
             }
         }
+        // What has to be asked of git, of a folder's listing and of Spotlight was only noted above: each is a wait for
+        // something else to answer, so they're all asked at once.
+        let gitFacts = inParallel(repos.count) { Git.read(repos[$0]) }
+        for (path, fact) in zip(repos, gitFacts) { if let fact { facts.repos[path] = fact } }
+        let frames = inParallel(frameFolders.count) { frameFolder(frameFolders[$0]) }
+        for (path, found) in zip(frameFolders, frames) { if let found { facts.frames[path] = found } }
+        let opened = inParallel(asked.count) { i -> Date? in
+            // A new file gets a "last used" date just from being indexed. Only a use count means someone opened it.
+            guard let item = MDItemCreateWithURL(nil, URL(fileURLWithPath: asked[i]) as CFURL),
+                let count = MDItemCopyAttribute(item, "kMDItemUseCount" as CFString) as? Int, count > 0
+            else { return nil }
+            return MDItemCopyAttribute(item, kMDItemLastUsedDate) as? Date
+        }
+        for (visible, used) in zip(asked, opened) { if let used { facts.lastOpened[visible] = used } }
         facts.models = readModels(modelFolders)
     }
 

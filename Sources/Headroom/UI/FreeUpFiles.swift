@@ -11,11 +11,14 @@ struct InnerList: View {
 
     var body: some View {
         if let tree = model.tree {
+            let shown = Array(nodes.prefix(mostFilesListed))
+            // Names cut as the ring cuts them, among the files listed (DESIGN.md, Names).
+            let forms = ListNames.forms(shown.map { tree.name($0) })
             VStack(spacing: 0) {
-                ForEach(nodes.prefix(mostFilesListed), id: \.self) { node in
+                ForEach(Array(shown.enumerated()), id: \.element) { index, node in
                     InnerRow(
-                        model: model, node: node, name: tree.name(node), path: tree.path(node).map(PathMath.visible), bytes: tree.totals[Int(node)],
-                        tint: tint)
+                        model: model, node: node, name: tree.name(node), titles: forms[index], path: tree.path(node).map(PathMath.visible),
+                        bytes: tree.totals[Int(node)], tint: tint)
                 }
                 if nodes.count > mostFilesListed { MoreLine(text: "\(nodes.count - mostFilesListed) more, smaller") }
             }
@@ -28,6 +31,8 @@ private struct InnerRow: View {
     let model: AppModel
     let node: UInt32
     let name: String
+    /// Shorter ways to write the name, worked out among the list's.
+    let titles: [String]
     let path: String?
     let bytes: UInt64
     let tint: Color
@@ -47,7 +52,7 @@ private struct InnerRow: View {
         let isFolder = model.tree.map { $0.nodes[Int(node)].has(NodeFlag.directory) && $0.nodes[Int(node)].firstChild != 0 } ?? false
         VStack(spacing: 0) {
             ListRow(
-                title: name, density: .compact, markWidth: nil,
+                title: name, titles: titles, density: .compact, markWidth: nil,
                 onHover: { inside in
                     isHovered = inside
                     // Off this file and still on the row it's in: the row's files light again, as before the pointer came here.
@@ -82,9 +87,11 @@ struct LooseList: View {
     let tint: Color
 
     var body: some View {
+        let shown = Array(row.extraPaths.prefix(mostFilesListed))
+        let forms = ListNames.forms(shown.map { ($0 as NSString).lastPathComponent })
         VStack(spacing: 0) {
-            ForEach(row.extraPaths.prefix(mostFilesListed), id: \.self) { path in
-                LooseRow(model: model, row: row, path: path, tint: tint)
+            ForEach(Array(shown.enumerated()), id: \.element) { index, path in
+                LooseRow(model: model, row: row, path: path, titles: forms[index], tint: tint)
             }
             if row.extraPaths.count > mostFilesListed { MoreLine(text: "\(row.extraPaths.count - mostFilesListed) more") }
         }
@@ -95,13 +102,16 @@ private struct LooseRow: View {
     let model: AppModel
     let row: WinRow
     let path: String
+    /// Shorter ways to write its name, worked out among the list's.
+    let titles: [String]
     let tint: Color
     @State private var bytes: UInt64?
 
     var body: some View {
         // Its size is read from the disk, so it's there once that's done.
         ListRow(
-            title: (path as NSString).lastPathComponent, trailing: bytes.map(formatBytes) ?? "", trailingColour: Kit.Text.tertiary,
+            title: (path as NSString).lastPathComponent, titles: titles, trailing: bytes.map(formatBytes) ?? "",
+            trailingColour: Kit.Text.tertiary,
             density: .compact, markWidth: nil,
             onTap: {
                 Motion.animate(.snappy(duration: 0.18)) { model.togglePath(path, of: row) }

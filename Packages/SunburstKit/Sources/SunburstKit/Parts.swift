@@ -113,6 +113,10 @@ extension SunburstParts {
         /// How many rings, and how thick.
         public var sizes: RingSizes
         public var order: Order
+        /// Whether one thing in a folder comes before another, clockwise, instead of the biggest first: by name, say. It
+        /// must be a strict order, with no two things the same. With `byGroup`, the groups still come first. The band
+        /// around the whole tree keeps its own order. Nil: biggest first.
+        public var before: (@Sendable (UInt32, UInt32) -> Bool)?
         /// Drawn as a piece of its own however thin, never gathered into "smaller items": a film or an episode in a
         /// library, say, that should always be there to point at. Nil for none.
         public var keep: (@Sendable (UInt32) -> Bool)?
@@ -125,11 +129,13 @@ extension SunburstParts {
         public var stretchColours: StretchColours
 
         public init(
-            _ sizes: RingSizes = RingSizes(), order: Order = .bySize, keep: (@Sendable (UInt32) -> Bool)? = nil,
-            cuts: (@Sendable (UInt32) -> [SunburstStretch]?)? = nil, stretchColours: StretchColours = .folder
+            _ sizes: RingSizes = RingSizes(), order: Order = .bySize, before: (@Sendable (UInt32, UInt32) -> Bool)? = nil,
+            keep: (@Sendable (UInt32) -> Bool)? = nil, cuts: (@Sendable (UInt32) -> [SunburstStretch]?)? = nil,
+            stretchColours: StretchColours = .folder
         ) {
             self.sizes = sizes
             self.order = order
+            self.before = before
             self.keep = keep
             self.cuts = cuts
             self.stretchColours = stretchColours
