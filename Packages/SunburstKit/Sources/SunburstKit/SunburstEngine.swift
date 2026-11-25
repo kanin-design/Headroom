@@ -17,6 +17,9 @@ public enum RingTransition: Sendable, Equatable {
     case live
     /// A new picture of the same place, as after something changed or was removed.
     case settle
+    /// A different picture in its place, as a new map or another mode's: the old one draws back into the middle first, then
+    /// the new one grows out from there, each ring out of the one it sits on, as rings do when you go into a folder.
+    case replace
     /// The new picture at once: nothing moves or fades.
     case instant
 
@@ -32,13 +35,16 @@ public enum RingTransition: Sendable, Equatable {
         return false
     }
 
-    /// The pieces fly to new places: a first picture, or a zoom.
+    /// The pieces fly to new places: a first picture, a zoom or a different picture.
     var travels: Bool {
         switch self {
-        case .appear, .zoomIn, .zoomOut: true
+        case .appear, .zoomIn, .zoomOut, .replace: true
         case .recolor, .live, .settle, .instant: false
         }
     }
+
+    /// How long names and what's under the pointer wait, in seconds, until the pieces are nearly where they're going.
+    var settlesIn: Double { self == .replace ? 0.5 : 0.34 }
 }
 
 /// Where a zoom is headed: it maps the old ring to the new one, sliding everything else out of the way.
@@ -167,18 +173,23 @@ public final class SunburstEngine: @unchecked Sendable {
     }
 
     @MainActor private func applyLocked(_ new: RingLayout, _ transition: RingTransition, reduceMotion: Bool) {
-        let t = x
-        let colorT = min(max(x, 0), 1)
         var currentIndex = [UInt64: Int](minimumCapacity: keys.count)
         for i in stride(from: keys.count - 1, through: 0, by: -1) { currentIndex[keys[i]] = i }
 
-        func geometryNow(_ i: Int) -> SIMD4<Float> { instances[i].from + (instances[i].to - instances[i].from) * t }
-        func colorNow(_ i: Int) -> SIMD4<Float> { instances[i].colorFrom + (instances[i].colorTo - instances[i].colorFrom) * colorT }
+        // Each piece as it is in the frame now: in a change to a different picture, the old pieces and the new ones take turns.
+        func along(_ i: Int) -> Float { Self.progress(x, turn: instances[i].plan.w) }
+        func geometryNow(_ i: Int) -> SIMD4<Float> { instances[i].from + (instances[i].to - instances[i].from) * along(i) }
+        func colorNow(_ i: Int) -> SIMD4<Float> {
+            instances[i].colorFrom + (instances[i].colorTo - instances[i].colorFrom) * min(max(along(i), 0), 1)
+        }
+        func markedNow(_ i: Int) -> Float { instances[i].plan.x + (instances[i].plan.y - instances[i].plan.x) * min(max(along(i), 0), 1) }
 
         var enterMapping: ZoomMapping?
         var exitMapping: ZoomMapping?
         var appearing = false
         let instant = transition.isInstant
+        // Nothing carries over to a different picture, even what has the same name: all of the old one goes, then all of the new.
+        let replacing = transition == .replace
         switch transition {
         case .appear: appearing = true
         case .zoomIn(let m): exitMapping = m
@@ -187,6 +198,7 @@ public final class SunburstEngine: @unchecked Sendable {
         }
         // With Reduce Motion nothing travels: the old picture fades out where it is, and the new one fades in where it ends up.
         let dissolve = reduceMotion && transition.travels
+        let arrivingTurn: Float = replacing ? Self.handover : 0
 
         var out: [SegmentGPU] = []
         out.reserveCapacity(new.pieces.count + keys.count / 2)
@@ -208,15 +220,18 @@ public final class SunburstEngine: @unchecked Sendable {
                 colorFrom = colorTo
             } else if dissolve {
                 // Where it ends up, fading in.
-            } else if let i = currentIndex[p.key], !appearing {
+            } else if let i = currentIndex[p.key], !appearing, !replacing {
                 from = geometryNow(i)
                 colorFrom = colorNow(i)
-                markedFrom = instances[i].plan.x + (instances[i].plan.y - instances[i].plan.x) * colorT
+                markedFrom = markedNow(i)
                 used[i] = true
             } else if appearing {
                 // Unfurls out of the middle, like something opening.
                 let h = RingLayout.hole
                 from = SIMD4(p.a0 * 0.72, p.a1 * 0.72, h, h + (p.r1 - p.r0) * 0.15)
+            } else if replacing, p.parent < 0 {
+                // The first ring grows outward from its inner edge, and every ring after it out of the one it sits on (below).
+                from = SIMD4(p.a0, p.a1, p.r0, p.r0)
             } else if p.parent >= 0 {
                 // Grows out of the outer edge of the piece it sits on, wherever that is right now.
                 let q = out[Int(p.parent)]
@@ -232,7 +247,7 @@ public final class SunburstEngine: @unchecked Sendable {
             out.append(
                 SegmentGPU(
                     from: from, to: to, colorFrom: colorFrom, colorTo: colorTo, params: SIMD4(p.look, p.seed, p.calm, p.deeper),
-                    plan: SIMD4(markedFrom, p.marked, p.isShared ? 1 : 0, 0)))
+                    plan: SIMD4(markedFrom, p.marked, p.isShared ? 1 : 0, arrivingTurn)))
             outKeys.append(p.key)
             outParents.append(p.parent)
         }
@@ -248,11 +263,14 @@ public final class SunburstEngine: @unchecked Sendable {
                 var a = i < parents.count ? parents[i] : -1
                 var survivor = -1
                 var survivorOld = -1
-                while a >= 0 {
+                while a >= 0, !replacing {
                     if let found = newIndex[keys[Int(a)]] { survivor = found; survivorOld = Int(a); break }
                     a = parents[Int(a)]
                 }
-                if survivor >= 0 {
+                if replacing {
+                    // Every ring draws back into the middle, each staying on the one it sits on: the way the new one grows out.
+                    to = SIMD4(g.x, g.y, RingLayout.hole, RingLayout.hole)
+                } else if survivor >= 0 {
                     let old = instances[survivorOld].to
                     let target = out[survivor].to
                     let sweep = old.y - old.x
@@ -264,11 +282,11 @@ public final class SunburstEngine: @unchecked Sendable {
                     to = m.apply(g)
                 }
                 if dissolve { to = g }
-                let leaving = instances[i].plan.x + (instances[i].plan.y - instances[i].plan.x) * colorT
+                let leaving = markedNow(i)
                 out.append(
                     SegmentGPU(
                         from: g, to: to, colorFrom: nowColor, colorTo: SIMD4(nowColor.x, nowColor.y, nowColor.z, 0), params: instances[i].params,
-                        plan: SIMD4(leaving, leaving, instances[i].plan.z, 0)))
+                        plan: SIMD4(leaving, leaving, instances[i].plan.z, replacing ? -Self.handover : 0)))
                 outKeys.append(keys[i])
                 outParents.append(-1)
             }
@@ -316,12 +334,25 @@ public final class SunburstEngine: @unchecked Sendable {
         case .zoomIn, .zoomOut: setSpring(stiffness: 120, dampingRatio: 0.92)
         case .recolor: setSpring(stiffness: 70, dampingRatio: 1)
         case .live: setSpring(stiffness: 60, dampingRatio: 1)
-        case .settle, .instant: setSpring(stiffness: 80, dampingRatio: 1)
+        case .settle, .replace, .instant: setSpring(stiffness: 80, dampingRatio: 1)
         }
         if dissolve { setSpring(stiffness: 90, dampingRatio: 1) }
         velocity = min(carried, stiffness.squareRoot())
         // Already there.
         if instant { x = 1 }
+    }
+
+    /// In a change to a different picture, how far along the transition the old picture is gone and the new one starts: about
+    /// a tenth of a second in.
+    static let handover: Float = 0.3
+
+    /// How far along a piece is when the transition as a whole is at `t`: most move with it. One with its `turn` below 0 goes
+    /// first and is done by `-turn`; one with its turn above 0 waits until then and moves in the rest, overshooting with the
+    /// spring as everything does. As the shaders' `progress`.
+    static func progress(_ t: Float, turn: Float) -> Float {
+        if turn < 0 { return min(max(t / -turn, 0), 1) }
+        if turn > 0 { return max((t - turn) / (1 - turn), 0) }
+        return t
     }
 
     private func setSpring(stiffness k: Float, dampingRatio: Float) {
@@ -463,6 +494,18 @@ public final class SunburstEngine: @unchecked Sendable {
         requestFrame()
     }
 
+    /// For a check: everything that moves, moved on by `dt` seconds, at full speed whatever `timeScale` says. With `timeScale`
+    /// at 0 the window moves nothing, so a transition can be stepped through frame by frame and drawn with `picture`.
+    @_spi(Diagnostics) public func step(_ dt: Float) {
+        lock.withLock {
+            let scale = timeScale
+            timeScale = 1
+            _ = advance(dt: dt)
+            timeScale = scale
+            emphasisChangedSinceDrawn = true
+        }
+    }
+
     /// While the ring is still, the memory its drawing used may be taken back.
     func restDrawing() {
         lock.withLock { renderer?.rest() }
@@ -482,8 +525,10 @@ public final class SunburstEngine: @unchecked Sendable {
     /// a channel. Names and anything else drawn over the ring aren't in it. Nil without a GPU. Works without a window.
     /// Without `dithered`, the faint noise that keeps dark gradients smooth is left out, for a PNG about half the size.
     /// `inPlace` draws the ring where it is in its view (`place`), for a picture of a view of that size, in place of in the
-    /// middle.
-    @MainActor public func picture(width: Int, height: Int, scale: CGFloat = 2, dithered: Bool = true, inPlace: Bool = false) -> CGImage? {
+    /// middle. Without `settled`, the ring as it is in the frame now, part way through whatever is moving.
+    @MainActor public func picture(
+        width: Int, height: Int, scale: CGFloat = 2, dithered: Bool = true, inPlace: Bool = false, settled: Bool = true
+    ) -> CGImage? {
         guard let renderer, width > 0, height > 0 else { return nil }
         let device = renderer.device
         let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: SunburstRenderer.outputFormat, width: width, height: height, mipmapped: false)
@@ -493,7 +538,7 @@ public final class SunburstEngine: @unchecked Sendable {
         lock.withLock {
             var u = uniforms(viewport: CGSize(width: width, height: height), scale: scale, headroom: 1)
             // Settled, in the middle, with room around it for the scale.
-            u.t = 1
+            if settled { u.t = 1 }
             if inPlace, radiusNow > 0 {
                 u.center = centerNow * Float(scale)
                 u.radius = radiusNow * Float(scale)

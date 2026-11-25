@@ -414,11 +414,12 @@ public final class SunburstChart<Tree: SunburstTree> {
         labelLight = LabelLight()
         if transition.travels {
             // Names and what's under the pointer wait until the pieces are nearly where they're going. Until then nothing is.
-            placeLabels(after: 0.34)
+            let settled = transition.settlesIn
+            placeLabels(after: settled)
             tellPointed(nil)
             hoverTask?.cancel()
             hoverTask = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(0.42))
+                try? await Task.sleep(for: .seconds(settled + 0.08))
                 guard let self, !Task.isCancelled else { return }
                 self.rehover()
             }

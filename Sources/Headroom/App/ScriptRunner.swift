@@ -246,8 +246,8 @@ enum ScriptRunner {
         "glow": .measuring, "exporttree": .measuring, "middle": .measuring, "stretches": .measuring, "state": .measuring, "pointon": .measuring,
         "clickon": .measuring, "clickplace": .measuring, "mapkey": .measuring, "menufor": .measuring, "leaks": .measuring, "format": .measuring,
         "panel": .window, "scrolls": .window, "voiceover": .window, "size": .window, "jiggle": .window, "collide": .window,
-        "timescale": .window, "shotwindow": .window, "shot": .window, "drawn": .window, "film": .window, "mouse": .window, "click": .window,
-        "activate": .window, "float": .window, "hide": .window, "unhide": .window, "minimize": .window, "restore": .window,
+        "timescale": .window, "shotwindow": .window, "shot": .window, "drawn": .window, "film": .window, "ringfilm": .window, "mouse": .window,
+        "click": .window, "activate": .window, "float": .window, "hide": .window, "unhide": .window, "minimize": .window, "restore": .window,
         "lose": .window, "redraw": .window, "stopwhenhidden": .window, "windowid": .window, "frame": .window,
         "press": .window, "about": .window,
         "look": .card, "cardpress": .card, "carddrag": .card, "cardframe": .card, "card": .card,
@@ -1989,6 +1989,23 @@ enum ScriptRunner {
                     try? await Task.sleep(for: .seconds(step))
                 }
             }
+        case "ringfilm":
+            // ringfilm 45 60 /path/name: the ring's next 45 frames at 60 a second, drawn off screen as name-000.png and on, so a
+            // transition can be watched with no screen. Freeze the ring first (timescale 0), so the window doesn't move it on too.
+            let parts = argument.split(separator: " ").map(String.init)
+            guard parts.count == 3, let count = Int(parts[0]), let rate = Double(parts[1]), (1...600).contains(count), rate >= 1 else {
+                print("ringfilm \(argument): needs a number of frames up to 600, frames a second, and a path"); return
+            }
+            for frame in 0..<count {
+                guard let image = model.engine.picture(width: 800, height: 800, scale: 2, dithered: false, settled: false),
+                    let out = CGImageDestinationCreateWithURL(
+                        URL(fileURLWithPath: parts[2] + String(format: "-%03d.png", frame)) as CFURL, "public.png" as CFString, 1, nil)
+                else { print("ringfilm: no picture"); return }
+                CGImageDestinationAddImage(out, image, nil)
+                CGImageDestinationFinalize(out)
+                model.engine.step(Float(1 / rate))
+            }
+            print("ringfilm: \(count) frames at \(parts[2])")
         case "mouse", "click":
             guard let p = point(in: argument), let view = model.mapView, let w = mainWindow else { return }
             let at = flipped(p.x, p.y, in: w)

@@ -707,7 +707,7 @@ final class AppModel {
                 self.activeScan = nil
                 self.history = snapshot
                 if let catalogue { self.keep(catalogue) }
-                self.present(tree, transition: .settle)
+                self.present(tree, transition: .replace)
             }
         }
     }
@@ -869,9 +869,12 @@ final class AppModel {
         if HiddenNames.isOn { HiddenNames.apply(to: newTree) }
         let input = insightInputs
         let edits = mapEdits
+        // In Backup with both disks on screen, the new map's pair is made along with it, so the ring changes once.
+        let pairOrder = pairOrder(for: newTree)
         mapsOnTheirWay += 1
         Task.detached(priority: .userInitiated) {
             let worked = Self.workOut(newTree, from: input)
+            let madePair = pairOrder.flatMap { Self.makePair($0, of: newTree) }
             await MainActor.run {
                 self.mapsOnTheirWay -= 1
                 // You may have picked another disk while this was being worked out.
@@ -904,10 +907,11 @@ final class AppModel {
                 self.tree = newTree
                 self.nameCache = [:]
                 self.treeVersion += 1
-                // Moved files, or both sides, are drawn again from the new map, once it's on screen.
+                // Moved files, or both sides, are drawn again from the new map, once it's on screen: at once if its pair was made.
                 self.pair = nil
                 self.focusBeforePair = nil
-                if self.showGhosts || self.showDriveSide { DispatchQueue.main.async { self.applyGhosts() } }
+                if let madePair, !sameScan { self.readyPair = madePair }
+                if (self.showGhosts || self.showDriveSide) && (madePair == nil || sameScan) { DispatchQueue.main.async { self.applyGhosts() } }
                 // Only now, so what moving there sets off reads the new tree with the new tree's numbers.
                 if let newFocus { self.focus = newFocus }
                 self.resolvePlanSynchronously(in: newTree)
@@ -921,7 +925,7 @@ final class AppModel {
                 if sameScan {
                     self.refreshLive()
                     self.refreshStory()
-                } else {
+                } else if madePair == nil || !self.applyGhosts() {
                     self.relayout(transition)
                 }
                 // What a search found is numbered in the tree it was made from, and a scan you watched ends with folders
@@ -1711,9 +1715,9 @@ final class AppModel {
         hotCopyGroup = nil
         chart.calm = calmForView
         chart.glow = glowForView
-        // Moved files and both sides are drawn on the Map only.
-        if showGhosts || showDriveSide || bareTree != nil { applyGhosts() }
-        relayout(.recolor)
+        // Moved files and both sides are drawn on the Map only. A new picture drawn for them already has this view's colours.
+        let redrawn = (showGhosts || showDriveSide || bareTree != nil) && applyGhosts()
+        if !redrawn { relayout(.recolor) }
         if new == .copies { refreshCopies() }
         // Changes and Copies want the whole picture, so now you're waiting on the scan.
         if tree?.isPartial == true, !scanIsHurrying { activeScan?.scanner.setHurry(new != .map) }
@@ -1741,8 +1745,9 @@ final class AppModel {
         chart.calm = calmForView
         if new == .freeUp, view == .copies { refreshCopies() }
         if new == .backup { refreshDrives() }
-        if showGhosts || showDriveSide || bareTree != nil { applyGhosts() }
-        relayout(.recolor)
+        // A new picture drawn for both disks, or for the map back in their place, already stripes this mode's selection.
+        let redrawn = (showGhosts || showDriveSide || bareTree != nil) && applyGhosts()
+        if !redrawn { relayout(.recolor) }
     }
 
     // MARK: Taking things out of the picture
@@ -2092,15 +2097,15 @@ extension AppModel {
 
     /// Draws moved files where they were, in Backup, when Show Moved Files is on, or takes them away again. The picture
     /// with them is for looking at: a clean, a move, a scan or another view puts the real map back first.
-    func applyGhosts() {
-        guard let real = workTree else { return }
+    /// Says whether it drew a new picture.
+    @discardableResult func applyGhosts() -> Bool {
+        guard let real = workTree else { return false }
         // Both disks are Backup's own picture, in Map and Backed Up.
         let inBackup = mode == .backup && (view == .map || view == .copies) && !isCleaning && !real.isPartial
         if inBackup, showDriveSide, let destination = backup.destination {
             // Unplugged, the drive's half is what was read there last.
             let drive = connected(destination.drive)
-            showPair(of: real, on: drive.map { BackupDestination(drive: $0, folder: destination.folder) } ?? destination, online: drive != nil)
-            return
+            return showPair(of: real, on: drive.map { BackupDestination(drive: $0, folder: destination.folder) } ?? destination, online: drive != nil)
         }
         pairTask?.cancel()
         let wasPair = pair != nil
@@ -2126,27 +2131,30 @@ extension AppModel {
             tree = real
             changed = true
         }
-        guard changed else { return }
+        guard changed else { return false }
         nameCache = [:]
         treeVersion += 1
         if let tree { resolvePlanSynchronously(in: tree) }
-        relayout(.recolor)
+        // The map in place of both disks is another picture. Moved files shown or hidden on the same map only change it.
+        relayout(wasPair ? .replace : .recolor)
         // What a search found is numbered for the picture it was made in.
         if isSearching { runSearch() }
+        return true
     }
 
     /// The folder you're in and the same folder on Backup's drive, as two halves. The drive is read in the background; the
     /// picture goes on screen when it's ready, if it's still wanted. One made ahead goes on screen at once.
-    private func showPair(of real: DiskTree, on destination: BackupDestination, online: Bool) {
-        guard let place = pairPlace(of: real, on: destination) else { return }
-        if let pair, pair.macPath == place.macPath, pair.drivePath == place.drivePath, pair.online == online, tree === pair.tree { return }
+    /// Says whether both disks are on screen now, a new picture: false when they already were, or are still being made.
+    @discardableResult private func showPair(of real: DiskTree, on destination: BackupDestination, online: Bool) -> Bool {
+        guard let place = pairPlace(of: real, on: destination) else { return false }
+        if let pair, pair.macPath == place.macPath, pair.drivePath == place.drivePath, pair.online == online, tree === pair.tree { return false }
         pairTask?.cancel()
         let notes = movedNotes, ghosts = showGhosts
         if let ready = readyPair, ready.fits(real: real, place: place, online: online, ghosts: ghosts, notes: notes) {
             readyPairTask?.cancel()
             installPair(ready)
             if ScriptRunner.path != nil { print("both disks on screen at once") }
-            return
+            return true
         }
         let name = destination.drive.name, listing = destination.drive.id, mount = destination.drive.mountPath
         let stop = LockedFlag()
@@ -2171,11 +2179,16 @@ extension AppModel {
                 stop.value = true
             }
         }
+        return false
     }
 
     /// Which folder both disks are shown at, and where that is on each side: the folder you're in, or the top of the disk.
     private func pairPlace(of real: DiskTree, on destination: BackupDestination) -> PairPlaceOnDisks? {
-        let realFocus = focusBeforePair ?? focus
+        Self.pairPlace(of: real, at: focusBeforePair ?? focus, on: destination)
+    }
+
+    /// The same for a folder of that map, `realFocus`.
+    private nonisolated static func pairPlace(of real: DiskTree, at realFocus: UInt32, on destination: BackupDestination) -> PairPlaceOnDisks? {
         var folder = realFocus == 0 ? 0 : RingLayout.chainTail(tree: real, realFocus)
         // A group of macOS's own parts isn't a folder on the disk: its top stands for it.
         if folder != 0, real.nodes[Int(folder)].has(NodeFlag.synthetic), !real.nodes[Int(folder)].has(NodeFlag.anchor) { folder = 0 }
@@ -2185,6 +2198,43 @@ extension AppModel {
         var drivePath = BackupPaths.onDrive(visible, under: destination.root)
         while drivePath.count > 1, drivePath.hasSuffix("/") { drivePath.removeLast() }
         return PairPlaceOnDisks(folder: folder, macPath: raw, drivePath: drivePath)
+    }
+
+    /// What it takes to make both disks for a new map off the main thread: the folder they're shown at, by its path, and the
+    /// drive's half as it is now.
+    struct PairOrder: Sendable {
+        let keepPath: String?
+        let destination: BackupDestination
+        let online: Bool
+        let ghosts: Bool
+        let notes: [MovedNote]
+    }
+
+    /// The order for a new map's pair while both disks are on screen; nil when they aren't.
+    private func pairOrder(for newTree: DiskTree) -> PairOrder? {
+        guard mode == .backup, view == .map || view == .copies, showDriveSide, !isCleaning, let pair, pair.tree === tree,
+            let bare = bareTree, bare.rootPath == newTree.rootPath, let destination = backup.destination
+        else { return nil }
+        let drive = connected(destination.drive)
+        let realFocus = focusBeforePair ?? 0
+        return PairOrder(
+            keepPath: realFocus == 0 ? nil : bare.path(realFocus),
+            destination: drive.map { BackupDestination(drive: $0, folder: destination.folder) } ?? destination, online: drive != nil,
+            ghosts: showGhosts, notes: movedNotes)
+    }
+
+    /// Both disks for a new map, as `showPair` makes them, at the same folder if it's still there.
+    nonisolated static func makePair(_ order: PairOrder, of real: DiskTree) -> ReadyPair? {
+        let focus = order.keepPath.flatMap { real.find(path: $0) } ?? 0
+        guard let place = pairPlace(of: real, at: focus, on: order.destination) else { return nil }
+        let drive = order.destination.drive
+        guard
+            let built = PairPicture.build(
+                real: real, macFolder: place.folder, macPath: place.macPath, drivePath: place.drivePath, driveName: drive.name,
+                notes: order.notes, ghosts: order.ghosts, online: order.online, listingID: drive.id, mount: drive.mountPath,
+                stop: LockedFlag())
+        else { return nil }
+        return ReadyPair(real: real, place: place, online: order.online, ghosts: order.ghosts, notes: order.notes.map(\.notePath), picture: built)
     }
 
     /// Both disks on screen, in place of the map.
@@ -2206,7 +2256,8 @@ extension AppModel {
         nameCache = [:]
         treeVersion += 1
         resolvePlanSynchronously(in: built.tree)
-        relayout(.recolor)
+        // Another picture: both disks in place of the map, or of the last pair.
+        relayout(.replace)
         // Both disks of the folder you clicked: a search lists what's in it.
         if isSearching { runSearch() }
     }

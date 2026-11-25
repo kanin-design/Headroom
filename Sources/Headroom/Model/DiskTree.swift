@@ -110,8 +110,9 @@ final class DiskTree: @unchecked Sendable {
     var scanID = UUID()
     var displayNames: [UInt32: String] = [:]
     /// A node drawn in place of a folder of another tree, and the key the ring knows that folder by: what's in it takes the
-    /// keys of what's in that folder, so a picture going from that tree to this one moves those pieces rather than
-    /// replacing them. Backup's Mac half stands in for the map's folder this way.
+    /// keys of what's in that folder, and with them each piece's grain (`RingLayout.seed`), so it looks the same in both.
+    /// Backup's Mac half stands in for the map's folder this way. Going between the two pictures doesn't carry pieces over
+    /// (`RingTransition.replace`): the old one goes, then the new one is drawn.
     var standIn: (node: UInt32, key: UInt64)?
     /// Files with more than one path, by key, once the scan has finished. See `Accounting`.
     var links: [LinkRecord] = []

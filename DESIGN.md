@@ -663,21 +663,27 @@ far it's got ("Scanning… 1,204,331 files") instead of what's free.
 
 The switch is macOS's own segmented control in the toolbar. Everything it changes moves together, starting at the click:
 
-- **The ring**: the map folds into the left half of the ring, which is the Mac's half of both disks, and the drive's half
-  grows out of its band on the right. Going back, it unfolds. The pieces move rather than being replaced: the Mac's half
-  takes the map's keys (`DiskTree.standIn`), so each folder slides from its place on the map to its place in the half. A
-  critically damped spring (the ring's recolor spring, stiffness 70) settles it in about a third of a second.
-- **The middle and the inspector** change in the same frame as the ring starts, with the same spring.
+- **The ring**: the old picture goes first, then the new one is drawn. The old one draws back into the middle, each ring
+  into the one it sits on, gone about 0.15 s after the click. Then the new one grows out from the middle, each ring out of
+  the one it sits on, as rings do when you go into a folder, and settles about 0.4 s later. Going back is the same. Nothing
+  carries over, not even a folder that's in both pictures. It's `RingTransition.replace`: one critically damped spring
+  (stiffness 80), with the old pieces done by 0.3 of it and the new ones moving in the rest.
+- **The same for every other change to a different picture**: a new map after a scan, and, in Backup, both disks for
+  another folder. After a scan in Backup, both disks are made along with the new map, so the ring changes once, never to
+  the map and then to both disks.
+- **The middle and the inspector** change in the same frame as the ring starts.
 - **Both disks are ready before the click**: in Free Up they're made in the background a second after the map or the
   folder stops changing, and kept when Backup goes off screen. That holds about 70 MB while in Free Up, let go as soon as
   macOS says memory is short. Only with the drive unplugged, when its half is what was read there last; with it plugged
-  in, the drive is read when Backup is chosen, as before, and the ring folds when that's done.
-- **Never**: a pause before the ring moves; the number in the middle changing before the ring; the ring breaking up and
-  being drawn again.
+  in, the drive is read when Backup is chosen, as before, and the ring changes when that's done.
+- **Never**: a pause before the ring moves; the number in the middle changing before the ring; the old picture and the
+  new one on screen at once, one fading out while the other grows.
 
 | Date | Decision | Why |
 |---|---|---|
 | 2026-11-23 | The map folds into its half; both disks made ahead | "When switching from free up to backup there is a huge lag/delay"; "It should be a smooth toggle animation". The ring waited 0.4 s, the middle changed first, and the ring broke apart and was drawn again |
+| 2026-11-26 | The old picture goes, then the new one grows out of the middle; also for a new map after a scan. Replaces the fold | "the transition is weird, it kind of starts drawing in a weird way. And kind of just "fades out" the old view. The correct way is to remove old view first, then draw the new disk like we do when we go into a directory" |
+| 2026-11-26 | Proposal: the same for both disks of another folder in Backup | Claude's: it's the same kind of change, a different picture, and it went through the same fold |
 
 ### Names
 

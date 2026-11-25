@@ -9,7 +9,7 @@ struct Segment {
     float4 colorFrom;   // alpha fades pieces in and out
     float4 colorTo;
     float4 params;      // style, seed, how far it steps back until pointed at, how much of it goes on past the last ring
-    float4 plan;        // marked at the start of the transition, marked at the end, and whether it's shared
+    float4 plan;        // marked at the start of the transition, marked at the end, whether it's shared, and its turn (`progress`)
 };
 
 struct Uniforms {
@@ -62,6 +62,15 @@ static inline float innerLine(float d, float width) {
 
 static float2 onCircle(float a, float r) { return float2(sin(a), -cos(a)) * r; }
 
+// How far along a piece is when the transition is at `t`. Most move with it. In a change to a different picture, the old
+// pieces go first, done by `-turn`, and the new ones wait for them and move in the rest (turn above 0). As SunburstEngine's
+// `progress`.
+static inline float progress(float t, float turn) {
+    if (turn < 0.0) return saturate(t / -turn);
+    if (turn > 0.0) return max((t - turn) / (1.0 - turn), 0.0);
+    return t;
+}
+
 // How far, in points, a folder that goes on past the outermost ring fades out beyond its edge.
 constant float tailPoints = 10.0;
 // How far out, in points, the tick that marks a thin piece pointed at reaches past its edge.
@@ -74,7 +83,8 @@ vertex SegmentOut segment_vertex(uint vid [[vertex_id]],
                                  const device float *emphasis [[buffer(2)]],
                                  const device float *tintShare [[buffer(3)]]) {
     const Segment s = segments[iid];
-    float4 g = mix(s.from, s.to, u.t);
+    float along = progress(u.t, s.plan.w);
+    float4 g = mix(s.from, s.to, along);
     float e = emphasis[iid];
     float share = tintShare[iid];
     float a0 = g.x, a1 = g.y;
@@ -116,14 +126,14 @@ vertex SegmentOut segment_vertex(uint vid [[vertex_id]],
     o.position = float4(pixel.x / u.viewport.x * 2.0 - 1.0, 1.0 - pixel.y / u.viewport.y * 2.0, 0.0, 1.0);
     o.p = corner;
     o.a0 = a0; o.a1 = a1; o.r0 = r0; o.r1 = r1;
-    o.color = mix(s.colorFrom, s.colorTo, saturate(u.t));
+    o.color = mix(s.colorFrom, s.colorTo, saturate(along));
     o.style = s.params.x;
     o.seed = s.params.y;
     o.calm = s.params.z;
     o.deeper = s.params.w;
     o.emphasis = e;
     o.tintShare = share;
-    o.marked = mix(s.plan.x, s.plan.y, saturate(u.t));
+    o.marked = mix(s.plan.x, s.plan.y, saturate(along));
     o.shared = s.plan.z;
     o.pointed = saturate(e - 1.0);
     // Lit pieces lie over the ones at rest, lifted ones over those, and the one pointed at over them all, however lit it
